@@ -41,6 +41,7 @@ def simulation_hash(simulation: Simulation) -> str:
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],
+        "input_log": [command.to_dict() for command in simulation.input_log],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

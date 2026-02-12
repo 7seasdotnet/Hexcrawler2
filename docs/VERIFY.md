@@ -43,3 +43,7 @@
      - `print('ok')`
      - `PY`
    - Hash verification behavior: if you edit `tmp_world.json` content without updating `world_hash`, `load_world_json(...)` fails fast with `ValueError` describing a world hash mismatch.
+
+8. Minimal replay determinism check (input log):
+   - `PYTHONPATH=src pytest -q tests/test_replay_log.py`
+   - Optional single test: `PYTHONPATH=src pytest -q tests/test_replay_log.py::test_run_replay_matches_live_runtime_commands`
