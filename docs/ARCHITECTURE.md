@@ -39,6 +39,7 @@ This document locks core engine contracts and invariants for the simulation subs
 ## 6) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
+- **Contract:** Backward compatibility window policy: each save format must remain readable by at least one previous schema version.
 - **Contract:** Serialization uses canonical JSON rules (stable key ordering and stable formatting).
 - **Contract:** Saves are atomic (write temp file, then rename).
 - **Contract:** Save payload stores `world_hash`; loader verifies and warns or fails fast on mismatch.
@@ -47,6 +48,7 @@ This document locks core engine contracts and invariants for the simulation subs
 ## 7) Movement Contract
 - **Contract:** Motion is continuous in simulation space (`position_x`, `position_y`).
 - **Contract:** Entity hex is derived from position via deterministic cube-rounding axial conversion.
+- **Contract:** Hex derivation/projection logic is defined in the simulation layer and reused by viewers (no duplicate rounding logic in viewers).
 - **Contract:** Hex transitions must be stable (no boundary flicker behavior).
 - **Contract:** Viewers/controllers never mutate positions directly; they only issue simulation commands.
 
