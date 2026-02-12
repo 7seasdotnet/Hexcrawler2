@@ -3,23 +3,34 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-from hexcrawler.sim.movement import axial_to_world_xy, nearest_direction_step
+from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord, WorldState
 
 TICKS_PER_DAY = 240
+TARGET_REACHED_THRESHOLD = 0.05
 
 
 @dataclass
 class EntityState:
     entity_id: str
-    hex_coord: HexCoord
-    offset_x: float = 0.0
-    offset_y: float = 0.0
+    position_x: float
+    position_y: float
     speed_per_tick: float = 0.15
-    destination: HexCoord | None = None
+    move_input_x: float = 0.0
+    move_input_y: float = 0.0
+    target_position: tuple[float, float] | None = None
+
+    @classmethod
+    def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
+        x, y = axial_to_world_xy(hex_coord)
+        return cls(entity_id=entity_id, position_x=x, position_y=y, speed_per_tick=speed_per_tick)
+
+    @property
+    def hex_coord(self) -> HexCoord:
+        return world_xy_to_axial(self.position_x, self.position_y)
 
     def world_xy(self) -> tuple[float, float]:
-        return axial_to_world_xy(self.hex_coord, self.offset_x, self.offset_y)
+        return (self.position_x, self.position_y)
 
 
 @dataclass
@@ -43,7 +54,21 @@ class Simulation:
         self.state.entities[entity.entity_id] = entity
 
     def set_entity_destination(self, entity_id: str, destination: HexCoord) -> None:
-        self.state.entities[entity_id].destination = destination
+        if self.state.world.get_hex_record(destination) is None:
+            return
+        destination_xy = axial_to_world_xy(destination)
+        self.set_entity_target_position(entity_id, destination_xy[0], destination_xy[1])
+
+    def set_entity_target_position(self, entity_id: str, x: float, y: float) -> None:
+        if not self._position_is_within_world(x, y):
+            return
+        self.state.entities[entity_id].target_position = (x, y)
+
+    def set_entity_move_vector(self, entity_id: str, x: float, y: float) -> None:
+        move_x, move_y = normalized_vector(x, y)
+        entity = self.state.entities[entity_id]
+        entity.move_input_x = move_x
+        entity.move_input_y = move_y
 
     def advance_ticks(self, ticks: int) -> None:
         for _ in range(ticks):
@@ -58,32 +83,40 @@ class Simulation:
         self.state.tick += 1
 
     def _advance_entity(self, entity: EntityState) -> None:
-        if entity.destination is None:
+        move_x = entity.move_input_x
+        move_y = entity.move_input_y
+        target = entity.target_position
+
+        if move_x == 0.0 and move_y == 0.0 and target is not None:
+            delta_x = target[0] - entity.position_x
+            delta_y = target[1] - entity.position_y
+            distance_sq = delta_x * delta_x + delta_y * delta_y
+            if distance_sq <= TARGET_REACHED_THRESHOLD * TARGET_REACHED_THRESHOLD:
+                entity.target_position = None
+                return
+            distance = distance_sq ** 0.5
+            move_x = delta_x / distance
+            move_y = delta_y / distance
+
+        if move_x == 0.0 and move_y == 0.0:
             return
 
-        destination_xy = axial_to_world_xy(entity.destination)
-        current_x, current_y = entity.world_xy()
-        delta_x = destination_xy[0] - current_x
-        delta_y = destination_xy[1] - current_y
-        distance = (delta_x * delta_x + delta_y * delta_y) ** 0.5
+        step_size = entity.speed_per_tick
+        if target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
+            delta_x = target[0] - entity.position_x
+            delta_y = target[1] - entity.position_y
+            distance = (delta_x * delta_x + delta_y * delta_y) ** 0.5
+            if distance < step_size:
+                step_size = distance
 
-        if distance <= entity.speed_per_tick:
-            entity.hex_coord = entity.destination
-            entity.offset_x = 0.0
-            entity.offset_y = 0.0
-            return
+        next_x = entity.position_x + move_x * step_size
+        next_y = entity.position_y + move_y * step_size
 
-        step_ratio = entity.speed_per_tick / distance
-        next_x = current_x + delta_x * step_ratio
-        next_y = current_y + delta_y * step_ratio
+        if self._position_is_within_world(next_x, next_y):
+            entity.position_x = next_x
+            entity.position_y = next_y
+        elif target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
+            entity.target_position = None
 
-        next_hex = nearest_direction_step(entity.hex_coord, entity.destination)
-        hex_center_x, hex_center_y = axial_to_world_xy(next_hex)
-        if ((next_x - hex_center_x) ** 2 + (next_y - hex_center_y) ** 2) < 0.65**2:
-            entity.hex_coord = next_hex
-            entity.offset_x = next_x - hex_center_x
-            entity.offset_y = next_y - hex_center_y
-        else:
-            current_center_x, current_center_y = axial_to_world_xy(entity.hex_coord)
-            entity.offset_x = next_x - current_center_x
-            entity.offset_y = next_y - current_center_y
+    def _position_is_within_world(self, x: float, y: float) -> bool:
+        return self.state.world.get_hex_record(world_xy_to_axial(x, y)) is not None

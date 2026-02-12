@@ -23,14 +23,18 @@
 - RNG is owned by simulation core (`random.Random(seed)`) and not exposed to viewers.
 - Entity updates run in stable sorted-id order per tick.
 - Hash helpers (`world_hash`, `simulation_hash`) provide regression-friendly fingerprints.
+- Movement uses fixed per-tick increments only (no frame-delta movement in simulation).
 
 ## Movement Model
-- Entity state: `hex_coord` + continuous `offset_x/offset_y`.
-- Each tick moves toward destination world coordinates by `speed_per_tick`.
-- Hex stepping uses deterministic nearest-neighbor axial stepping.
-- Pathing strategy is isolated in `movement.py` for easy replacement later.
+- Entity state stores continuous world-space position (`position_x`, `position_y`).
+- Hex coordinate is derived from world-space each read using deterministic axial conversion.
+- Each tick applies either:
+  - normalized WASD input vector, or
+  - autonomous movement toward `target_position` when no WASD input is active.
+- World bounds are simulation-enforced: movement is blocked when resulting position maps to a non-existent hex.
+- Right-click `Move Here` sets a world-space target only if inside bounds; no pathfinding is performed.
 
 ## Viewer/Controller Separation
-- `AsciiViewer` only renders existing simulation state.
-- `SimulationController` issues commands (`goto`, tick/day advancement) to sim.
+- `AsciiViewer` and pygame viewer only render existing simulation state.
+- Viewer/controller sends movement commands (`set_entity_move_vector`, `set_entity_target_position`) to simulation.
 - Simulation remains authoritative and headless-testable.
