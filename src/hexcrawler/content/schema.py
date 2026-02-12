@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+SUPPORTED_SCHEMA_VERSIONS = {1}
 REQUIRED_HEX_RECORD_FIELDS = {"terrain_type", "site_type", "metadata"}
 VALID_SITE_TYPES = {"none", "town", "dungeon"}
 
@@ -9,6 +10,16 @@ VALID_SITE_TYPES = {"none", "town", "dungeon"}
 def validate_world_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValueError("world payload must be an object")
+
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, int):
+        raise ValueError("world payload must contain integer field: schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(f"unsupported schema_version: {schema_version}")
+
+    world_digest = payload.get("world_hash")
+    if not isinstance(world_digest, str) or not world_digest:
+        raise ValueError("world payload must contain string field: world_hash")
 
     hexes = payload.get("hexes")
     if not isinstance(hexes, list):

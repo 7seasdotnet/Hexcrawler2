@@ -1,27 +1,44 @@
 {
+  "schema_version": 1,
+  "world_hash": "63278c7c548125e88677ca1a8ef494c4fae30e827cf684d9be3889cb05505c65",
   "hexes": [
     {
-      "coord": {"q": 0, "r": 0},
+      "coord": {
+        "q": 0,
+        "r": 0
+      },
       "record": {
         "terrain_type": "plains",
         "site_type": "town",
-        "metadata": {"name": "Greybridge"}
+        "metadata": {
+          "name": "Greybridge"
+        }
       }
     },
     {
-      "coord": {"q": 1, "r": 0},
+      "coord": {
+        "q": 1,
+        "r": 0
+      },
       "record": {
         "terrain_type": "forest",
         "site_type": "none",
-        "metadata": {"danger": "medium"}
+        "metadata": {
+          "danger": "medium"
+        }
       }
     },
     {
-      "coord": {"q": 1, "r": -1},
+      "coord": {
+        "q": 1,
+        "r": -1
+      },
       "record": {
         "terrain_type": "hills",
         "site_type": "dungeon",
-        "metadata": {"name": "Sunken Vault"}
+        "metadata": {
+          "name": "Sunken Vault"
+        }
       }
     }
   ]
