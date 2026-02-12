@@ -18,3 +18,18 @@
    - Confirm HUD updates `CURRENT HEX`, `ticks`, and `day`.
 5. Run tests:
    - `PYTHONPATH=src pytest -q`
+6. Save/load serialization contract verification (schema v1 + hash verification):
+   - Save a world from code:
+     - `PYTHONPATH=src python - <<'PY'`
+     - `from hexcrawler.content.io import load_world_json, save_world_json`
+     - `w = load_world_json('content/examples/basic_map.json')`
+     - `save_world_json('tmp_world.json', w)`
+     - `PY`
+   - Inspect the output file and confirm it includes top-level `schema_version` and `world_hash`.
+   - Load it back and confirm no exception is raised:
+     - `PYTHONPATH=src python - <<'PY'`
+     - `from hexcrawler.content.io import load_world_json`
+     - `load_world_json('tmp_world.json')`
+     - `print('ok')`
+     - `PY`
+   - Hash verification behavior: if you edit `tmp_world.json` content without updating `world_hash`, `load_world_json(...)` fails fast with `ValueError` describing a world hash mismatch.
