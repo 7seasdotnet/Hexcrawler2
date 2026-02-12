@@ -86,3 +86,18 @@ When asked to implement:
 - Do NOT build grand strategy or “becoming king” systems in v1.
 - Keep graphics minimal early; prioritize simulation + editor + pipelines.
 - Avoid feature creep not serving the core loop.
+
+## UPDATED AND NEW INSTRUCTIONS
+- After every change that affects functionality, tests, run commands, file locations, or phase progress: update docs/STATUS.md in the same commit.
+
+The update must include:
+
+Phase and “Next Action”
+
+What exists (folders/entry points)
+
+Current verification commands that actually work
+
+What changed in this commit (1–3 bullets)
+
+If Codex fails to update STATUS.md, you reject the output.
