@@ -26,10 +26,16 @@ def simulation_hash(simulation: Simulation) -> str:
             {
                 "entity_id": entity.entity_id,
                 "hex_coord": entity.hex_coord.to_dict(),
-                "offset_x": round(entity.offset_x, 8),
-                "offset_y": round(entity.offset_y, 8),
+                "position_x": round(entity.position_x, 8),
+                "position_y": round(entity.position_y, 8),
+                "move_input_x": round(entity.move_input_x, 8),
+                "move_input_y": round(entity.move_input_y, 8),
                 "speed_per_tick": entity.speed_per_tick,
-                "destination": entity.destination.to_dict() if entity.destination else None,
+                "target_position": (
+                    [round(entity.target_position[0], 8), round(entity.target_position[1], 8)]
+                    if entity.target_position
+                    else None
+                ),
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],

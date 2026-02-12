@@ -7,24 +7,14 @@ import pygame
 
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import EntityState, Simulation, TICKS_PER_DAY
-from hexcrawler.sim.movement import axial_to_world_xy
+from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord
 
-# Axial orientation: pointy-top hexes (matches sim.movement.axial_to_world_xy).
 HEX_SIZE = 28
 GRID_RADIUS = 8
 WINDOW_SIZE = (1024, 768)
-SIM_TICK_SECONDS = 0.10  # 100ms fixed simulation tick.
+SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
-
-# WASD mapping for axial neighbors in pointy-top coordinates.
-# W: north-ish (0, -1), S: south-ish (0, +1), A: west (-1, 0), D: east (+1, 0).
-MOVE_BY_KEY: dict[int, HexCoord] = {
-    pygame.K_w: HexCoord(0, -1),
-    pygame.K_s: HexCoord(0, 1),
-    pygame.K_a: HexCoord(-1, 0),
-    pygame.K_d: HexCoord(1, 0),
-}
 
 TERRAIN_COLORS: dict[str, tuple[int, int, int]] = {
     "plains": (132, 168, 94),
@@ -38,16 +28,25 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
 
 
 @dataclass
+class ContextMenuState:
+    pixel_x: int
+    pixel_y: int
+    world_x: float
+    world_y: float
+
+
+@dataclass
 class SimulationController:
     """Viewer command adapter; simulation remains source of truth."""
 
     sim: Simulation
     entity_id: str
 
-    def queue_move(self, delta: HexCoord) -> None:
-        entity = self.sim.state.entities[self.entity_id]
-        destination = HexCoord(entity.hex_coord.q + delta.q, entity.hex_coord.r + delta.r)
-        self.sim.set_entity_destination(self.entity_id, destination)
+    def set_move_vector(self, x: float, y: float) -> None:
+        self.sim.set_entity_move_vector(self.entity_id, x, y)
+
+    def set_target_world(self, x: float, y: float) -> None:
+        self.sim.set_entity_target_position(self.entity_id, x, y)
 
     def tick_once(self) -> None:
         self.sim.advance_ticks(1)
@@ -66,6 +65,10 @@ def _grid_coords(radius: int) -> list[HexCoord]:
 def _axial_to_pixel(coord: HexCoord, center: tuple[float, float]) -> tuple[float, float]:
     world_x, world_y = axial_to_world_xy(coord)
     return (center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE)
+
+
+def _pixel_to_world(pixel_x: int, pixel_y: int, center: tuple[float, float]) -> tuple[float, float]:
+    return ((pixel_x - center[0]) / HEX_SIZE, (pixel_y - center[1]) / HEX_SIZE)
 
 
 def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
@@ -107,7 +110,7 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
         f"CURRENT HEX: ({entity.hex_coord.q}, {entity.hex_coord.r})",
         f"ticks: {sim.state.tick}",
         f"day: {sim.state.tick // TICKS_PER_DAY}",
-        "WASD to move | ESC to quit",
+        "WASD move | RMB menu | ESC quit",
     ]
     y = 12
     for line in lines:
@@ -116,10 +119,42 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
         y += 24
 
 
+def _draw_context_menu(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    menu_state: ContextMenuState | None,
+) -> pygame.Rect | None:
+    if menu_state is None:
+        return None
+
+    menu_rect = pygame.Rect(menu_state.pixel_x, menu_state.pixel_y, 130, 34)
+    pygame.draw.rect(screen, (32, 34, 44), menu_rect)
+    pygame.draw.rect(screen, (185, 185, 200), menu_rect, 1)
+
+    label = font.render("Move Here", True, (245, 245, 245))
+    screen.blit(label, (menu_rect.x + 10, menu_rect.y + 6))
+    return menu_rect
+
+
+def _current_input_vector() -> tuple[float, float]:
+    keys = pygame.key.get_pressed()
+    x = 0.0
+    y = 0.0
+    if keys[pygame.K_w]:
+        y -= 1.0
+    if keys[pygame.K_s]:
+        y += 1.0
+    if keys[pygame.K_a]:
+        x -= 1.0
+    if keys[pygame.K_d]:
+        x += 1.0
+    return normalized_vector(x, y)
+
+
 def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None:
     world = load_world_json(map_path)
     sim = Simulation(world=world, seed=7)
-    sim.add_entity(EntityState(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
+    sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
 
     pygame.init()
@@ -131,6 +166,7 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
     center = (WINDOW_SIZE[0] / 2.0, WINDOW_SIZE[1] / 2.0)
     accumulator = 0.0
     running = True
+    context_menu: ContextMenuState | None = None
 
     while running:
         dt = clock.tick(60) / 1000.0
@@ -139,11 +175,23 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-                elif event.key in MOVE_BY_KEY:
-                    controller.queue_move(MOVE_BY_KEY[event.key])
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                world_x, world_y = _pixel_to_world(event.pos[0], event.pos[1], center)
+                target_hex = world_xy_to_axial(world_x, world_y)
+                if sim.state.world.get_hex_record(target_hex) is None:
+                    context_menu = None
+                else:
+                    context_menu = ContextMenuState(event.pos[0], event.pos[1], world_x, world_y)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
+                menu_rect = pygame.Rect(context_menu.pixel_x, context_menu.pixel_y, 130, 34)
+                if menu_rect.collidepoint(event.pos):
+                    controller.set_target_world(context_menu.world_x, context_menu.world_y)
+                context_menu = None
+
+        move_x, move_y = _current_input_vector()
+        controller.set_move_vector(move_x, move_y)
 
         while accumulator >= SIM_TICK_SECONDS:
             controller.tick_once()
@@ -153,6 +201,7 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
         _draw_world(screen, sim, center)
         _draw_entity(screen, sim, center)
         _draw_hud(screen, sim, font)
+        _draw_context_menu(screen, font, context_menu)
         pygame.display.flip()
 
     pygame.quit()

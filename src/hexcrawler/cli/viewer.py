@@ -30,7 +30,7 @@ class AsciiViewer:
         for entity in sorted(sim.state.entities.values(), key=lambda e: e.entity_id):
             lines.append(
                 f"entity[{entity.entity_id}] hex=({entity.hex_coord.q},{entity.hex_coord.r}) "
-                f"offset=({entity.offset_x:.2f},{entity.offset_y:.2f}) dest={entity.destination}"
+                f"pos=({entity.position_x:.2f},{entity.position_y:.2f}) target={entity.target_position}"
             )
 
         return "\n".join(lines)
@@ -55,7 +55,7 @@ class SimulationController:
 def run_demo(map_path: str = "content/examples/basic_map.json") -> None:
     world = load_world_json(map_path)
     sim = Simulation(world=world, seed=7)
-    sim.add_entity(EntityState(entity_id="scout", hex_coord=HexCoord(0, 0), speed_per_tick=0.2))
+    sim.add_entity(EntityState.from_hex(entity_id="scout", hex_coord=HexCoord(0, 0), speed_per_tick=0.2))
 
     view = AsciiViewer()
     controller = SimulationController(sim)
