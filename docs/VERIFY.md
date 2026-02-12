@@ -1,26 +1,16 @@
-# How to Run
-
-1. Install test dependency:
-   - `python -m pip install pytest`
-2. Run tests:
-   - `pytest -q`
-3. Launch demo viewer:
-   - `PYTHONPATH=src python -m hexcrawler.cli.viewer`
-
 # How to Verify
 
-1. Start demo:
-   - `PYTHONPATH=src python -m hexcrawler.cli.viewer`
-2. Confirm initial output includes:
-   - `tick=0 day=0`
-   - Hex rows with terrain and site markers (`T` for town, `D` for dungeon).
-3. Issue movement command:
-   - `goto 1 -1`
-4. Advance time:
-   - `tick 20`
-5. Confirm entity line shows changing offsets and/or new hex coordinate.
-6. Advance a day:
-   - `day 1`
-7. Confirm day counter increments deterministically.
-8. Validate save/load hash behavior via tests:
-   - `pytest -q tests/test_save_load.py`
+1. Create and activate a virtual environment:
+   - `python -m venv .venv`
+   - `source .venv/bin/activate`
+2. Install dependencies:
+   - `python -m pip install --upgrade pip`
+   - `python -m pip install -r requirements.txt`
+   - `python -m pip install pytest`
+3. Run the game (single clean command from repo root):
+   - `python run_game.py`
+4. Move the entity with keyboard:
+   - Use `W`, `A`, `S`, `D`.
+   - Confirm HUD updates `CURRENT HEX`, `ticks`, and `day`.
+5. Run tests:
+   - `PYTHONPATH=src pytest -q`
