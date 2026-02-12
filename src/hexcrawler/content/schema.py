@@ -5,6 +5,7 @@ from typing import Any
 SUPPORTED_SCHEMA_VERSIONS = {1}
 REQUIRED_HEX_RECORD_FIELDS = {"terrain_type", "site_type", "metadata"}
 VALID_SITE_TYPES = {"none", "town", "dungeon"}
+VALID_TOPOLOGY_TYPES = {"custom", "hex_disk", "hex_rectangle"}
 
 
 def validate_world_payload(payload: dict[str, Any]) -> None:
@@ -20,6 +21,16 @@ def validate_world_payload(payload: dict[str, Any]) -> None:
     world_digest = payload.get("world_hash")
     if not isinstance(world_digest, str) or not world_digest:
         raise ValueError("world payload must contain string field: world_hash")
+
+    topology_type = payload.get("topology_type")
+    if not isinstance(topology_type, str):
+        raise ValueError("world payload must contain string field: topology_type")
+    if topology_type not in VALID_TOPOLOGY_TYPES:
+        raise ValueError(f"unsupported topology_type: {topology_type}")
+
+    topology_params = payload.get("topology_params")
+    if not isinstance(topology_params, dict):
+        raise ValueError("world payload must contain object field: topology_params")
 
     hexes = payload.get("hexes")
     if not isinstance(hexes, list):
