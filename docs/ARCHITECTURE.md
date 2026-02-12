@@ -28,6 +28,8 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Same initial state + same seed + same input log => identical world/simulation hash.
 - **Contract:** Non-determinism is allowed only in rendering/presentation.
 - **Contract:** Player/viewer actions must be represented as commands applied at specific ticks (input log semantics).
+- **Contract:** Simulation stores an ordered input log (`tick`, `entity_id`, `command_type`, `params`), applies every command scheduled for tick `T` before entity updates on tick `T`, and preserves insertion order for commands with the same tick.
+- **Contract:** Replay runs consume the same command log through the same simulation path (no alternate gameplay logic path for replay).
 
 ## 5) RNG Contract
 - **Contract:** Simulation owns RNG usage; no gameplay logic may depend on global random state.

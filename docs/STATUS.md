@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 1 (deterministic sim + minimal viewer)
-- **Next action:** Add deterministic input-log scaffolding without mixing RNG streams or world generation concerns.
+- **Next action:** Keep replay payload migration-ready (schema v2 planning) while preserving deterministic command execution ordering.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -33,15 +33,16 @@
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
-- No input-log implementation yet (explicitly deferred to next action).
+- No UI replay tooling yet (engine replay API and persistence only).
 
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_world_generation.py`
+- `PYTHONPATH=src pytest -q tests/test_replay_log.py`
 
 ## What Changed in This Commit
-- Added explicit topology persistence fields (`topology_type`, `topology_params`) and schema validation for both.
-- Added deterministic world-generation helpers and `WorldState.create_with_topology(...)` using only `rng_worldgen` randomness.
-- Added/updated tests and example content to verify deterministic generation, bounds membership, and save/load topology round-trip.
+- Added a deterministic simulation command log schema and apply-at-tick execution path (`append_command`, stable same-tick insertion order, and `run_replay(...)`).
+- Added simulation save/load payload support with canonical JSON, schema versioning, and embedded `input_log` persistence.
+- Added replay-focused tests for determinism parity, live-vs-replay equivalence, and input-log save/load round-trip fidelity.

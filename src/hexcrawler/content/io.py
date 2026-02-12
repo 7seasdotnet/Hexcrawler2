@@ -8,6 +8,7 @@ from typing import Any
 
 from hexcrawler.content.schema import validate_world_payload
 from hexcrawler.sim.hash import world_hash
+from hexcrawler.sim.core import Simulation
 from hexcrawler.sim.world import WorldState
 
 SCHEMA_VERSION = 1
@@ -52,6 +53,36 @@ def save_world_json(path: str | Path, world: WorldState) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     serialized = _canonical_json(payload)
+
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            delete=False,
+            suffix=".tmp",
+        ) as temp_file:
+            temp_file.write(serialized)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+            temp_path = Path(temp_file.name)
+        os.replace(temp_path, destination)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
+
+
+def load_simulation_json(path: str | Path) -> Simulation:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return Simulation.from_simulation_payload(payload)
+
+
+def save_simulation_json(path: str | Path, simulation: Simulation) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    serialized = _canonical_json(simulation.simulation_payload())
 
     temp_path: Path | None = None
     try:
