@@ -1,0 +1,28 @@
+{
+  "hexes": [
+    {
+      "coord": {"q": 0, "r": 0},
+      "record": {
+        "terrain_type": "plains",
+        "site_type": "town",
+        "metadata": {"name": "Greybridge"}
+      }
+    },
+    {
+      "coord": {"q": 1, "r": 0},
+      "record": {
+        "terrain_type": "forest",
+        "site_type": "none",
+        "metadata": {"danger": "medium"}
+      }
+    },
+    {
+      "coord": {"q": 1, "r": -1},
+      "record": {
+        "terrain_type": "hills",
+        "site_type": "dungeon",
+        "metadata": {"name": "Sunken Vault"}
+      }
+    }
+  ]
+}
