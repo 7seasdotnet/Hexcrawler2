@@ -1,40 +1,60 @@
-# Architecture (Engine Substrate MVP)
+# Engine Architecture Contracts (MVP)
 
-## Coordinate System
-- **Axial coordinates** `(q, r)` are used for the map key space.
-- World state is a dictionary keyed by `HexCoord(q, r)`.
-- Each hex stores a `HexRecord` with:
-  - `terrain_type: str`
-  - `site_type: "none" | "town" | "dungeon"`
-  - `metadata: dict`
+This document locks core engine contracts and invariants for the simulation substrate.
 
-## Serialization
-- World maps are persisted as JSON (`hexes[]` rows containing `coord` + `record`).
-- Schema validation is run on both load and save.
-- The format is hand-editable and deterministic when re-serialized.
+## 1) World Contract
+- **Contract:** `WorldState` is the deterministic simulation container.
+- **Contract:** World data includes:
+  - topology definition parameters (generation inputs),
+  - realized valid-cell set (`world.hexes: dict[HexCoord, HexRecord]`),
+  - entities (via simulation state),
+  - simulation tick counter,
+  - simulation-owned RNG state.
+- **Contract:** Rendering/view state is never part of world state.
 
-## Simulation Timing
-- Fixed tick loop in `Simulation`.
-- Constant: `TICKS_PER_DAY = 240`.
-- `advance_ticks(n)` steps exactly `n` ticks.
-- `advance_days(n)` steps `n * TICKS_PER_DAY` ticks.
+## 2) Topology Contract
+- **Contract:** Current overworld topology is bounded axial hex.
+- **Contract:** Bounds are enforced by valid-hex membership (`coord in world.hexes`), not by separate min/max clamps.
+- **Contract:** Generation helpers (for example: disk/rectangle) may be used to create topology, but persistence stores only the realized valid-cell set.
+- **Contract:** Future dungeon spaces may use a different topology (for example: square grid) while sharing the same simulation clock and entity model.
 
-## Determinism
-- RNG is owned by simulation core (`random.Random(seed)`) and not exposed to viewers.
-- Entity updates run in stable sorted-id order per tick.
-- Hash helpers (`world_hash`, `simulation_hash`) provide regression-friendly fingerprints.
-- Movement uses fixed per-tick increments only (no frame-delta movement in simulation).
+## 3) Time Contract
+- **Contract:** Authoritative simulation advances only via `advance_ticks(n)` and `advance_days(n)`.
+- **Contract:** Tick duration is an in-world quantum; wall-clock stepping/speed controls are viewer concerns.
+- **Contract:** `TICKS_PER_DAY` is configuration, not a forever-locked design constant (default currently `240`).
+- **Contract:** Subsystems may evaluate at different intervals on the same master tick timeline; do not introduce separate incompatible tick systems.
 
-## Movement Model
-- Entity state stores continuous world-space position (`position_x`, `position_y`).
-- Hex coordinate is derived from world-space each read using deterministic axial conversion.
-- Each tick applies either:
-  - normalized WASD input vector, or
-  - autonomous movement toward `target_position` when no WASD input is active.
-- World bounds are simulation-enforced: movement is blocked when resulting position maps to a non-existent hex.
-- Right-click `Move Here` sets a world-space target only if inside bounds; no pathfinding is performed.
+## 4) Determinism Contract
+- **Contract:** Same initial state + same seed + same input log => identical world/simulation hash.
+- **Contract:** Non-determinism is allowed only in rendering/presentation.
+- **Contract:** Player/viewer actions must be represented as commands applied at specific ticks (input log semantics).
 
-## Viewer/Controller Separation
-- `AsciiViewer` and pygame viewer only render existing simulation state.
-- Viewer/controller sends movement commands (`set_entity_move_vector`, `set_entity_target_position`) to simulation.
-- Simulation remains authoritative and headless-testable.
+## 5) RNG Contract
+- **Contract:** Simulation owns RNG usage; no gameplay logic may depend on global random state.
+- **Contract:** Use deterministically-derived RNG streams at minimum for:
+  - world generation,
+  - runtime simulation.
+- **Contract:** Stream separation is required to reduce butterfly effects when new random calls are inserted in one subsystem.
+
+## 6) Serialization Contract (Elite)
+- **Contract:** Save -> load must round-trip to identical world hash.
+- **Contract:** Save payloads include top-level `schema_version`.
+- **Contract:** Serialization uses canonical JSON rules (stable key ordering and stable formatting).
+- **Contract:** Saves are atomic (write temp file, then rename).
+- **Contract:** Save payload stores `world_hash`; loader verifies and warns or fails fast on mismatch.
+- **Contract:** Unknown fields should be preserved where feasible (especially metadata) for forward compatibility.
+
+## 7) Movement Contract
+- **Contract:** Motion is continuous in simulation space (`position_x`, `position_y`).
+- **Contract:** Entity hex is derived from position via deterministic cube-rounding axial conversion.
+- **Contract:** Hex transitions must be stable (no boundary flicker behavior).
+- **Contract:** Viewers/controllers never mutate positions directly; they only issue simulation commands.
+
+## 8) Fixed-Point Migration Path (Note)
+- **Contract:** Current runtime uses floats with fixed-tick stepping and deterministic update order.
+- **Contract:** If cross-platform float drift becomes unacceptable, migration path is:
+  1. introduce fixed-point position type,
+  2. keep command/tick semantics unchanged,
+  3. add dual-hash regression window,
+  4. cut over serialization schema version.
+- **Contract:** No fixed-point commitment is made now; this is a planned compatibility path.
