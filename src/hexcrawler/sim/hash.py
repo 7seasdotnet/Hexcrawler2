@@ -19,6 +19,8 @@ def world_hash(world: WorldState) -> str:
 def simulation_hash(simulation: Simulation) -> str:
     payload = {
         "seed": simulation.seed,
+        "master_seed": simulation.master_seed,
+        "rng_state": simulation.rng_state_payload(),
         "tick": simulation.state.tick,
         "day": simulation.state.day,
         "world": simulation.state.world.to_dict(),
