@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
+from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.world import HexCoord, WorldState
 
 TICKS_PER_DAY = 240
 TARGET_REACHED_THRESHOLD = 0.05
+
+RNG_SIM_STREAM_NAME = "rng_sim"
+RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 
 
 @dataclass
@@ -48,7 +53,11 @@ class Simulation:
     def __init__(self, world: WorldState, seed: int) -> None:
         self.state = SimulationState(world=world)
         self.seed = seed
-        self.rng = random.Random(seed)
+        self.master_seed = seed
+        self.rng_worldgen = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_WORLDGEN_STREAM_NAME))
+        self.rng_sim = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_SIM_STREAM_NAME))
+        # Backward compatibility: preserve existing `sim.rng` consumers as simulation stream.
+        self.rng = self.rng_sim
 
     def add_entity(self, entity: EntityState) -> None:
         self.state.entities[entity.entity_id] = entity
@@ -76,6 +85,22 @@ class Simulation:
 
     def advance_days(self, days: int) -> None:
         self.advance_ticks(days * TICKS_PER_DAY)
+
+    def rng_state_payload(self) -> dict[str, Any]:
+        return {
+            "master_seed": self.master_seed,
+            "rng_sim_state": self.rng_sim.getstate(),
+            "rng_worldgen_state": self.rng_worldgen.getstate(),
+        }
+
+    def restore_rng_state(self, payload: dict[str, Any]) -> None:
+        self.master_seed = int(payload["master_seed"])
+        self.seed = self.master_seed
+        self.rng_worldgen = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_WORLDGEN_STREAM_NAME))
+        self.rng_sim = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_SIM_STREAM_NAME))
+        self.rng_sim.setstate(payload["rng_sim_state"])
+        self.rng_worldgen.setstate(payload["rng_worldgen_state"])
+        self.rng = self.rng_sim
 
     def _tick_once(self) -> None:
         for entity_id in sorted(self.state.entities):

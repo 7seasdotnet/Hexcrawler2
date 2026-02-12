@@ -2,11 +2,11 @@
 
 ## Phase
 - **Current phase:** Phase 1 (deterministic sim + minimal viewer)
-- **Next action:** Extend serialization coverage for future schema migrations (v2+) while keeping deterministic replay guarantees.
+- **Next action:** Wire deterministic RNG streams into upcoming world-generation entrypoints while preserving strict sim-owned RNG boundaries.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
-  - Deterministic fixed-tick simulation core, movement math, world model, hashing.
+  - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for world data.
 - `src/hexcrawler/cli/viewer.py`
@@ -27,6 +27,7 @@
   - canonical JSON output (`sort_keys`, explicit `indent` + `separators`),
   - atomic save via same-directory temp file + `os.replace`.
 - ✅ Deterministic fixed-tick simulation core implemented with sim-owned seeded RNG.
+- ✅ Deterministic master-seed RNG stream separation implemented (`rng_worldgen`, `rng_sim`) via SHA-256 child seed derivation.
 - ✅ Continuous sim-owned movement implemented with world-space float position.
 - ✅ Viewer/controller separation preserved (viewer issues commands only).
 - ✅ Mandatory tests implemented and passing, including serialization stability/verification checks.
@@ -40,6 +41,6 @@
 - `PYTHONPATH=src pytest -q`
 
 ## What Changed in This Commit
-- Added schema-versioned save payloads with authoritative `world_hash` and strict load-time hash verification.
-- Added canonical deterministic JSON and atomic save writes with temp-file cleanup on failure.
-- Expanded save/load tests (schema_version, hash mismatch fail-fast, canonical stability, atomic write, metadata forward-compat preservation) and updated verification docs.
+- Added deterministic stream-seed derivation helper using SHA-256 over `"{master_seed}:{stream_name}"` and wired simulation-owned `rng_sim` + `rng_worldgen` streams.
+- Extended simulation hashing/state payload to include master seed and both RNG stream states.
+- Added RNG stream tests for stable derivation, stream-name differentiation, and stream-separation butterfly-effect protection.

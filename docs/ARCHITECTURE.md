@@ -32,8 +32,10 @@ This document locks core engine contracts and invariants for the simulation subs
 ## 5) RNG Contract
 - **Contract:** Simulation owns RNG usage; no gameplay logic may depend on global random state.
 - **Contract:** Use deterministically-derived RNG streams at minimum for:
-  - world generation,
-  - runtime simulation.
+  - world generation (`rng_worldgen`),
+  - runtime simulation (`rng_sim`).
+- **Contract:** Child stream seeds are derived from the single master seed using SHA-256 over UTF-8 bytes of `f"{master_seed}:{stream_name}"`, then interpreted as an unsigned 64-bit integer from the first 8 digest bytes (big-endian).
+- **Contract:** Python `hash()` is forbidden for seed derivation because of per-process hash randomization.
 - **Contract:** Stream separation is required to reduce butterfly effects when new random calls are inserted in one subsystem.
 
 ## 6) Serialization Contract (Elite)
