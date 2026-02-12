@@ -18,9 +18,11 @@ def test_save_then_load_round_trip_matches_world_hash(tmp_path: Path) -> None:
     after = world_hash(loaded_world)
 
     assert before == after
+    assert loaded_world.topology_type == source_world.topology_type
+    assert loaded_world.topology_params == source_world.topology_params
 
 
-def test_save_includes_schema_version_and_world_hash(tmp_path: Path) -> None:
+def test_save_includes_schema_version_world_hash_and_topology(tmp_path: Path) -> None:
     world = load_world_json("content/examples/basic_map.json")
     out_path = tmp_path / "world_export.json"
 
@@ -29,6 +31,8 @@ def test_save_includes_schema_version_and_world_hash(tmp_path: Path) -> None:
 
     assert payload["schema_version"] == 1
     assert payload["world_hash"] == world_hash(world)
+    assert payload["topology_type"] == world.topology_type
+    assert payload["topology_params"] == world.topology_params
 
 
 def test_loader_fails_when_world_hash_does_not_match(tmp_path: Path) -> None:

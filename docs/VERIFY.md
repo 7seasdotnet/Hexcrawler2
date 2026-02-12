@@ -18,14 +18,24 @@
    - Confirm HUD updates `CURRENT HEX`, `ticks`, and `day`.
 5. Run tests:
    - `PYTHONPATH=src pytest -q`
-6. Save/load serialization contract verification (schema v1 + hash verification):
+6. Verify deterministic topology generation API:
+   - `PYTHONPATH=src pytest -q tests/test_world_generation.py`
+   - Optional direct check:
+     - `PYTHONPATH=src python - <<'PY'`
+     - `from hexcrawler.sim.hash import world_hash`
+     - `from hexcrawler.sim.world import WorldState`
+     - `a = WorldState.create_with_topology(42, 'hex_disk', {'radius': 4})`
+     - `b = WorldState.create_with_topology(42, 'hex_disk', {'radius': 4})`
+     - `print(world_hash(a) == world_hash(b))`
+     - `PY`
+7. Save/load serialization contract verification (schema v1 + hash + topology fields):
    - Save a world from code:
      - `PYTHONPATH=src python - <<'PY'`
      - `from hexcrawler.content.io import load_world_json, save_world_json`
      - `w = load_world_json('content/examples/basic_map.json')`
      - `save_world_json('tmp_world.json', w)`
      - `PY`
-   - Inspect the output file and confirm it includes top-level `schema_version` and `world_hash`.
+   - Inspect the output file and confirm top-level `schema_version`, `world_hash`, `topology_type`, and `topology_params`.
    - Load it back and confirm no exception is raised:
      - `PYTHONPATH=src python - <<'PY'`
      - `from hexcrawler.content.io import load_world_json`

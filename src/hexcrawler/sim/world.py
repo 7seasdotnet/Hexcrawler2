@@ -1,9 +1,44 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
+from hexcrawler.sim.rng import derive_stream_seed
+
 SITE_TYPES = {"none", "town", "dungeon"}
+RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
+DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
+
+
+def _build_default_hex_record(rng_worldgen: random.Random) -> HexRecord:
+    return HexRecord(terrain_type=rng_worldgen.choice(DEFAULT_TERRAIN_OPTIONS))
+
+
+def generate_hex_disk(radius: int, rng_worldgen: random.Random) -> dict[HexCoord, HexRecord]:
+    if radius < 0:
+        raise ValueError("radius must be >= 0")
+
+    hexes: dict[HexCoord, HexRecord] = {}
+    for q in range(-radius, radius + 1):
+        min_r = max(-radius, -q - radius)
+        max_r = min(radius, -q + radius)
+        for r in range(min_r, max_r + 1):
+            coord = HexCoord(q=q, r=r)
+            hexes[coord] = _build_default_hex_record(rng_worldgen)
+    return hexes
+
+
+def generate_hex_rectangle(width: int, height: int, rng_worldgen: random.Random) -> dict[HexCoord, HexRecord]:
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be > 0")
+
+    hexes: dict[HexCoord, HexRecord] = {}
+    for q in range(width):
+        for r in range(height):
+            coord = HexCoord(q=q, r=r)
+            hexes[coord] = _build_default_hex_record(rng_worldgen)
+    return hexes
 
 
 @dataclass(frozen=True, order=True)
@@ -50,6 +85,30 @@ class HexRecord:
 @dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
+    topology_type: str = "custom"
+    topology_params: dict[str, int] = field(default_factory=dict)
+
+    @classmethod
+    def create_with_topology(
+        cls,
+        master_seed: int,
+        topology_type: str,
+        topology_params: dict[str, int],
+    ) -> "WorldState":
+        rng_worldgen = random.Random(
+            derive_stream_seed(master_seed=master_seed, stream_name=RNG_WORLDGEN_STREAM_NAME)
+        )
+        if topology_type == "hex_disk":
+            radius = int(topology_params["radius"])
+            hexes = generate_hex_disk(radius=radius, rng_worldgen=rng_worldgen)
+        elif topology_type == "hex_rectangle":
+            width = int(topology_params["width"])
+            height = int(topology_params["height"])
+            hexes = generate_hex_rectangle(width=width, height=height, rng_worldgen=rng_worldgen)
+        else:
+            raise ValueError(f"unsupported topology_type: {topology_type}")
+
+        return cls(hexes=hexes, topology_type=topology_type, topology_params=dict(topology_params))
 
     def set_hex_record(self, coord: HexCoord, record: HexRecord) -> None:
         self.hexes[coord] = record
@@ -61,11 +120,18 @@ class WorldState:
         hex_rows = []
         for coord in sorted(self.hexes):
             hex_rows.append({"coord": coord.to_dict(), "record": self.hexes[coord].to_dict()})
-        return {"hexes": hex_rows}
+        return {
+            "topology_type": self.topology_type,
+            "topology_params": self.topology_params,
+            "hexes": hex_rows,
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorldState":
-        world = cls()
+        world = cls(
+            topology_type=str(data.get("topology_type", "custom")),
+            topology_params=dict(data.get("topology_params", {})),
+        )
         for row in data.get("hexes", []):
             coord = HexCoord.from_dict(row["coord"])
             record = HexRecord.from_dict(row["record"])
