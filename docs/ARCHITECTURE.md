@@ -46,8 +46,11 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Backward compatibility window policy: each save format must remain readable by at least one previous schema version.
 - **Contract:** Serialization uses canonical JSON rules (stable key ordering and stable formatting).
 - **Contract:** Saves are atomic (write temp file, then rename).
-- **Contract:** Save payload stores `world_hash`; loader verifies and warns or fails fast on mismatch.
-- **Contract:** Unknown fields should be preserved where feasible (especially metadata) for forward compatibility.
+- **Contract:** Canonical game saves are the single source of truth and include `schema_version`, `save_hash`, `world_state`, `simulation_state`, `input_log`, and optional `metadata`.
+- **Contract:** `save_hash` is computed from `schema_version` + `world_state` + `simulation_state` + `input_log` and excludes `save_hash` itself.
+- **Contract:** Canonical save loader fails fast on `save_hash` mismatch.
+- **Contract:** Legacy world-only payloads (`world_hash` + top-level world fields) remain loadable for compatibility with existing viewers.
+- **Contract:** Unknown fields should be preserved where feasible (especially `metadata`) for forward compatibility.
 
 ## 7) Movement Contract
 - **Contract:** Motion is continuous in simulation space (`position_x`, `position_y`).

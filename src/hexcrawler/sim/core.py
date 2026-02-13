@@ -127,6 +127,7 @@ class Simulation:
         # Backward compatibility: preserve existing `sim.rng` consumers as simulation stream.
         self.rng = self.rng_sim
         self.input_log: list[SimCommand] = []
+        self.save_metadata: dict[str, Any] = {}
         self._pending_commands: dict[int, list[SimCommand]] = defaultdict(list)
 
     def add_entity(self, entity: EntityState) -> None:

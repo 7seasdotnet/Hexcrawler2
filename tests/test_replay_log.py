@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hexcrawler.content.io import load_world_json, load_simulation_json, save_simulation_json
+from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation, run_replay
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.world import HexCoord
@@ -68,7 +68,7 @@ def test_save_load_preserves_input_log(tmp_path: Path) -> None:
         sim.append_command(command)
 
     path = tmp_path / "sim_save.json"
-    save_simulation_json(path, sim)
-    loaded = load_simulation_json(path)
+    save_game_json(path, sim.state.world, sim)
+    _, loaded = load_game_json(path)
 
     assert [command.to_dict() for command in loaded.input_log] == [command.to_dict() for command in sim.input_log]
