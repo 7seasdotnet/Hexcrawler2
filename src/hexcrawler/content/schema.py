@@ -59,3 +59,33 @@ def validate_world_payload(payload: dict[str, Any]) -> None:
 
         if not isinstance(record["metadata"], dict):
             raise ValueError(f"hex row {index} metadata must be object")
+
+
+def validate_save_payload(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("save payload must be an object")
+
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, int):
+        raise ValueError("save payload must contain integer field: schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(f"unsupported schema_version: {schema_version}")
+
+    save_digest = payload.get("save_hash")
+    if not isinstance(save_digest, str) or not save_digest:
+        raise ValueError("save payload must contain string field: save_hash")
+
+    world_state = payload.get("world_state")
+    if not isinstance(world_state, dict):
+        raise ValueError("save payload must contain object field: world_state")
+
+    simulation_state = payload.get("simulation_state")
+    if not isinstance(simulation_state, dict):
+        raise ValueError("save payload must contain object field: simulation_state")
+
+    input_log = payload.get("input_log")
+    if not isinstance(input_log, list):
+        raise ValueError("save payload must contain list field: input_log")
+
+    if "metadata" in payload and not isinstance(payload["metadata"], dict):
+        raise ValueError("save payload field metadata must be an object when present")

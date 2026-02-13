@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
 
 from hexcrawler.sim.core import Simulation
 from hexcrawler.sim.world import WorldState
@@ -13,6 +14,17 @@ def world_hash(world: WorldState) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def save_hash(payload: dict[str, Any]) -> str:
+    hash_payload = {
+        "schema_version": payload["schema_version"],
+        "world_state": payload["world_state"],
+        "simulation_state": payload["simulation_state"],
+        "input_log": payload["input_log"],
+    }
+    encoded = json.dumps(hash_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 

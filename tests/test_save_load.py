@@ -3,9 +3,22 @@ from pathlib import Path
 
 import pytest
 
-from hexcrawler.content.io import load_world_json, save_world_json
-from hexcrawler.sim.hash import world_hash
+from hexcrawler.content.io import load_game_json, load_world_json, save_game_json, save_world_json
+from hexcrawler.sim.core import EntityState, SimCommand, Simulation
+from hexcrawler.sim.hash import save_hash, world_hash
 from hexcrawler.sim.world import HexCoord
+
+
+def _build_simulation(seed: int = 123) -> Simulation:
+    world = load_world_json("content/examples/basic_map.json")
+    simulation = Simulation(world=world, seed=seed)
+    simulation.add_entity(EntityState.from_hex(entity_id="runner", hex_coord=HexCoord(0, 0), speed_per_tick=0.2))
+    simulation.append_command(
+        SimCommand(tick=0, entity_id="runner", command_type="set_move_vector", params={"x": 1.0, "y": 0.0})
+    )
+    simulation.append_command(SimCommand(tick=4, entity_id="runner", command_type="stop", params={}))
+    simulation.advance_ticks(7)
+    return simulation
 
 
 def test_save_then_load_round_trip_matches_world_hash(tmp_path: Path) -> None:
@@ -60,6 +73,59 @@ def test_canonical_json_stable_across_save_load_cycles(tmp_path: Path) -> None:
     assert first_path.read_text(encoding="utf-8") == second_path.read_text(encoding="utf-8")
 
 
+def test_game_save_json_stable_across_save_load_cycles(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    first_path = tmp_path / "first_game.json"
+    second_path = tmp_path / "second_game.json"
+
+    save_game_json(first_path, simulation.state.world, simulation)
+    loaded_world, loaded_simulation = load_game_json(first_path)
+    save_game_json(second_path, loaded_world, loaded_simulation)
+
+    assert first_path.read_text(encoding="utf-8") == second_path.read_text(encoding="utf-8")
+
+
+def test_game_loader_fails_when_save_hash_is_tampered(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["simulation_state"]["tick"] += 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="save_hash mismatch"):
+        load_game_json(path)
+
+
+def test_game_save_preserves_unknown_metadata_fields(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    simulation.save_metadata = {
+        "engine": {"build": "dev", "flags": ["x", "y"]},
+        "editor_notes": {"author": "qa"},
+    }
+
+    first_path = tmp_path / "game_save.json"
+    second_path = tmp_path / "game_save_2.json"
+
+    save_game_json(first_path, simulation.state.world, simulation)
+    loaded_world, loaded_sim = load_game_json(first_path)
+    save_game_json(second_path, loaded_world, loaded_sim)
+
+    round_tripped_payload = json.loads(second_path.read_text(encoding="utf-8"))
+    assert round_tripped_payload["metadata"] == simulation.save_metadata
+
+
+def test_load_world_json_accepts_canonical_game_payload(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    loaded_world = load_world_json(path)
+
+    assert world_hash(loaded_world) == world_hash(simulation.state.world)
+
+
 def test_atomic_save_writes_final_file(tmp_path: Path) -> None:
     world = load_world_json("content/examples/basic_map.json")
     out_path = tmp_path / "nested" / "world_export.json"
@@ -109,3 +175,12 @@ def test_loader_rejects_unsupported_schema_version(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported schema_version"):
         load_world_json(out_path)
+
+
+def test_save_hash_matches_payload_parts(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["save_hash"] == save_hash(payload)
