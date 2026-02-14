@@ -73,3 +73,9 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Viewer rendering may run at a higher frame rate and interpolate visual positions between the previous committed tick state (`T-1`) and current committed tick state (`T`).
 - **Contract:** Interpolation alpha is derived from wall-clock frame time relative to tick duration and clamped to `[0, 1]`.
 - **Contract:** Interpolated render positions are presentation-only and must never feed back into simulation state, command logs, RNG, or hashing.
+
+## 10) Replay Forensics CLI Contract
+- **Contract:** `python -m hexcrawler.cli.replay_tool <save_path> --ticks N` replays forward from the **current saved simulation state** (not reconstruction from tick 0).
+- **Contract:** Replay tool uses the same simulation stepping path and command execution semantics as runtime simulation; no alternate replay gameplay logic is introduced.
+- **Contract:** Tooling output is concise by default (`header`, `integrity=OK`, `start_hash`, `end_hash`) with optional flags for per-tick hashes and input-log command-type summaries.
+- **Contract:** Replay CLI is forensic/debug tooling only and must not alter simulation semantics, RNG behavior, or command execution order.

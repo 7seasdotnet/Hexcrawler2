@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 1 (deterministic sim + minimal viewer)
-- **Next action:** Validate interpolation behavior in broader entity-count scenes and mirror viewer interpolation approach in future non-pygame graphical frontends.
+- **Current phase:** Phase 1 (deterministic sim + minimal viewer + replay forensics tooling)
+- **Next action:** Add CI wiring that runs replay-tool determinism checks against canonical save fixtures to speed up regression triage.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -14,6 +14,8 @@
   - Legacy ASCII CLI viewer/controller (continues using `load_world_json`).
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical Phase 1 viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
+- `src/hexcrawler/cli/replay_tool.py`
+  - Headless replay forensics CLI: loads canonical game save, prints concise save/sim header, reports start/end simulation hashes, supports optional per-tick hashes and input-log summaries, and can dump a post-replay canonical save.
 - `src/hexcrawler/__main__.py`
   - Package entrypoint routing to pygame viewer.
 - `run_game.py`
@@ -29,19 +31,21 @@
   - `generate_hex_disk(radius, rng_worldgen)`
   - `generate_hex_rectangle(width, height, rng_worldgen)`
   - `WorldState.create_with_topology(master_seed, topology_type, topology_params)`
+- ✅ Replay forensics CLI added for deterministic debugging without modifying simulation semantics.
 - ✅ Mandatory tests implemented and passing, including save integrity/tamper checks and replay determinism checks.
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
-- No UI replay tooling yet (engine replay API and persistence only).
+- No networking in this phase.
 
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
-- `PYTHONPATH=src pytest -q tests/test_render_interpolation.py`
+- `PYTHONPATH=src pytest -q tests/test_replay_tool.py`
+- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool <save_path> --ticks 200`
 
 ## What Changed in This Commit
-- Added viewer-side interpolation snapshots (`T-1` and `T`) plus clamped frame alpha blending in the pygame viewer to smooth movement without changing sim tick behavior.
-- Added pure helper coverage for clamping, lerp interpolation, and immutable render snapshot extraction.
-- Documented rendering/interpolation architecture contract clarifying that interpolation is presentation-only and cannot affect deterministic simulation state.
+- Added `hexcrawler.cli.replay_tool` CLI for deterministic replay forensics from the current saved simulation state (forward-only replay semantics).
+- Added pytest coverage for replay CLI success path, hash markers, and optional final-save dump.
+- Updated project status docs with new replay entrypoint and verification command.
