@@ -89,6 +89,7 @@ This document locks core engine contracts and invariants for the simulation subs
   3. input log (commands), where applicable.
 - **Contract:** PeriodicScheduler callbacks are reattached after load; callbacks must be safe under “no persistent module memory” and derive any needed context exclusively from serialized state.
 - **Contract:** Until an explicit serialized “module state” substrate is introduced and locked by tests, modules must be stateless beyond configuration constants.
+- **Contract:** `rules_state` is the explicit serialized per-module persistence substrate (`dict[str, JSON-object]`) and is hash-covered via `simulation_hash`/canonical saves; module persistent state must live only in `rules_state`, scheduled events, and/or world state APIs.
 
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
