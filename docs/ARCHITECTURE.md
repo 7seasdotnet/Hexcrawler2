@@ -63,6 +63,19 @@ This document locks core engine contracts and invariants for the simulation subs
 - **RNG Requirement for Modules:** Modules must use `sim.rng_stream("stream_name")` for randomness. Direct use of `random.Random()` or global `random` in modules is forbidden.
 - **World Mutation Boundary:** Modules must mutate simulation state only through public `Simulation` APIs (commands/events/simulation methods), never by directly mutating underlying world/entity internals.
 
+## 6C) Periodic Scheduling Substrate
+- **Purpose:** Provide a generic deterministic fixed-interval scheduler for rule modules without embedding gameplay/domain semantics.
+- **Contract:** `PeriodicScheduler` is a rule module (`name="periodic_scheduler"`) that schedules and executes periodic tasks strictly through `SimEvent` records with `event_type="periodic_tick"` and params `{"task": <task_name>, "interval": <interval_ticks>}`.
+- **Contract:** Periodic task registration API:
+  - `register_task(task_name, interval_ticks, start_tick=0)` for unique task IDs.
+  - `set_task_callback(task_name, callback)` where callback signature is `(sim, tick)`.
+- **Contract:** When a periodic event fires at tick `T`, scheduler behavior is deterministic and ordered:
+  1. invoke callback for task (if attached),
+  2. schedule next periodic event at tick `T + interval_ticks`.
+- **Ordering Rule:** Same-tick periodic tasks execute in event queue FIFO order. For tasks registered with the same `start_tick`, initial event insertion order is registration order.
+- **Persistence Model:** Pending periodic events in the serialized event queue are the single source of truth for future executions; there are no hidden wall-clock timers or non-serialized timer state.
+- **Load Behavior:** Callback callables are in-memory only and must be reattached after loading a save; future firings remain deterministic because pending periodic events are already serialized.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
