@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -154,6 +155,7 @@ class SimulationState:
     world: WorldState
     tick: int = 0
     entities: dict[str, EntityState] = field(default_factory=dict)
+    rules_state: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def day(self) -> int:
@@ -292,6 +294,18 @@ class Simulation:
         self.rule_modules.append(module)
         module.on_simulation_start(self)
 
+    def get_rules_state(self, module_name: str) -> dict[str, Any]:
+        existing = self.state.rules_state.get(module_name, {})
+        return copy.deepcopy(existing)
+
+    def set_rules_state(self, module_name: str, state: dict[str, Any]) -> None:
+        if not isinstance(module_name, str) or not module_name:
+            raise ValueError("module_name must be a non-empty string")
+        if not isinstance(state, dict):
+            raise ValueError("rules_state value must be a dict")
+        _validate_json_value(state, field_name="rules_state")
+        self.state.rules_state[module_name] = copy.deepcopy(state)
+
     def simulation_payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
@@ -300,6 +314,7 @@ class Simulation:
             "tick": self.state.tick,
             "next_event_counter": self._next_event_counter,
             "rng_state": self.rng_state_payload(),
+            "rules_state": dict(sorted(self.state.rules_state.items())),
             "world": self.state.world.to_dict(),
             "entities": [
                 {
@@ -327,6 +342,14 @@ class Simulation:
         sim.master_seed = int(payload.get("master_seed", payload["seed"]))
         sim.state.tick = int(payload["tick"])
         sim._next_event_counter = int(payload.get("next_event_counter", 1))
+
+        raw_rules_state = payload.get("rules_state", {})
+        if not isinstance(raw_rules_state, dict):
+            raise ValueError("rules_state must be an object")
+        for module_name, module_state in raw_rules_state.items():
+            if not isinstance(module_state, dict):
+                raise ValueError("rules_state entries must be objects")
+            sim.set_rules_state(module_name, module_state)
 
         for row in payload.get("entities", []):
             entity = EntityState(

@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 3A infrastructure — generic stateless Check Runner substrate implemented.
-- **Next action:** Use `CheckRunner` as a reusable substrate for future rule-specific checks while keeping emitted events serialized and deterministic under replay/save-load.
+- **Current phase:** Phase 3B substrate — serialized `rules_state` store implemented for deterministic rule-module persistence.
+- **Next action:** Migrate rule modules that currently depend on implicit in-memory counters/caches to persist deterministic state exclusively through `Simulation.set_rules_state(...)` plus events/world APIs.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -11,6 +11,7 @@
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
+  - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
@@ -54,9 +55,12 @@
 - ✅ Phase 2C complete: deterministic generic periodic scheduler substrate implemented via serialized `periodic_tick` events.
 - ✅ Phase 2C hardening complete: periodic rehydration now prevents duplicate chains and rejects interval conflicts deterministically.
 - ✅ Phase 3A substrate complete: stateless `CheckRunner` now emits serialized `check` events via `PeriodicScheduler` callbacks.
+- ✅ Phase 3B substrate complete: serialized hash-covered `rules_state` store added to canonical simulation save/load and simulation hashing.
 
 ## New Public APIs (Phase 3A)
 - `Simulation.get_rule_module(module_name)`
+- `Simulation.get_rules_state(module_name)` (copy semantics; mutate via `set_rules_state`)
+- `Simulation.set_rules_state(module_name, state)`
 - `hexcrawler.sim.checks.CheckRunner`
   - `register_check(check_name, interval_ticks, start_tick=0)`
   - `set_check_callback(check_name, callback)`
@@ -71,6 +75,7 @@
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
+- `PYTHONPATH=src pytest -q tests/test_rules_state.py`
 - `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py`
 - `PYTHONPATH=src pytest -q tests/test_rule_modules.py`
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
@@ -79,6 +84,6 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 
 ## What Changed in This Commit
-- Added `CheckRunner` rule module as substrate-level infrastructure that registers deterministic periodic tasks and emits serialized `check` events.
-- Added `Simulation.get_rule_module(...)` to support deterministic, duplicate-safe module discovery and scheduler reuse.
-- Added `tests/test_check_runner.py` covering schedule emission, deterministic ordering, save/load rehydration safety, and replay hash stability.
+- Added simulation-owned serialized `rules_state` (`dict[str, JSON-object]`) with validation-backed `get_rules_state`/`set_rules_state` APIs for replay/save-load-safe module persistence.
+- Included `rules_state` in canonical simulation payloads and `simulation_hash` so persistence changes are hash-covered and deterministic.
+- Added `tests/test_rules_state.py` and architecture contract updates documenting the new rules module persistence substrate.

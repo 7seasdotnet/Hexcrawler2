@@ -54,6 +54,7 @@ def simulation_hash(simulation: Simulation) -> str:
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],
         "input_log": [command.to_dict() for command in simulation.input_log],
+        "rules_state": dict(sorted(simulation.state.rules_state.items())),
         "next_event_counter": simulation._next_event_counter,
         "pending_events": [event.to_dict() for event in simulation.pending_events()],
     }
