@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 1 (deterministic sim + minimal viewer)
-- **Next action:** Migrate CLI/editor entry points to write canonical game saves by default while keeping legacy world-only loading support.
+- **Next action:** Validate interpolation behavior in broader entity-count scenes and mirror viewer interpolation approach in future non-pygame graphical frontends.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -13,7 +13,7 @@
 - `src/hexcrawler/cli/viewer.py`
   - Legacy ASCII CLI viewer/controller (continues using `load_world_json`).
 - `src/hexcrawler/cli/pygame_viewer.py`
-  - Graphical Phase 1 viewer with vector WASD input and right-click move command (continues using `load_world_json`).
+  - Graphical Phase 1 viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
 - `src/hexcrawler/__main__.py`
   - Package entrypoint routing to pygame viewer.
 - `run_game.py`
@@ -39,10 +39,9 @@
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
-- `PYTHONPATH=src pytest -q tests/test_save_load.py tests/test_replay_log.py`
-- `PYTHONPATH=src pytest -q tests/test_determinism.py`
+- `PYTHONPATH=src pytest -q tests/test_render_interpolation.py`
 
 ## What Changed in This Commit
-- Added canonical save APIs (`save_game_json` / `load_game_json`) with a single payload containing world state, simulation state, input log, metadata, and `save_hash` validation.
-- Kept `load_world_json` backward compatible: it now accepts both legacy world-only saves and canonical game saves (returning only `WorldState` for viewers).
-- Added/updated tests for canonical byte-stability, tamper detection, metadata round-tripping, and replay/input-log persistence through canonical saves.
+- Added viewer-side interpolation snapshots (`T-1` and `T`) plus clamped frame alpha blending in the pygame viewer to smooth movement without changing sim tick behavior.
+- Added pure helper coverage for clamping, lerp interpolation, and immutable render snapshot extraction.
+- Documented rendering/interpolation architecture contract clarifying that interpolation is presentation-only and cannot affect deterministic simulation state.

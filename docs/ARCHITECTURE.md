@@ -67,3 +67,9 @@ This document locks core engine contracts and invariants for the simulation subs
   3. add dual-hash regression window,
   4. cut over serialization schema version.
 - **Contract:** No fixed-point commitment is made now; this is a planned compatibility path.
+
+## 9) Rendering & Interpolation Contract
+- **Contract:** Simulation remains fixed-tick authoritative and only advances on simulation tick boundaries.
+- **Contract:** Viewer rendering may run at a higher frame rate and interpolate visual positions between the previous committed tick state (`T-1`) and current committed tick state (`T`).
+- **Contract:** Interpolation alpha is derived from wall-clock frame time relative to tick duration and clamped to `[0, 1]`.
+- **Contract:** Interpolated render positions are presentation-only and must never feed back into simulation state, command logs, RNG, or hashing.
