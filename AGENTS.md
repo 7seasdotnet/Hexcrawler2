@@ -64,6 +64,7 @@ Goal: content expansion becomes data entry + balance, not new code.
 - Prefer ECS or clean component architecture if appropriate; avoid monolith.
 - Every system must be testable headless (no UI required).
 - Keep saves deterministic and versioned (migrations supported). Human-readable is optional; schema-validation is required.
+- Determinism contracts in docs/ARCHITECTURE.md are authoritative and must not be weakened without explicit approval and documentation.
 
 ## Determinism Enforcement (Rule Modules Are Ephemeral)
 - Rule modules are **not serialized**. Treat them as **ephemeral behavioral shells**.
