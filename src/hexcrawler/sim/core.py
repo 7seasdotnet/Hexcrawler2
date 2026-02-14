@@ -7,6 +7,7 @@ from typing import Any
 
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.rng import derive_stream_seed
+from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import HexCoord, WorldState
 
 TICKS_PER_DAY = 240
@@ -166,8 +167,13 @@ class Simulation:
         self.master_seed = seed
         self.rng_worldgen = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_WORLDGEN_STREAM_NAME))
         self.rng_sim = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_SIM_STREAM_NAME))
+        self._rng_streams: dict[str, random.Random] = {
+            RNG_WORLDGEN_STREAM_NAME: self.rng_worldgen,
+            RNG_SIM_STREAM_NAME: self.rng_sim,
+        }
         # Backward compatibility: preserve existing `sim.rng` consumers as simulation stream.
         self.rng = self.rng_sim
+        self.rule_modules: list[RuleModule] = []
         self.input_log: list[SimCommand] = []
         self.save_metadata: dict[str, Any] = {}
         self._pending_commands: dict[int, list[SimCommand]] = defaultdict(list)
@@ -261,7 +267,24 @@ class Simulation:
         self.rng_sim = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_SIM_STREAM_NAME))
         self.rng_sim.setstate(_json_list_to_tuple(payload["rng_sim_state"]))
         self.rng_worldgen.setstate(_json_list_to_tuple(payload["rng_worldgen_state"]))
+        self._rng_streams = {
+            RNG_WORLDGEN_STREAM_NAME: self.rng_worldgen,
+            RNG_SIM_STREAM_NAME: self.rng_sim,
+        }
         self.rng = self.rng_sim
+
+    def rng_stream(self, name: str) -> random.Random:
+        if name not in self._rng_streams:
+            self._rng_streams[name] = random.Random(
+                derive_stream_seed(master_seed=self.master_seed, stream_name=name)
+            )
+        return self._rng_streams[name]
+
+    def register_rule_module(self, module: RuleModule) -> None:
+        if any(existing.name == module.name for existing in self.rule_modules):
+            raise ValueError(f"duplicate rule module name: {module.name}")
+        self.rule_modules.append(module)
+        module.on_simulation_start(self)
 
     def simulation_payload(self) -> dict[str, Any]:
         return {
@@ -322,10 +345,14 @@ class Simulation:
         return sim
 
     def _tick_once(self) -> None:
+        for module in self.rule_modules:
+            module.on_tick_start(self, self.state.tick)
         self._apply_commands_for_tick(self.state.tick)
         self._execute_events_for_tick(self.state.tick)
         for entity_id in sorted(self.state.entities):
             self._advance_entity(self.state.entities[entity_id])
+        for module in self.rule_modules:
+            module.on_tick_end(self, self.state.tick)
         self.state.tick += 1
 
     def _apply_commands_for_tick(self, tick: int) -> None:
@@ -359,6 +386,8 @@ class Simulation:
         for event in events:
             self._event_tick_by_id.pop(event.event_id, None)
             self._execute_event(event)
+            for module in self.rule_modules:
+                module.on_event_executed(self, event)
 
     def _execute_event(self, event: SimEvent) -> None:
         if event.event_type in {"noop", "debug_marker"}:

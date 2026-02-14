@@ -48,6 +48,21 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Python `hash()` is forbidden for seed derivation because of per-process hash randomization.
 - **Contract:** Stream separation is required to reduce butterfly effects when new random calls are inserted in one subsystem.
 
+## 6B) Rule Module Substrate
+- **Purpose:** Provide a deterministic plugin substrate so rule logic can hook into simulation lifecycle without adding gameplay logic to `Simulation` core.
+- **Contract:** Rule modules are registered with `Simulation.register_rule_module(module)` and execute in strict registration order.
+- **Contract:** Duplicate module names are rejected (`ValueError`) to preserve stable module identity and registration ordering.
+- **Lifecycle Hook Order (tick `T`):**
+  1. `module.on_tick_start(sim, T)` for each module in registration order,
+  2. apply commands scheduled for `T`,
+  3. execute events scheduled for `T`, and after each event execution call `module.on_event_executed(sim, event)` in registration order,
+  4. entity updates for `T`,
+  5. `module.on_tick_end(sim, T)` for each module in registration order,
+  6. increment simulation tick.
+- **Determinism Guarantee:** Registration order is authoritative ordering; no hidden sorting or global state.
+- **RNG Requirement for Modules:** Modules must use `sim.rng_stream("stream_name")` for randomness. Direct use of `random.Random()` or global `random` in modules is forbidden.
+- **World Mutation Boundary:** Modules must mutate simulation state only through public `Simulation` APIs (commands/events/simulation methods), never by directly mutating underlying world/entity internals.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
