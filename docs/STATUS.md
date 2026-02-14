@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 2C periodic scheduler hardened (rehydration safety)
-- **Next action:** Lock rule-module persistence boundary (modules are ephemeral; persistence must live in serialized sim/world/events). Then begin Phase 3A Check Runner as a stateless periodic emitter.
+- **Current phase:** Phase 3A infrastructure — generic stateless Check Runner substrate implemented.
+- **Next action:** Use `CheckRunner` as a reusable substrate for future rule-specific checks while keeping emitted events serialized and deterministic under replay/save-load.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -10,6 +10,7 @@
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
+  - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
@@ -52,18 +53,14 @@
 - ✅ Phase 2B complete: deterministic rule-module interface integrated into simulation lifecycle with registration-order execution.
 - ✅ Phase 2C complete: deterministic generic periodic scheduler substrate implemented via serialized `periodic_tick` events.
 - ✅ Phase 2C hardening complete: periodic rehydration now prevents duplicate chains and rejects interval conflicts deterministically.
+- ✅ Phase 3A substrate complete: stateless `CheckRunner` now emits serialized `check` events via `PeriodicScheduler` callbacks.
 
-## New Public APIs (Phase 2C)
-- `hexcrawler.sim.rules.RuleModule`
-  - `on_simulation_start(sim)`
-  - `on_tick_start(sim, tick)`
-  - `on_tick_end(sim, tick)`
-  - `on_event_executed(sim, event)`
-- `Simulation.register_rule_module(module)`
-- `Simulation.rng_stream(name)`
-- `hexcrawler.sim.periodic.PeriodicScheduler`
-  - `register_task(task_name, interval_ticks, start_tick=0)`
-  - `set_task_callback(task_name, callback)`
+## New Public APIs (Phase 3A)
+- `Simulation.get_rule_module(module_name)`
+- `hexcrawler.sim.checks.CheckRunner`
+  - `register_check(check_name, interval_ticks, start_tick=0)`
+  - `set_check_callback(check_name, callback)`
+- `hexcrawler.sim.checks.CHECK_EVENT_TYPE`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -73,8 +70,8 @@
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_check_runner.py`
 - `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py`
-- `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py -k rehydrate`
 - `PYTHONPATH=src pytest -q tests/test_rule_modules.py`
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
@@ -82,6 +79,6 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 
 ## What Changed in This Commit
-- Added architecture contract section `6D) Rule Module Persistence Boundary` to lock that rule modules are non-serialized, ephemeral shells.
-- Documented that persistence for module-driven behavior must live only in serialized/hash-covered world or simulation state, event queue events, and input logs.
-- Updated Phase “Next action” wording to begin Phase 3A with a stateless periodic check runner aligned to the persistence boundary contract.
+- Added `CheckRunner` rule module as substrate-level infrastructure that registers deterministic periodic tasks and emits serialized `check` events.
+- Added `Simulation.get_rule_module(...)` to support deterministic, duplicate-safe module discovery and scheduler reuse.
+- Added `tests/test_check_runner.py` covering schedule emission, deterministic ordering, save/load rehydration safety, and replay hash stability.
