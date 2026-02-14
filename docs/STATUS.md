@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 2C (generic periodic scheduler substrate)
-- **Next action:** After Phase 2 review, choose first domain system (encounter checks) implemented as a rule module using the periodic scheduler substrate.
+- **Current phase:** Phase 2C periodic scheduler hardened (rehydration safety)
+- **Next action:** Begin first domain rule module candidate (encounter checks) on top of hardened periodic scheduling contracts.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -51,6 +51,7 @@
 - ✅ Phase 2A complete: deterministic serialized event queue substrate implemented and included in simulation hash.
 - ✅ Phase 2B complete: deterministic rule-module interface integrated into simulation lifecycle with registration-order execution.
 - ✅ Phase 2C complete: deterministic generic periodic scheduler substrate implemented via serialized `periodic_tick` events.
+- ✅ Phase 2C hardening complete: periodic rehydration now prevents duplicate chains and rejects interval conflicts deterministically.
 
 ## New Public APIs (Phase 2C)
 - `hexcrawler.sim.rules.RuleModule`
@@ -73,6 +74,7 @@
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py`
+- `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py -k rehydrate`
 - `PYTHONPATH=src pytest -q tests/test_rule_modules.py`
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
@@ -80,6 +82,6 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 
 ## What Changed in This Commit
-- Added `PeriodicScheduler` (`periodic_scheduler` rule module) as a generic deterministic periodic execution substrate that self-reschedules via serialized `periodic_tick` events.
-- Added pytest coverage for periodic firing cadence, same-tick deterministic ordering, save/load continuation with callback reattachment, and duplicate task-name rejection.
-- Updated architecture/phase docs to formalize periodic scheduling contracts, persistence model, and next action toward first domain module usage.
+- Hardened `PeriodicScheduler` rehydration so pending `periodic_tick` events in the serialized event queue are authoritative and do not spawn duplicate chains on load.
+- Added deterministic conflict handling for `register_task`: same-interval registrations are idempotent while mismatched intervals fail with `ValueError`.
+- Expanded periodic scheduler tests to lock no-duplicate rehydrate behavior, conflict rejection, and idempotent same-interval registration.

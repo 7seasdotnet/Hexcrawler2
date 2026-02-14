@@ -23,12 +23,27 @@ class PeriodicScheduler(RuleModule):
     def register_task(self, *, task_name: str, interval_ticks: int, start_tick: int = 0) -> None:
         if not task_name:
             raise ValueError("task_name must be a non-empty string")
-        if task_name in self._task_intervals:
-            raise ValueError(f"duplicate periodic task registration: {task_name}")
         if not isinstance(interval_ticks, int) or interval_ticks <= 0:
             raise ValueError("interval_ticks must be a positive integer")
         if not isinstance(start_tick, int) or start_tick < 0:
             raise ValueError("start_tick must be a non-negative integer")
+
+        existing_interval = self._task_intervals.get(task_name)
+        if existing_interval is not None:
+            if existing_interval != interval_ticks:
+                raise ValueError(
+                    f"periodic task {task_name!r} already registered with interval "
+                    f"{existing_interval}; got {interval_ticks}"
+                )
+            existing_start_tick = self._task_start_ticks[task_name]
+            if self._sim is None and existing_start_tick != start_tick:
+                raise ValueError(
+                    f"periodic task {task_name!r} already registered with start_tick "
+                    f"{existing_start_tick}; got {start_tick}"
+                )
+            if self._sim is not None:
+                self._schedule_task_if_absent(self._sim, task_name, interval_ticks, start_tick)
+            return
 
         self._task_intervals[task_name] = interval_ticks
         self._task_start_ticks[task_name] = start_tick
@@ -46,10 +61,14 @@ class PeriodicScheduler(RuleModule):
         self._sim = sim
 
         # Rehydrate known task intervals from serialized periodic events on load.
+        periodic_events: list[tuple[int, str, int]] = []
         for event in sim.pending_events():
             if event.event_type != PERIODIC_EVENT_TYPE:
                 continue
             task_name, interval_ticks = self._task_params(event)
+            periodic_events.append((event.tick, task_name, interval_ticks))
+
+        for event_tick, task_name, interval_ticks in sorted(periodic_events, key=lambda entry: (entry[0], entry[1])):
             existing = self._task_intervals.get(task_name)
             if existing is not None and existing != interval_ticks:
                 raise ValueError(
@@ -57,7 +76,7 @@ class PeriodicScheduler(RuleModule):
                 )
             if existing is None:
                 self._task_intervals[task_name] = interval_ticks
-                self._task_start_ticks[task_name] = int(event.tick)
+                self._task_start_ticks[task_name] = int(event_tick)
                 self._registration_order.append(task_name)
 
         for task_name in self._registration_order:
@@ -98,8 +117,13 @@ class PeriodicScheduler(RuleModule):
         for event in sim.pending_events():
             if event.event_type != PERIODIC_EVENT_TYPE:
                 continue
-            event_task, _ = self._task_params(event)
+            event_task, event_interval = self._task_params(event)
             if event_task == task_name:
+                if event_interval != interval_ticks:
+                    raise ValueError(
+                        f"periodic task {task_name!r} has conflicting intervals: "
+                        f"{interval_ticks} vs {event_interval}"
+                    )
                 return
         sim.schedule_event_at(
             tick=start_tick,
