@@ -79,3 +79,13 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Replay tool uses the same simulation stepping path and command execution semantics as runtime simulation; no alternate replay gameplay logic is introduced.
 - **Contract:** Tooling output is concise by default (`header`, `integrity=OK`, `start_hash`, `end_hash`) with optional flags for per-tick hashes and input-log command-type summaries.
 - **Contract:** Replay CLI is forensic/debug tooling only and must not alter simulation semantics, RNG behavior, or command execution order.
+
+## 11) Content Template vs Runtime Save Boundary Contract
+- **Contract:** `content/` stores world-only map templates used for authoring and iteration; templates are serialized as world payloads (`schema_version`, `world_hash`, top-level world fields).
+- **Contract:** Runtime play/replay operates on canonical game saves under `saves/` (or equivalent runtime output path), never directly on content templates.
+- **Contract:** `python -m hexcrawler.cli.new_save_from_map <map_template.json> <save.json> --seed <N>` is the canonical bridge from template content to runtime save state.
+- **Contract:** `new_save_from_map` refuses canonical input saves to keep the boundary explicit and avoid silently mixing content authoring with runtime state.
+- **Contract:** Viewer entrypoints may still load world templates for editor/prototyping workflows, but replay/forensics tooling must consume canonical game saves.
+- **Workflow:** Build runtime save from template: `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`.
+- **Workflow:** Run pygame viewer from map template flow: `python run_game.py`.
+- **Workflow:** Run replay forensics on canonical save: `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`.
