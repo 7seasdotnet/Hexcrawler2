@@ -80,6 +80,16 @@ This document locks core engine contracts and invariants for the simulation subs
   - Rehydration must not create duplicate periodic chains when a task already has pending events.
   - Callback callables remain in-memory only and must be reattached after load.
 
+## 6D) Rule Module Persistence Boundary
+- **Contract:** Rule modules are not serialized and must be treated as ephemeral behavioral shells.
+- **Contract:** A rule module must never rely on in-memory state (counters, cooldowns, caches, “already processed” sets, etc.) for correctness across save/load, replay, or process restart.
+- **Contract:** Any state that must persist across ticks must be represented in serialized, hash-covered substrates:
+  1. world/simulation state (via Simulation APIs), and/or
+  2. scheduled events (deterministic event queue), and/or
+  3. input log (commands), where applicable.
+- **Contract:** PeriodicScheduler callbacks are reattached after load; callbacks must be safe under “no persistent module memory” and derive any needed context exclusively from serialized state.
+- **Contract:** Until an explicit serialized “module state” substrate is introduced and locked by tests, modules must be stateless beyond configuration constants.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.

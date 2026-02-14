@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 2C periodic scheduler hardened (rehydration safety)
-- **Next action:** Begin first domain rule module candidate (encounter checks) on top of hardened periodic scheduling contracts.
+- **Next action:** Lock rule-module persistence boundary (modules are ephemeral; persistence must live in serialized sim/world/events). Then begin Phase 3A Check Runner as a stateless periodic emitter.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -82,6 +82,6 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 
 ## What Changed in This Commit
-- Hardened `PeriodicScheduler` rehydration so pending `periodic_tick` events in the serialized event queue are authoritative and do not spawn duplicate chains on load.
-- Added deterministic conflict handling for `register_task`: same-interval registrations are idempotent while mismatched intervals fail with `ValueError`.
-- Expanded periodic scheduler tests to lock no-duplicate rehydrate behavior, conflict rejection, and idempotent same-interval registration.
+- Added architecture contract section `6D) Rule Module Persistence Boundary` to lock that rule modules are non-serialized, ephemeral shells.
+- Documented that persistence for module-driven behavior must live only in serialized/hash-covered world or simulation state, event queue events, and input logs.
+- Updated Phase “Next action” wording to begin Phase 3A with a stateless periodic check runner aligned to the persistence boundary contract.
