@@ -280,6 +280,12 @@ class Simulation:
             )
         return self._rng_streams[name]
 
+    def get_rule_module(self, module_name: str) -> RuleModule | None:
+        for module in self.rule_modules:
+            if module.name == module_name:
+                return module
+        return None
+
     def register_rule_module(self, module: RuleModule) -> None:
         if any(existing.name == module.name for existing in self.rule_modules):
             raise ValueError(f"duplicate rule module name: {module.name}")
