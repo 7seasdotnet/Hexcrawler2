@@ -1,12 +1,13 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 1 (deterministic sim + minimal viewer + replay forensics tooling)
-- **Next action:** Add CI wiring that runs replay-tool and map-template-to-save conversion checks against deterministic fixtures.
+- **Current phase:** Phase 2A (deterministic event queue substrate)
+- **Next action:** Phase 2B foundation work: introduce first world-event producers/consumers on top of the serialized queue without breaking replay determinism.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
+  - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
@@ -45,6 +46,7 @@
   - `WorldState.create_with_topology(master_seed, topology_type, topology_params)`
 - ✅ Replay forensics CLI added for deterministic debugging without modifying simulation semantics.
 - ✅ Map-template → canonical-save CLI added to keep content/runtime boundary explicit.
+- ✅ Phase 2A complete: deterministic serialized event queue substrate implemented and included in simulation hash.
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -54,12 +56,12 @@
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
-- `PYTHONPATH=src pytest -q tests/test_new_save_from_map.py`
+- `PYTHONPATH=src pytest -q tests/test_event_queue.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 
 ## What Changed in This Commit
-- Added `hexcrawler.cli.new_save_from_map` to convert world-only template JSON into canonical runtime save JSON with deterministic seed initialization.
-- Added pytest coverage for successful conversion, canonical-input refusal, and overwrite safety (`--force`).
-- Updated architecture/status docs to codify content template vs runtime save separation and documented workflow commands.
+- Added deterministic `SimEvent` substrate in simulation core, including scheduling APIs, same-tick insertion order, tick execution phase integration, and event queue persistence.
+- Included pending events in canonical simulation payload and `simulation_hash` to keep replay/load deterministic.
+- Added pytest coverage for event queue determinism, save/load round-trip, and same-tick ordering.
