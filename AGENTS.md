@@ -65,6 +65,25 @@ Goal: content expansion becomes data entry + balance, not new code.
 - Every system must be testable headless (no UI required).
 - Keep saves deterministic and versioned (migrations supported). Human-readable is optional; schema-validation is required.
 
+## Determinism Enforcement (Rule Modules Are Ephemeral)
+- Rule modules are **not serialized**. Treat them as **ephemeral behavioral shells**.
+- No module may rely on in-memory state (counters, caches, cooldowns, “already processed” sets, etc.) for correctness across:
+  - save/load
+  - replay
+  - process restart
+- Any persistent state must live only in serialized, hash-covered substrates:
+  1) simulation/world state (via Simulation APIs),
+  2) scheduled events (deterministic event queue),
+  3) input log (commands), where applicable.
+- PeriodicScheduler and similar systems must schedule exclusively through serialized events (no hidden timers).
+- Callbacks are reattached after load; callbacks must derive all required context exclusively from serialized state.
+
+## Phase Scope Discipline
+- All implementation must strictly obey the current phase as defined in docs/STATUS.md.
+- If the current phase is substrate-level, do **not** introduce domain semantics (encounters, rumors, factions, ecology, AI decision trees, content schemas, etc.).
+- If the current phase is domain-level, do not modify substrate contracts unless explicitly approved and documented.
+- If a requested feature exceeds the declared phase scope, stop and propose a scope clarification instead of expanding the implementation.
+
 ## Output Discipline (how you work)
 When asked to implement:
 1) Propose a short plan and file-level change list.
