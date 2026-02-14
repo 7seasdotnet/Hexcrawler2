@@ -1,14 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 2B (rule module interface / plugin substrate)
-- **Next action:** Build encounter scheduler substrate on top of rule modules and event queue contracts (not implemented yet).
+- **Current phase:** Phase 2C (generic periodic scheduler substrate)
+- **Next action:** After Phase 2 review, choose first domain system (encounter checks) implemented as a rule module using the periodic scheduler substrate.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
+  - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
@@ -49,8 +50,9 @@
 - ✅ Map-template → canonical-save CLI added to keep content/runtime boundary explicit.
 - ✅ Phase 2A complete: deterministic serialized event queue substrate implemented and included in simulation hash.
 - ✅ Phase 2B complete: deterministic rule-module interface integrated into simulation lifecycle with registration-order execution.
+- ✅ Phase 2C complete: deterministic generic periodic scheduler substrate implemented via serialized `periodic_tick` events.
 
-## New Public APIs (Phase 2B)
+## New Public APIs (Phase 2C)
 - `hexcrawler.sim.rules.RuleModule`
   - `on_simulation_start(sim)`
   - `on_tick_start(sim, tick)`
@@ -58,6 +60,9 @@
   - `on_event_executed(sim, event)`
 - `Simulation.register_rule_module(module)`
 - `Simulation.rng_stream(name)`
+- `hexcrawler.sim.periodic.PeriodicScheduler`
+  - `register_task(task_name, interval_ticks, start_tick=0)`
+  - `set_task_callback(task_name, callback)`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -67,6 +72,7 @@
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py`
 - `PYTHONPATH=src pytest -q tests/test_rule_modules.py`
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
@@ -74,6 +80,6 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 
 ## What Changed in This Commit
-- Added deterministic `RuleModule` substrate and lifecycle hook integration in `Simulation` (`on_tick_start`, `on_event_executed`, `on_tick_end`) with strict registration-order execution.
-- Added `Simulation.rng_stream(name)` for named deterministic RNG streams derived from the master seed and cached per simulation instance.
-- Added rule-module pytest coverage for lifecycle ordering, event hook ordering, RNG stream determinism, and duplicate-name rejection.
+- Added `PeriodicScheduler` (`periodic_scheduler` rule module) as a generic deterministic periodic execution substrate that self-reschedules via serialized `periodic_tick` events.
+- Added pytest coverage for periodic firing cadence, same-tick deterministic ordering, save/load continuation with callback reattachment, and duplicate task-name rejection.
+- Updated architecture/phase docs to formalize periodic scheduling contracts, persistence model, and next action toward first domain module usage.
