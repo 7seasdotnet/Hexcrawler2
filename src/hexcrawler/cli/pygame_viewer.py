@@ -52,6 +52,47 @@ class SimulationController:
         self.sim.advance_ticks(1)
 
 
+@dataclass(frozen=True)
+class RenderEntitySnapshot:
+    x: float
+    y: float
+
+
+RenderSnapshot = dict[str, RenderEntitySnapshot]
+
+
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def lerp(start: float, end: float, alpha: float) -> float:
+    return start + (end - start) * alpha
+
+
+def extract_render_snapshot(sim: Simulation) -> RenderSnapshot:
+    return {
+        entity_id: RenderEntitySnapshot(x=entity.position_x, y=entity.position_y)
+        for entity_id, entity in sim.state.entities.items()
+    }
+
+
+def interpolate_entity_position(
+    prev_snapshot: RenderSnapshot,
+    curr_snapshot: RenderSnapshot,
+    entity_id: str,
+    alpha: float,
+) -> tuple[float, float] | None:
+    previous = prev_snapshot.get(entity_id)
+    current = curr_snapshot.get(entity_id)
+    if previous is None and current is None:
+        return None
+    if previous is None:
+        return (current.x, current.y)
+    if current is None:
+        return (previous.x, previous.y)
+    return (lerp(previous.x, current.x, alpha), lerp(previous.y, current.y, alpha))
+
+
 def _grid_coords(radius: int) -> list[HexCoord]:
     coords: list[HexCoord] = []
     for q in range(-radius, radius + 1):
@@ -95,9 +136,7 @@ def _draw_world(screen: pygame.Surface, sim: Simulation, center: tuple[float, fl
             pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
 
 
-def _draw_entity(screen: pygame.Surface, sim: Simulation, center: tuple[float, float]) -> None:
-    entity = sim.state.entities[PLAYER_ID]
-    world_x, world_y = entity.world_xy()
+def _draw_entity(screen: pygame.Surface, world_x: float, world_y: float, center: tuple[float, float]) -> None:
     x = int(center[0] + world_x * HEX_SIZE)
     y = int(center[1] + world_y * HEX_SIZE)
     pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
@@ -167,6 +206,10 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
     accumulator = 0.0
     running = True
     context_menu: ContextMenuState | None = None
+    previous_snapshot = extract_render_snapshot(sim)
+    current_snapshot = previous_snapshot
+    tick_duration_seconds = SIM_TICK_SECONDS
+    last_tick_time = pygame.time.get_ticks() / 1000.0
 
     while running:
         dt = clock.tick(60) / 1000.0
@@ -194,12 +237,20 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
         controller.set_move_vector(move_x, move_y)
 
         while accumulator >= SIM_TICK_SECONDS:
+            previous_snapshot = current_snapshot
             controller.tick_once()
+            current_snapshot = extract_render_snapshot(sim)
+            last_tick_time = pygame.time.get_ticks() / 1000.0
             accumulator -= SIM_TICK_SECONDS
+
+        now_seconds = pygame.time.get_ticks() / 1000.0
+        alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
 
         screen.fill((17, 18, 25))
         _draw_world(screen, sim, center)
-        _draw_entity(screen, sim, center)
+        interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, PLAYER_ID, alpha)
+        if interpolated is not None:
+            _draw_entity(screen, interpolated[0], interpolated[1], center)
         _draw_hud(screen, sim, font)
         _draw_context_menu(screen, font, context_menu)
         pygame.display.flip()
