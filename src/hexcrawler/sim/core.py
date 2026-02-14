@@ -84,6 +84,48 @@ class SimCommand:
 
 
 @dataclass
+class SimEvent:
+    tick: int
+    event_id: str
+    event_type: str
+    params: dict[str, Any]
+    unknown_fields: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tick, int) or self.tick < 0:
+            raise ValueError("event tick must be a non-negative integer")
+        if not isinstance(self.event_id, str) or not self.event_id:
+            raise ValueError("event_id must be a non-empty string")
+        if not isinstance(self.event_type, str) or not self.event_type:
+            raise ValueError("event_type must be a non-empty string")
+        if not isinstance(self.params, dict):
+            raise ValueError("params must be a dict")
+        _validate_json_value(self.params, field_name="params")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "tick": self.tick,
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "params": self.params,
+        }
+        payload.update(self.unknown_fields)
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SimEvent":
+        known_fields = {"tick", "event_id", "event_type", "params"}
+        unknown_fields = {key: value for key, value in data.items() if key not in known_fields}
+        return cls(
+            tick=int(data["tick"]),
+            event_id=str(data["event_id"]),
+            event_type=str(data["event_type"]),
+            params=dict(data.get("params", {})),
+            unknown_fields=unknown_fields,
+        )
+
+
+@dataclass
 class EntityState:
     entity_id: str
     position_x: float
@@ -129,6 +171,10 @@ class Simulation:
         self.input_log: list[SimCommand] = []
         self.save_metadata: dict[str, Any] = {}
         self._pending_commands: dict[int, list[SimCommand]] = defaultdict(list)
+        self._pending_events_by_tick: dict[int, list[SimEvent]] = defaultdict(list)
+        self._event_tick_by_id: dict[str, int] = {}
+        self._next_event_counter = 1
+        self._event_execution_trace: list[str] = []
 
     def add_entity(self, entity: EntityState) -> None:
         self.state.entities[entity.entity_id] = entity
@@ -137,6 +183,39 @@ class Simulation:
         normalized = command if isinstance(command, SimCommand) else SimCommand.from_dict(command)
         self.input_log.append(normalized)
         self._pending_commands[normalized.tick].append(normalized)
+
+    def schedule_event(self, event: SimEvent) -> None:
+        if event.event_id in self._event_tick_by_id:
+            raise ValueError(f"duplicate event_id: {event.event_id}")
+        self._pending_events_by_tick[event.tick].append(event)
+        self._event_tick_by_id[event.event_id] = event.tick
+
+    def schedule_event_at(self, tick: int, event_type: str, params: dict[str, Any]) -> str:
+        event_id = f"evt-{self._next_event_counter:08d}"
+        self._next_event_counter += 1
+        event = SimEvent(tick=tick, event_id=event_id, event_type=event_type, params=params)
+        self.schedule_event(event)
+        return event_id
+
+    def cancel_event(self, event_id: str) -> bool:
+        if event_id not in self._event_tick_by_id:
+            return False
+        tick = self._event_tick_by_id.pop(event_id)
+        events = self._pending_events_by_tick[tick]
+        self._pending_events_by_tick[tick] = [event for event in events if event.event_id != event_id]
+        if not self._pending_events_by_tick[tick]:
+            del self._pending_events_by_tick[tick]
+        return True
+
+    def pending_events(self) -> list[SimEvent]:
+        return [
+            event
+            for tick in sorted(self._pending_events_by_tick)
+            for event in self._pending_events_by_tick[tick]
+        ]
+
+    def event_execution_trace(self) -> tuple[str, ...]:
+        return tuple(self._event_execution_trace)
 
     def set_entity_destination(self, entity_id: str, destination: HexCoord) -> None:
         if self.state.world.get_hex_record(destination) is None:
@@ -190,6 +269,7 @@ class Simulation:
             "seed": self.seed,
             "master_seed": self.master_seed,
             "tick": self.state.tick,
+            "next_event_counter": self._next_event_counter,
             "rng_state": self.rng_state_payload(),
             "world": self.state.world.to_dict(),
             "entities": [
@@ -205,6 +285,7 @@ class Simulation:
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
             "input_log": [command.to_dict() for command in self.input_log],
+            "pending_events": [event.to_dict() for event in self.pending_events()],
         }
 
     @classmethod
@@ -216,6 +297,7 @@ class Simulation:
         sim = cls(world=WorldState.from_dict(payload["world"]), seed=int(payload["seed"]))
         sim.master_seed = int(payload.get("master_seed", payload["seed"]))
         sim.state.tick = int(payload["tick"])
+        sim._next_event_counter = int(payload.get("next_event_counter", 1))
 
         for row in payload.get("entities", []):
             entity = EntityState(
@@ -232,12 +314,16 @@ class Simulation:
         for row in payload.get("input_log", []):
             sim.append_command(SimCommand.from_dict(row))
 
+        for row in payload.get("pending_events", []):
+            sim.schedule_event(SimEvent.from_dict(row))
+
         if "rng_state" in payload:
             sim.restore_rng_state(payload["rng_state"])
         return sim
 
     def _tick_once(self) -> None:
         self._apply_commands_for_tick(self.state.tick)
+        self._execute_events_for_tick(self.state.tick)
         for entity_id in sorted(self.state.entities):
             self._advance_entity(self.state.entities[entity_id])
         self.state.tick += 1
@@ -265,6 +351,18 @@ class Simulation:
             )
         elif command.command_type == "stop":
             self.stop_entity(entity_id)
+
+    def _execute_events_for_tick(self, tick: int) -> None:
+        if tick not in self._pending_events_by_tick:
+            return
+        events = self._pending_events_by_tick.pop(tick)
+        for event in events:
+            self._event_tick_by_id.pop(event.event_id, None)
+            self._execute_event(event)
+
+    def _execute_event(self, event: SimEvent) -> None:
+        if event.event_type in {"noop", "debug_marker"}:
+            self._event_execution_trace.append(event.event_id)
 
     def _advance_entity(self, entity: EntityState) -> None:
         move_x = entity.move_input_x

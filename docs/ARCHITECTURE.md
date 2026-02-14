@@ -31,7 +31,15 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Simulation stores an ordered input log (`tick`, `entity_id`, `command_type`, `params`), applies every command scheduled for tick `T` before entity updates on tick `T`, and preserves insertion order for commands with the same tick.
 - **Contract:** Replay runs consume the same command log through the same simulation path (no alternate gameplay logic path for replay).
 
-## 5) RNG Contract
+
+## 5) Event Queue Substrate Contract
+- **Contract:** Simulation owns a deterministic event queue substrate with serialized `SimEvent` records (`tick`, `event_id`, `event_type`, `params`, `unknown_fields`).
+- **Contract:** Pending events are keyed by absolute tick and preserve insertion order for events scheduled on the same tick.
+- **Contract:** Authoritative per-tick phase ordering is: (1) apply commands for tick `T`, (2) execute events for tick `T`, (3) run entity updates for tick `T`, (4) increment tick counter.
+- **Contract:** Replay runs use the exact same command/event execution path as runtime simulation (no replay-specific event path).
+- **Contract:** Event queue state (including future-tick events and event ID counter) is serialized in canonical saves and contributes to `simulation_hash`.
+
+## 6) RNG Contract
 - **Contract:** Simulation owns RNG usage; no gameplay logic may depend on global random state.
 - **Contract:** Use deterministically-derived RNG streams at minimum for:
   - world generation (`rng_worldgen`),
@@ -40,7 +48,7 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Python `hash()` is forbidden for seed derivation because of per-process hash randomization.
 - **Contract:** Stream separation is required to reduce butterfly effects when new random calls are inserted in one subsystem.
 
-## 6) Serialization Contract (Elite)
+## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
 - **Contract:** Backward compatibility window policy: each save format must remain readable by at least one previous schema version.
@@ -52,14 +60,14 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Legacy world-only payloads (`world_hash` + top-level world fields) remain loadable for compatibility with existing viewers.
 - **Contract:** Unknown fields should be preserved where feasible (especially `metadata`) for forward compatibility.
 
-## 7) Movement Contract
+## 8) Movement Contract
 - **Contract:** Motion is continuous in simulation space (`position_x`, `position_y`).
 - **Contract:** Entity hex is derived from position via deterministic cube-rounding axial conversion.
 - **Contract:** Hex derivation/projection logic is defined in the simulation layer and reused by viewers (no duplicate rounding logic in viewers).
 - **Contract:** Hex transitions must be stable (no boundary flicker behavior).
 - **Contract:** Viewers/controllers never mutate positions directly; they only issue simulation commands.
 
-## 8) Fixed-Point Migration Path (Note)
+## 9) Fixed-Point Migration Path (Note)
 - **Contract:** Current runtime uses floats with fixed-tick stepping and deterministic update order.
 - **Contract:** If cross-platform float drift becomes unacceptable, migration path is:
   1. introduce fixed-point position type,
@@ -68,19 +76,19 @@ This document locks core engine contracts and invariants for the simulation subs
   4. cut over serialization schema version.
 - **Contract:** No fixed-point commitment is made now; this is a planned compatibility path.
 
-## 9) Rendering & Interpolation Contract
+## 10) Rendering & Interpolation Contract
 - **Contract:** Simulation remains fixed-tick authoritative and only advances on simulation tick boundaries.
 - **Contract:** Viewer rendering may run at a higher frame rate and interpolate visual positions between the previous committed tick state (`T-1`) and current committed tick state (`T`).
 - **Contract:** Interpolation alpha is derived from wall-clock frame time relative to tick duration and clamped to `[0, 1]`.
 - **Contract:** Interpolated render positions are presentation-only and must never feed back into simulation state, command logs, RNG, or hashing.
 
-## 10) Replay Forensics CLI Contract
+## 11) Replay Forensics CLI Contract
 - **Contract:** `python -m hexcrawler.cli.replay_tool <save_path> --ticks N` replays forward from the **current saved simulation state** (not reconstruction from tick 0).
 - **Contract:** Replay tool uses the same simulation stepping path and command execution semantics as runtime simulation; no alternate replay gameplay logic is introduced.
 - **Contract:** Tooling output is concise by default (`header`, `integrity=OK`, `start_hash`, `end_hash`) with optional flags for per-tick hashes and input-log command-type summaries.
 - **Contract:** Replay CLI is forensic/debug tooling only and must not alter simulation semantics, RNG behavior, or command execution order.
 
-## 11) Content Template vs Runtime Save Boundary Contract
+## 12) Content Template vs Runtime Save Boundary Contract
 - **Contract:** `content/` stores world-only map templates used for authoring and iteration; templates are serialized as world payloads (`schema_version`, `world_hash`, top-level world fields).
 - **Contract:** Runtime play/replay operates on canonical game saves under `saves/` (or equivalent runtime output path), never directly on content templates.
 - **Contract:** `python -m hexcrawler.cli.new_save_from_map <map_template.json> <save.json> --seed <N>` is the canonical bridge from template content to runtime save state.
