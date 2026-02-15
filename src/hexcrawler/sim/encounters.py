@@ -8,6 +8,7 @@ from hexcrawler.sim.rules import RuleModule
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
+ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_CHANCE_PERCENT = 20
@@ -49,6 +50,9 @@ class EncounterCheckModule(RuleModule):
         scheduler.set_task_callback(self._TASK_NAME, self._build_emit_callback())
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == ENCOUNTER_ROLL_EVENT_TYPE:
+            self._on_encounter_roll(sim, event)
+            return
         if event.event_type != ENCOUNTER_CHECK_EVENT_TYPE:
             return
 
@@ -86,6 +90,30 @@ class EncounterCheckModule(RuleModule):
             state[self._STATE_INELIGIBLE_STREAK] = int(state[self._STATE_INELIGIBLE_STREAK]) + 1
 
         sim.set_rules_state(self.name, state)
+
+    def _on_encounter_roll(self, sim: Simulation, event: SimEvent) -> None:
+        roll = int(event.params.get("roll", 0))
+        category = self._category_for_roll(roll)
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=ENCOUNTER_RESULT_STUB_EVENT_TYPE,
+            params={
+                "tick": int(event.params.get("tick", event.tick)),
+                "context": event.params.get("context", ENCOUNTER_CONTEXT_GLOBAL),
+                "roll": roll,
+                "category": category,
+            },
+        )
+
+    @staticmethod
+    def _category_for_roll(roll: int) -> str:
+        if not 1 <= roll <= 100:
+            raise ValueError("encounter_roll must be in the inclusive range [1, 100]")
+        if roll <= 40:
+            return "hostile"
+        if roll <= 75:
+            return "neutral"
+        return "omen"
 
     def _build_emit_callback(self):
         def _emit(sim: Simulation, tick: int) -> None:

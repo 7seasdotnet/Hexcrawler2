@@ -6,6 +6,7 @@ from hexcrawler.sim.encounters import (
     ENCOUNTER_CHECK_EVENT_TYPE,
     ENCOUNTER_CHECK_INTERVAL,
     ENCOUNTER_COOLDOWN_TICKS,
+    ENCOUNTER_RESULT_STUB_EVENT_TYPE,
     ENCOUNTER_ROLL_EVENT_TYPE,
     EncounterCheckModule,
 )
@@ -68,9 +69,13 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
     trace = sim.get_event_trace()
     check_entries = [entry for entry in trace if entry["event_type"] == ENCOUNTER_CHECK_EVENT_TYPE]
     roll_entries = [entry for entry in trace if entry["event_type"] == ENCOUNTER_ROLL_EVENT_TYPE]
+    result_entries = [
+        entry for entry in trace if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
+    ]
 
     assert state["checks_emitted"] == len(check_entries)
     assert state["eligible_count"] == len(roll_entries)
+    assert len(result_entries) == len(roll_entries)
     assert len(roll_entries) > 0
 
     roll_source_ticks = [int(entry["params"]["tick"]) for entry in roll_entries]
@@ -81,6 +86,30 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
         roll = int(entry["params"]["roll"])
         assert 1 <= roll <= 100
         assert entry["params"]["context"] == "global"
+
+    for entry in result_entries:
+        assert entry["params"]["category"] in {"hostile", "neutral", "omen"}
+        assert 1 <= int(entry["params"]["roll"]) <= 100
+
+
+def test_encounter_result_stub_save_load_round_trip_hash(tmp_path: Path) -> None:
+    contiguous = _build_sim(seed=902)
+    contiguous.advance_ticks(180)
+
+    split = _build_sim(seed=902)
+    split.advance_ticks(83)
+
+    path = tmp_path / "encounter_result_stub_save.json"
+    save_game_json(path, split.state.world, split)
+    _, loaded = load_game_json(path)
+    loaded.register_rule_module(EncounterCheckModule())
+    loaded.advance_ticks(97)
+
+    assert simulation_hash(contiguous) == simulation_hash(loaded)
+    assert any(
+        entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
+        for entry in loaded.get_event_trace()
+    )
 
 
 def test_encounter_check_rules_state_persists_across_save_load(tmp_path: Path) -> None:
