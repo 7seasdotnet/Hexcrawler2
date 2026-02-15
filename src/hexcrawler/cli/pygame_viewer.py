@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import math
 from dataclasses import dataclass
 
@@ -176,7 +177,11 @@ def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: p
 
     module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
     if not module_present:
-        message = font.render("Encounter module not present", True, (220, 180, 130))
+        message = font.render(
+            "Encounter module not enabled. Run with --with-encounters.",
+            True,
+            (220, 180, 130),
+        )
         screen.blit(message, (panel_rect.x + 10, y))
         return
 
@@ -265,11 +270,39 @@ def _current_input_vector() -> tuple[float, float]:
     return normalized_vector(x, y)
 
 
-def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None:
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python run_game.py",
+        description="Run the Hexcrawler pygame viewer.",
+    )
+    parser.add_argument(
+        "--map-path",
+        default="content/examples/basic_map.json",
+        help="Path to world map JSON template.",
+    )
+    parser.add_argument(
+        "--with-encounters",
+        action="store_true",
+        help="Enable encounter module registration for encounter debug data.",
+    )
+    return parser
+
+
+def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulation:
     world = load_world_json(map_path)
     sim = Simulation(world=world, seed=7)
-    sim.register_rule_module(EncounterCheckModule())
+    if with_encounters:
+        sim.register_rule_module(EncounterCheckModule())
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
+    return sim
+
+
+def run_pygame_viewer(
+    map_path: str = "content/examples/basic_map.json",
+    *,
+    with_encounters: bool = False,
+) -> None:
+    sim = _build_viewer_simulation(map_path, with_encounters=with_encounters)
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
 
     pygame.init()
@@ -334,3 +367,9 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
         pygame.display.flip()
 
     pygame.quit()
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    run_pygame_viewer(map_path=args.map_path, with_encounters=args.with_encounters)
