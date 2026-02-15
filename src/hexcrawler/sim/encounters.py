@@ -7,12 +7,15 @@ from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
+ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
+ENCOUNTER_CHANCE_PERCENT = 20
+ENCOUNTER_COOLDOWN_TICKS = 30
 
 
 class EncounterCheckModule(RuleModule):
-    """Phase 4A deterministic encounter-check skeleton.
+    """Phase 4B deterministic encounter eligibility gate skeleton.
 
     Intentionally content-free: this module only emits and accounts for
     deterministic encounter-check events.
@@ -21,6 +24,9 @@ class EncounterCheckModule(RuleModule):
     name = "encounter_check"
     _STATE_LAST_CHECK_TICK = "last_check_tick"
     _STATE_CHECKS_EMITTED = "checks_emitted"
+    _STATE_ELIGIBLE_COUNT = "eligible_count"
+    _STATE_INELIGIBLE_STREAK = "ineligible_streak"
+    _STATE_COOLDOWN_UNTIL_TICK = "cooldown_until_tick"
     _TASK_NAME = "encounter_check:global"
     _RNG_STREAM_NAME = "encounter_check"
 
@@ -48,12 +54,37 @@ class EncounterCheckModule(RuleModule):
 
         state = self._rules_state(sim)
         check_tick = int(event.params.get("tick", event.tick))
-
-        # Deterministic stream continuity exercise (content-free placeholder).
-        sim.rng_stream(self._RNG_STREAM_NAME).random()
+        rng = sim.rng_stream(self._RNG_STREAM_NAME)
 
         state[self._STATE_LAST_CHECK_TICK] = check_tick
         state[self._STATE_CHECKS_EMITTED] = int(state[self._STATE_CHECKS_EMITTED]) + 1
+
+        cooldown_until_tick = int(state[self._STATE_COOLDOWN_UNTIL_TICK])
+        if check_tick < cooldown_until_tick:
+            state[self._STATE_INELIGIBLE_STREAK] = int(state[self._STATE_INELIGIBLE_STREAK]) + 1
+            sim.set_rules_state(self.name, state)
+            return
+
+        eligible_roll = rng.randrange(0, 100)
+        eligible = eligible_roll < ENCOUNTER_CHANCE_PERCENT
+
+        if eligible:
+            state[self._STATE_ELIGIBLE_COUNT] = int(state[self._STATE_ELIGIBLE_COUNT]) + 1
+            state[self._STATE_INELIGIBLE_STREAK] = 0
+            state[self._STATE_COOLDOWN_UNTIL_TICK] = check_tick + ENCOUNTER_COOLDOWN_TICKS
+            encounter_roll = rng.randrange(1, 101)
+            sim.schedule_event_at(
+                tick=event.tick + 1,
+                event_type=ENCOUNTER_ROLL_EVENT_TYPE,
+                params={
+                    "tick": check_tick,
+                    "context": ENCOUNTER_CONTEXT_GLOBAL,
+                    "roll": encounter_roll,
+                },
+            )
+        else:
+            state[self._STATE_INELIGIBLE_STREAK] = int(state[self._STATE_INELIGIBLE_STREAK]) + 1
+
         sim.set_rules_state(self.name, state)
 
     def _build_emit_callback(self):
@@ -70,9 +101,19 @@ class EncounterCheckModule(RuleModule):
         state = sim.get_rules_state(self.name)
         last_check_tick = int(state.get(self._STATE_LAST_CHECK_TICK, -1))
         checks_emitted = int(state.get(self._STATE_CHECKS_EMITTED, 0))
+        eligible_count = int(state.get(self._STATE_ELIGIBLE_COUNT, 0))
+        ineligible_streak = int(state.get(self._STATE_INELIGIBLE_STREAK, 0))
+        cooldown_until_tick = int(state.get(self._STATE_COOLDOWN_UNTIL_TICK, -1))
         if checks_emitted < 0:
             raise ValueError("checks_emitted must be non-negative")
+        if eligible_count < 0:
+            raise ValueError("eligible_count must be non-negative")
+        if ineligible_streak < 0:
+            raise ValueError("ineligible_streak must be non-negative")
         return {
             self._STATE_LAST_CHECK_TICK: last_check_tick,
             self._STATE_CHECKS_EMITTED: checks_emitted,
+            self._STATE_ELIGIBLE_COUNT: eligible_count,
+            self._STATE_INELIGIBLE_STREAK: ineligible_streak,
+            self._STATE_COOLDOWN_UNTIL_TICK: cooldown_until_tick,
         }
