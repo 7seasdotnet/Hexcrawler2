@@ -1,5 +1,5 @@
 from hexcrawler.cli.pygame_viewer import _build_parser, _build_viewer_simulation
-from hexcrawler.sim.encounters import EncounterCheckModule
+from hexcrawler.sim.encounters import EncounterCheckModule, EncounterSelectionModule
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -17,7 +17,7 @@ def test_viewer_parser_with_encounters_flag_can_be_enabled() -> None:
     assert args.with_encounters is True
 
 
-def test_viewer_simulation_registers_encounter_module_only_when_enabled() -> None:
+def test_viewer_simulation_registers_encounter_modules_only_when_enabled() -> None:
     neutral_sim = _build_viewer_simulation(
         "content/examples/basic_map.json",
         with_encounters=False,
@@ -28,4 +28,6 @@ def test_viewer_simulation_registers_encounter_module_only_when_enabled() -> Non
     )
 
     assert neutral_sim.get_rule_module(EncounterCheckModule.name) is None
+    assert neutral_sim.get_rule_module(EncounterSelectionModule.name) is None
     assert enabled_sim.get_rule_module(EncounterCheckModule.name) is not None
+    assert enabled_sim.get_rule_module(EncounterSelectionModule.name) is not None

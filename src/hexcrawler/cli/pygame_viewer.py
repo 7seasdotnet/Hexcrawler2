@@ -6,12 +6,14 @@ from dataclasses import dataclass
 
 import pygame
 
+from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import EntityState, Simulation, TICKS_PER_DAY
 from hexcrawler.sim.encounters import (
     ENCOUNTER_CHECK_EVENT_TYPE,
     ENCOUNTER_ROLL_EVENT_TYPE,
     EncounterCheckModule,
+    EncounterSelectionModule,
 )
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord
@@ -293,6 +295,11 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
     sim = Simulation(world=world, seed=7)
     if with_encounters:
         sim.register_rule_module(EncounterCheckModule())
+        sim.register_rule_module(
+            EncounterSelectionModule(
+                load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)
+            )
+        )
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     return sim
 

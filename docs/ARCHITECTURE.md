@@ -139,6 +139,16 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** No additional RNG draws, no new RNG streams, and no semantic branching by trigger/category are introduced by this seam.
 - **Contract:** Phase 4G remains content-free: no table lookups, no spawns, no combat scheduling, no faction/ecology logic, and no world mutation side effects.
 
+## 6J) Encounter Selection Seam (Phase 4H)
+- **Purpose:** Define a strict content-boundary handoff from `encounter_resolve_request` into schema-backed deterministic encounter table selection without world mutation side effects.
+- **Content Schema Boundary:** Encounter tables are declarative JSON content (`schema_version`, `table_id`, optional `description`, and weighted `entries`).
+- **Validation Contract:** Runtime table loading must validate schema eagerly, reject invalid payloads with clear errors, and normalize deterministic ordering for nested object keys and entry tags.
+- **Selection Contract:** `EncounterSelectionModule` listens for `encounter_resolve_request` and schedules `encounter_selection_stub` at `event.tick + 1`.
+- **RNG Contract:** Table selection must consume randomness only from `sim.rng_stream("encounter_selection")` to preserve stream isolation and save/load continuity.
+- **Selection Stub Payload Contract:** `encounter_selection_stub` params must include `tick`, `context`, `trigger`, `location`, `roll`, `category`, `table_id`, `entry_id`, `entry_payload`, and `entry_tags`.
+- **Propagation Contract:** `tick/context/trigger/location/roll/category` are passthrough fields from `encounter_resolve_request` and must be copied unchanged.
+- **Phase Boundary (Hard):** Phase 4H selection is descriptive only; no entity spawning, no world/object mutation, no combat scheduling, no faction/ecology logic, and no trigger/category-based semantic branching beyond default table selection.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
+from hexcrawler.content.encounters import EncounterTable
 from hexcrawler.sim.core import TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.periodic import PeriodicScheduler
@@ -11,12 +13,60 @@ ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
 ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
 ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE = "encounter_resolve_request"
+ENCOUNTER_SELECTION_STUB_EVENT_TYPE = "encounter_selection_stub"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_TRIGGER_IDLE = "idle"
 ENCOUNTER_TRIGGER_TRAVEL = "travel"
 ENCOUNTER_CHANCE_PERCENT = 20
 ENCOUNTER_COOLDOWN_TICKS = 30
+
+
+class EncounterSelectionModule(RuleModule):
+    """Phase 4H deterministic encounter table-selection seam.
+
+    Intentionally side-effect free: this module emits descriptive selection stubs
+    and does not mutate world state, spawn entities, or schedule combat.
+    """
+
+    name = "encounter_selection"
+    _RNG_STREAM_NAME = "encounter_selection"
+
+    def __init__(self, table: EncounterTable) -> None:
+        self._table = table
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE:
+            return
+
+        selected_entry = self._select_entry(sim)
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=ENCOUNTER_SELECTION_STUB_EVENT_TYPE,
+            params={
+                "tick": int(event.params.get("tick", event.tick)),
+                "context": event.params["context"],
+                "trigger": event.params["trigger"],
+                "location": dict(event.params["location"]),
+                "roll": int(event.params["roll"]),
+                "category": str(event.params["category"]),
+                "table_id": self._table.table_id,
+                "entry_id": selected_entry.entry_id,
+                "entry_payload": copy.deepcopy(selected_entry.payload),
+                "entry_tags": list(selected_entry.tags),
+            },
+        )
+
+    def _select_entry(self, sim: Simulation):
+        total_weight = sum(entry.weight for entry in self._table.entries)
+        rng = sim.rng_stream(self._RNG_STREAM_NAME)
+        draw = rng.randrange(total_weight)
+        cumulative = 0
+        for entry in self._table.entries:
+            cumulative += entry.weight
+            if draw < cumulative:
+                return entry
+        raise RuntimeError("encounter selection failed despite non-empty weighted table")
 
 
 class EncounterCheckModule(RuleModule):

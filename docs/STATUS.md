@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4G Encounter Resolution Interface Stub — encounter pipeline now schedules a deterministic content-free `encounter_resolve_request` seam after `encounter_result_stub`, preserving unchanged eligibility/cooldown/RNG/trigger/location semantics.
-- **Next action:** Introduce a data-layer encounter table schema + deterministic table-selection interface (still content-free and side-effect free: no spawning or world mutation yet).
+- **Current phase:** Phase 4H Encounter Table Schema + Deterministic Selection — encounter pipeline now validates declarative encounter-table content and maps deterministic `encounter_resolve_request` inputs to descriptive `encounter_selection_stub` outputs without spawning or world mutation.
+- **Next action:** Phase 4I resolution action descriptors/spawn descriptors seam (still deterministic and content-boundary focused, with no direct spawning side effects yet).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -13,11 +13,13 @@
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
   - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule with explicit trigger semantics, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll, and emits deterministic `encounter_resolve_request` follow-on seam events (+1 tick) for downstream resolution consumers.
+  - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
+  - Encounter table content loader/validator (`content.encounters`) with strict schema checks, deterministic normalization, and default example table wiring.
 - `src/hexcrawler/cli/viewer.py`
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`).
 - `src/hexcrawler/cli/pygame_viewer.py`
@@ -75,9 +77,10 @@
 - ✅ Phase 4E complete: movement now emits serialized `travel_step` events on hex-boundary crossings and `EncounterCheckModule` reacts by scheduling `encounter_check` with `trigger="travel"` while keeping eligibility/cooldown/RNG behavior unchanged.
 - ✅ Phase 4F complete: introduced opaque `LocationRef` contracts and migrated encounter-facing travel/check/roll/result event payloads from raw axial dicts to location references without semantic or RNG changes.
 - ✅ Phase 4G complete: `encounter_result_stub` now deterministically schedules `encounter_resolve_request` at +1 tick with a minimal passthrough payload (`tick`, `context`, `trigger`, `location`, `roll`, `category`) and no content selection side effects.
+- ✅ Phase 4H complete: validated encounter-table content now feeds deterministic weighted selection in `EncounterSelectionModule`, emitting descriptive `encounter_selection_stub` events via RNG stream `encounter_selection` with save/load + replay hash stability.
 - ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
-## New Public APIs (Phase 4G)
+## New Public APIs (Phase 4H)
 - `Simulation.get_rule_module(module_name)`
 - `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
 - `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
@@ -97,6 +100,11 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_COOLDOWN_TICKS`
 - `hexcrawler.sim.encounters.ENCOUNTER_RESULT_STUB_EVENT_TYPE`
 - `hexcrawler.sim.encounters.ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE`
+- `hexcrawler.sim.encounters.EncounterSelectionModule`
+- `hexcrawler.sim.encounters.ENCOUNTER_SELECTION_STUB_EVENT_TYPE`
+- `hexcrawler.content.encounters.load_encounter_table_json(path)`
+- `hexcrawler.content.encounters.validate_encounter_table_payload(payload)`
+- `hexcrawler.content.encounters.DEFAULT_ENCOUNTER_TABLE_PATH`
 - `hexcrawler.sim.core.TRAVEL_STEP_EVENT_TYPE`
 - `hexcrawler.sim.location.LocationRef`
 - `hexcrawler.sim.location.OVERWORLD_HEX_TOPOLOGY`
@@ -117,12 +125,13 @@
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
 - `PYTHONPATH=src pytest -q tests/test_event_trace.py`
 - `PYTHONPATH=src pytest -q tests/test_encounter_check_module.py`
+- `PYTHONPATH=src pytest -q tests/test_encounter_selection_module.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Advanced encounter substrate to Phase 4G by adding `ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE = "encounter_resolve_request"` and deterministic +1 tick scheduling from `encounter_result_stub`.
-- Expanded encounter deterministic tests to assert exactly-once resolve-request emission, strict minimal payload passthrough (`tick/context/trigger/location/roll/category`), and save/load + replay hash identity with resolve-request events present.
-- Updated architecture and status documentation to formalize the 4G content-free resolution seam contract and refresh phase/next-action guidance.
+- Added strict encounter-table content schema validation + deterministic normalization/loader (`content.encounters`) and checked in a default example table at `content/examples/encounters/basic_encounters.json`.
+- Added `EncounterSelectionModule` that listens to `encounter_resolve_request` and emits deterministic descriptive `encounter_selection_stub` events at +1 tick using RNG stream `encounter_selection` only.
+- Added deterministic tests for schema validation, selection stub passthrough contract, exact-once emission, and save/load + replay hash identity; updated docs for new Phase 4H seam.
