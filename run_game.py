@@ -8,8 +8,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from hexcrawler.cli.pygame_viewer import run_pygame_viewer
+from hexcrawler.cli.pygame_viewer import main
 
 
 if __name__ == "__main__":
-    run_pygame_viewer()
+    main()

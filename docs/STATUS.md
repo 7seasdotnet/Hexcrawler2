@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4V UI visibility pass — read-only encounter inspector panel layered over the Phase 4B encounter skeleton.
-- **Next action:** Plan Phase 4C boundaries for content-free downstream wiring while preserving strict no-content semantics (no encounter tables or resolution yet), now that encounter internals are visible in the running UI.
+- **Current phase:** Phase 4V UI visibility pass — read-only encounter inspector panel layered over the Phase 4B encounter skeleton, now explicitly gated behind a viewer CLI flag.
+- **Next action:** Plan Phase 4C boundaries for content-free downstream wiring while preserving strict no-content semantics (no encounter tables or resolution yet), with viewer runtime kept neutral unless encounter inspection is explicitly enabled.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -21,7 +21,8 @@
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`).
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
-  - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields, shows cooldown summary values, and lists recent `encounter_check`/`encounter_roll` entries from the executed event trace.
+  - Includes CLI parsing for viewer boundary configuration (`--map-path`, `--with-encounters`).
+  - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields, shows cooldown summary values, and lists recent `encounter_check`/`encounter_roll` entries from the executed event trace only when the encounter module is enabled.
 - `src/hexcrawler/cli/replay_tool.py`
   - Headless replay forensics CLI operating on canonical game saves.
 - `src/hexcrawler/cli/new_save_from_map.py`
@@ -40,7 +41,9 @@
   - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - Run pygame viewer directly from a map template (legacy-compatible flow):
   - `python run_game.py`
+  - `python run_game.py --with-encounters`
   - Encounter panel location: upper-right "Encounter Debug" section in the running window.
+  - Encounter debug data appears only when run with `--with-encounters`; otherwise the panel shows an explicit enablement hint.
 - Run replay tool from canonical save:
   - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
@@ -92,6 +95,7 @@
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
 - `python run_game.py`
+- `python run_game.py --with-encounters`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
 - `PYTHONPATH=src pytest -q tests/test_rules_state.py`
@@ -106,6 +110,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added a read-only `Encounter Debug` section to the pygame viewer that displays `encounter_check` rules-state values and UI-only cooldown summary fields.
-- Added recent executed encounter event visibility (`encounter_check` + `encounter_roll`) sourced from `Simulation.get_event_trace()` with newest-first bounded display.
-- Updated status documentation to mark Phase 4V encounter visibility as complete and documented where to open the panel in the running app.
+- Added explicit pygame viewer CLI wiring for `--with-encounters` (default off) and `--map-path`, and routed `run_game.py` / package entrypoint through the viewer CLI parser.
+- Removed unconditional encounter module registration from default viewer startup; encounter module now registers only when `--with-encounters` is passed.
+- Updated Encounter Debug panel absent-module messaging and status/run instructions to document neutral-default behavior and the explicit enablement command.
