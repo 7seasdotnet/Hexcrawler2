@@ -7,6 +7,11 @@ import pygame
 
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import EntityState, Simulation, TICKS_PER_DAY
+from hexcrawler.sim.encounters import (
+    ENCOUNTER_CHECK_EVENT_TYPE,
+    ENCOUNTER_ROLL_EVENT_TYPE,
+    EncounterCheckModule,
+)
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord
 
@@ -25,6 +30,7 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
     "town": (80, 160, 255),
     "dungeon": (210, 85, 85),
 }
+ENCOUNTER_DEBUG_EVENT_LIMIT = 20
 
 
 @dataclass
@@ -158,6 +164,75 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
         y += 24
 
 
+def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -> None:
+    panel_rect = pygame.Rect(WINDOW_SIZE[0] - 388, 12, 376, 360)
+    pygame.draw.rect(screen, (24, 26, 36), panel_rect)
+    pygame.draw.rect(screen, (95, 98, 110), panel_rect, 1)
+
+    y = panel_rect.y + 8
+    header = font.render("Encounter Debug", True, (245, 245, 245))
+    screen.blit(header, (panel_rect.x + 10, y))
+    y += 24
+
+    module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
+    if not module_present:
+        message = font.render("Encounter module not present", True, (220, 180, 130))
+        screen.blit(message, (panel_rect.x + 10, y))
+        return
+
+    state = sim.get_rules_state(EncounterCheckModule.name)
+    last_check_tick = int(state.get("last_check_tick", -1))
+    checks_emitted = int(state.get("checks_emitted", 0))
+    eligible_count = int(state.get("eligible_count", 0))
+    ineligible_streak = int(state.get("ineligible_streak", 0))
+    cooldown_until_tick = int(state.get("cooldown_until_tick", -1))
+
+    cooldown_active = sim.state.tick < cooldown_until_tick
+    cooldown_ticks_remaining = max(0, cooldown_until_tick - sim.state.tick)
+
+    kv_rows = [
+        ("last_check_tick", str(last_check_tick)),
+        ("checks_emitted", str(checks_emitted)),
+        ("eligible_count", str(eligible_count)),
+        ("ineligible_streak", str(ineligible_streak)),
+        ("cooldown_until_tick", str(cooldown_until_tick)),
+        ("cooldown_active", str(cooldown_active)),
+        ("cooldown_ticks_left", str(cooldown_ticks_remaining)),
+    ]
+    for key, value in kv_rows:
+        line = font.render(f"{key}: {value}", True, (224, 224, 224))
+        screen.blit(line, (panel_rect.x + 10, y))
+        y += 18
+
+    y += 4
+    list_header = font.render("Recent encounter events", True, (245, 245, 245))
+    screen.blit(list_header, (panel_rect.x + 10, y))
+    y += 20
+
+    filtered_trace = [
+        entry
+        for entry in sim.get_event_trace()
+        if entry.get("event_type") in {ENCOUNTER_CHECK_EVENT_TYPE, ENCOUNTER_ROLL_EVENT_TYPE}
+    ]
+    for entry in reversed(filtered_trace[-ENCOUNTER_DEBUG_EVENT_LIMIT:]):
+        params = entry.get("params", {})
+        tick = entry.get("tick")
+        event_type = entry.get("event_type")
+        source_tick = params.get("tick")
+        context = params.get("context")
+        roll = params.get("roll")
+        roll_text = f", roll={roll}" if roll is not None else ""
+        line = font.render(
+            f"t={tick} {event_type} src={source_tick} ctx={context}{roll_text}",
+            True,
+            (205, 205, 210),
+        )
+        screen.blit(line, (panel_rect.x + 10, y))
+        y += 16
+        if y > panel_rect.bottom - 16:
+            break
+
+
 def _draw_context_menu(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -193,6 +268,7 @@ def _current_input_vector() -> tuple[float, float]:
 def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None:
     world = load_world_json(map_path)
     sim = Simulation(world=world, seed=7)
+    sim.register_rule_module(EncounterCheckModule())
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
 
@@ -201,6 +277,7 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
     screen = pygame.display.set_mode(WINDOW_SIZE)
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("consolas", 22)
+    debug_font = pygame.font.SysFont("consolas", 16)
 
     center = (WINDOW_SIZE[0] / 2.0, WINDOW_SIZE[1] / 2.0)
     accumulator = 0.0
@@ -252,6 +329,7 @@ def run_pygame_viewer(map_path: str = "content/examples/basic_map.json") -> None
         if interpolated is not None:
             _draw_entity(screen, interpolated[0], interpolated[1], center)
         _draw_hud(screen, sim, font)
+        _draw_encounter_debug_panel(screen, sim, debug_font)
         _draw_context_menu(screen, font, context_menu)
         pygame.display.flip()
 
