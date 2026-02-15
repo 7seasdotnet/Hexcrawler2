@@ -10,6 +10,7 @@ from hexcrawler.sim.rules import RuleModule
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
 ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
+ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE = "encounter_resolve_request"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_TRIGGER_IDLE = "idle"
@@ -58,6 +59,9 @@ class EncounterCheckModule(RuleModule):
             return
         if event.event_type == ENCOUNTER_ROLL_EVENT_TYPE:
             self._on_encounter_roll(sim, event)
+            return
+        if event.event_type == ENCOUNTER_RESULT_STUB_EVENT_TYPE:
+            self._on_encounter_result_stub(sim, event)
             return
         if event.event_type != ENCOUNTER_CHECK_EVENT_TYPE:
             return
@@ -126,6 +130,20 @@ class EncounterCheckModule(RuleModule):
                 "context": ENCOUNTER_CONTEXT_GLOBAL,
                 "trigger": ENCOUNTER_TRIGGER_TRAVEL,
                 "location": dict(event.params["location_to"]),
+            },
+        )
+
+    def _on_encounter_result_stub(self, sim: Simulation, event: SimEvent) -> None:
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
+            params={
+                "tick": int(event.params.get("tick", event.tick)),
+                "context": event.params.get("context", ENCOUNTER_CONTEXT_GLOBAL),
+                "trigger": event.params["trigger"],
+                "location": dict(event.params["location"]),
+                "roll": event.params["roll"],
+                "category": event.params["category"],
             },
         )
 

@@ -6,6 +6,7 @@ from hexcrawler.sim.encounters import (
     ENCOUNTER_CHECK_EVENT_TYPE,
     ENCOUNTER_CHECK_INTERVAL,
     ENCOUNTER_COOLDOWN_TICKS,
+    ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
     ENCOUNTER_RESULT_STUB_EVENT_TYPE,
     ENCOUNTER_ROLL_EVENT_TYPE,
     ENCOUNTER_TRIGGER_IDLE,
@@ -97,10 +98,14 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
     result_entries = [
         entry for entry in trace if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
     ]
+    resolve_entries = [
+        entry for entry in trace if entry["event_type"] == ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE
+    ]
 
     assert state["checks_emitted"] == len(check_entries)
     assert state["eligible_count"] == len(roll_entries)
     assert len(result_entries) == len(roll_entries)
+    assert len(resolve_entries) == len(result_entries)
     assert len(roll_entries) > 0
 
     roll_source_ticks = [int(entry["params"]["tick"]) for entry in roll_entries]
@@ -120,29 +125,35 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
         assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
         assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
 
+    for entry in resolve_entries:
+        assert set(entry["params"]) == {"tick", "context", "trigger", "location", "roll", "category"}
+        assert entry["params"]["category"] in {"hostile", "neutral", "omen"}
+        assert 1 <= int(entry["params"]["roll"]) <= 100
+        assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
+        assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
+
     for entry in check_entries:
         assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
         assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
 
 
-def test_encounter_result_stub_save_load_round_trip_hash(tmp_path: Path) -> None:
+def test_encounter_resolve_request_save_load_round_trip_hash(tmp_path: Path) -> None:
     contiguous = _build_sim(seed=902)
     contiguous.advance_ticks(180)
 
     split = _build_sim(seed=902)
     split.advance_ticks(83)
 
-    path = tmp_path / "encounter_result_stub_save.json"
+    path = tmp_path / "encounter_resolve_request_save.json"
     save_game_json(path, split.state.world, split)
     _, loaded = load_game_json(path)
     loaded.register_rule_module(EncounterCheckModule())
     loaded.advance_ticks(97)
 
     assert simulation_hash(contiguous) == simulation_hash(loaded)
-    assert any(
-        entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
-        for entry in loaded.get_event_trace()
-    )
+    trace = loaded.get_event_trace()
+    assert any(entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE for entry in trace)
+    assert any(entry["event_type"] == ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE for entry in trace)
 
 
 def test_encounter_check_rules_state_persists_across_save_load(tmp_path: Path) -> None:
@@ -177,7 +188,7 @@ def test_encounter_check_rules_state_persists_across_save_load(tmp_path: Path) -
     )
 
 
-def test_encounter_trigger_propagates_check_to_roll_to_result_stub() -> None:
+def test_encounter_trigger_propagates_check_to_roll_to_result_stub_and_resolve_request() -> None:
     sim = _build_sim(seed=777)
     sim.advance_ticks(220)
 
@@ -193,6 +204,11 @@ def test_encounter_trigger_propagates_check_to_roll_to_result_stub() -> None:
         for entry in trace
         if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
     }
+    resolve_entries = {
+        (int(entry["tick"]), int(entry["params"]["roll"])): entry
+        for entry in trace
+        if entry["event_type"] == ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE
+    }
 
     assert roll_entries
     for roll_entry in roll_entries:
@@ -205,8 +221,19 @@ def test_encounter_trigger_propagates_check_to_roll_to_result_stub() -> None:
         assert checks_by_tick[source_tick]["params"]["location"] == location
 
         result_key = (int(roll_entry["tick"]) + 1, roll_value)
-        assert result_entries[result_key]["params"]["trigger"] == trigger
-        assert result_entries[result_key]["params"]["location"] == location
+        result_entry = result_entries[result_key]
+        assert result_entry["params"]["trigger"] == trigger
+        assert result_entry["params"]["location"] == location
+
+        resolve_key = (result_key[0] + 1, roll_value)
+        resolve_entry = resolve_entries[resolve_key]
+        assert set(resolve_entry["params"]) == {"tick", "context", "trigger", "location", "roll", "category"}
+        assert resolve_entry["params"]["tick"] == result_entry["params"]["tick"]
+        assert resolve_entry["params"]["context"] == result_entry["params"]["context"]
+        assert resolve_entry["params"]["trigger"] == result_entry["params"]["trigger"]
+        assert resolve_entry["params"]["location"] == result_entry["params"]["location"]
+        assert resolve_entry["params"]["roll"] == result_entry["params"]["roll"]
+        assert resolve_entry["params"]["category"] == result_entry["params"]["category"]
 
 
 def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path: Path) -> None:
@@ -249,7 +276,7 @@ def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path:
     assert travel_check_entry["params"]["location"] == travel_entry["params"]["location_to"]
 
 
-def test_travel_trigger_propagates_through_roll_and_result_stub() -> None:
+def test_travel_trigger_propagates_through_roll_result_stub_and_resolve_request() -> None:
     sim = _build_sim(seed=90)
     sim.schedule_event_at(
         tick=0,
@@ -263,14 +290,26 @@ def test_travel_trigger_propagates_through_roll_and_result_stub() -> None:
         },
     )
 
-    sim.advance_ticks(2)
+    sim.advance_ticks(3)
     trace = sim.get_event_trace()
 
     result_entry = next(
         entry for entry in trace if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
     )
+    resolve_entry = next(
+        entry for entry in trace if entry["event_type"] == ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE
+    )
     assert result_entry["params"]["trigger"] == ENCOUNTER_TRIGGER_TRAVEL
     assert result_entry["params"]["location"] == _location(1, 0)
+    assert resolve_entry["tick"] == result_entry["tick"] + 1
+    assert resolve_entry["params"] == {
+        "tick": result_entry["params"]["tick"],
+        "context": result_entry["params"]["context"],
+        "trigger": result_entry["params"]["trigger"],
+        "location": result_entry["params"]["location"],
+        "roll": result_entry["params"]["roll"],
+        "category": result_entry["params"]["category"],
+    }
 
 
 def test_travel_channel_save_load_and_replay_hash_identity(tmp_path: Path) -> None:
@@ -304,7 +343,7 @@ def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "6f15bfc1609911fc7e628cb34aaf5578b2a79bb14ec72dfe860d6ab517dc2a1e"
+        == "b7d9386e7c37d77d927bdfde1382633e26e9163cbf4cd5bc8d7d473e05dd4fed"
     )
 
 
@@ -314,5 +353,5 @@ def test_travel_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "b0fab20837607ab8ac5997473dd6482456f85238402791d408fd9133e1eb6314"
+        == "050a1ff80bed493e33d1b3db0e3aa5d799eda233e89426ca002776a762f3641d"
     )
