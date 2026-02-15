@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 3C substrate — deterministic serialized bounded event execution trace buffer implemented for inspection/debugging.
-- **Next action:** Continue Phase 3C determinism hardening by extending replay/save-load checks to cover additional rule-module named RNG stream consumers while keeping substrate contracts unchanged.
+- **Current phase:** Phase 4A domain skeleton — deterministic encounter-check module layered over hardened substrate.
+- **Next action:** Keep Phase 4A scope tight by validating encounter-check pacing/state invariants, then prepare Phase 4B planning (without adding encounter content logic yet).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -12,6 +12,7 @@
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
+  - Encounter-check semantic skeleton (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule and persists pacing state in `rules_state`.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
@@ -61,8 +62,9 @@
 - ✅ Phase 3A substrate complete: stateless `CheckRunner` now emits serialized `check` events via `PeriodicScheduler` callbacks.
 - ✅ Phase 3B substrate complete: serialized hash-covered `rules_state` store added to canonical simulation save/load and simulation hashing.
 - ✅ Phase 3C substrate complete: serialized hash-covered bounded `event_trace` execution history added with deterministic FIFO eviction and deep-copy read API.
+- ✅ Phase 4A complete: `EncounterCheckModule` emits deterministic structured `encounter_check` events via `PeriodicScheduler`, uses only serialized `rules_state` for pacing state, and remains save/load + replay hash stable.
 
-## New Public APIs (Phase 3C)
+## New Public APIs (Phase 4A)
 - `Simulation.get_rule_module(module_name)`
 - `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
 - `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
@@ -72,6 +74,9 @@
   - `register_check(check_name, interval_ticks, start_tick=0)`
   - `set_check_callback(check_name, callback)`
 - `hexcrawler.sim.checks.CHECK_EVENT_TYPE`
+- `hexcrawler.sim.encounters.EncounterCheckModule`
+- `hexcrawler.sim.encounters.ENCOUNTER_CHECK_EVENT_TYPE`
+- `hexcrawler.sim.encounters.ENCOUNTER_CHECK_INTERVAL`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -87,12 +92,13 @@
 - `PYTHONPATH=src pytest -q tests/test_rule_modules.py`
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
 - `PYTHONPATH=src pytest -q tests/test_event_trace.py`
+- `PYTHONPATH=src pytest -q tests/test_encounter_check_module.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Fixed deterministic serialization gap by persisting/restoring all named RNG stream states (not only `rng_sim`/`rng_worldgen`) in `rng_state`, preserving save/load and replay identity for rule-module stream consumers.
-- Extended deterministic RNG tests to cover named-stream save/load continuity and simulation-hash identity after payload round-trip.
-- Re-ran the full substrate test suite via `PYTHONPATH=src pytest -q` to verify no regressions.
+- Added `EncounterCheckModule` as the first thin semantic rule module: it registers a fixed periodic task, emits structured `encounter_check` events, and updates only serialized `rules_state` (`last_check_tick`, `checks_emitted`).
+- Added focused Phase 4A tests for deterministic hash identity, save/load continuation, replay stability from input log, and `rules_state` persistence correctness (including event-trace visibility of `encounter_check`).
+- Updated architecture/status docs to lock Phase 4A scope as intentionally content-free (no encounter tables/factions/ecology/combat).
