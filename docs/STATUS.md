@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 3C substrate — deterministic serialized bounded event execution trace buffer implemented for inspection/debugging.
-- **Next action:** Continue Phase 3C hardening with additional editor-facing read-only inspection wiring that consumes `Simulation.get_event_trace()` without mutating simulation state.
+- **Next action:** Continue Phase 3C determinism hardening by extending replay/save-load checks to cover additional rule-module named RNG stream consumers while keeping substrate contracts unchanged.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -93,6 +93,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added `SimulationState.event_trace` as a deterministic bounded FIFO buffer (max 256) of executed-event records (`tick`, integer `event_id`, `event_type`, JSON-primitive `params`, optional `module_hooks_called`) with deep-copy read API `Simulation.get_event_trace()`.
-- Wired `event_trace` into canonical simulation save/load payloads and `simulation_hash` so trace history is save/load-safe, replay-safe, and hash-covered.
-- Added substrate tests covering execution recording/order, bounded eviction, hash contribution, canonical save/load round-trip identity, and replay stability.
+- Fixed deterministic serialization gap by persisting/restoring all named RNG stream states (not only `rng_sim`/`rng_worldgen`) in `rng_state`, preserving save/load and replay identity for rule-module stream consumers.
+- Extended deterministic RNG tests to cover named-stream save/load continuity and simulation-hash identity after payload round-trip.
+- Re-ran the full substrate test suite via `PYTHONPATH=src pytest -q` to verify no regressions.
