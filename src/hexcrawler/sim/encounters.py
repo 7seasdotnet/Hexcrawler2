@@ -14,6 +14,7 @@ ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
 ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
 ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE = "encounter_resolve_request"
 ENCOUNTER_SELECTION_STUB_EVENT_TYPE = "encounter_selection_stub"
+ENCOUNTER_ACTION_STUB_EVENT_TYPE = "encounter_action_stub"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_TRIGGER_IDLE = "idle"
@@ -67,6 +68,100 @@ class EncounterSelectionModule(RuleModule):
             if draw < cumulative:
                 return entry
         raise RuntimeError("encounter selection failed despite non-empty weighted table")
+
+
+class EncounterActionModule(RuleModule):
+    """Phase 4I declarative encounter action grammar seam.
+
+    Intentionally side-effect free: this module emits descriptive action-intent
+    stubs only and does not mutate world state or execute outcomes.
+    """
+
+    name = "encounter_action"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != ENCOUNTER_SELECTION_STUB_EVENT_TYPE:
+            return
+
+        params = copy.deepcopy(event.params)
+        entry_payload = params.get("entry_payload")
+        actions = self._actions_for_selection(params.get("entry_id"), entry_payload)
+        params["actions"] = actions
+
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=ENCOUNTER_ACTION_STUB_EVENT_TYPE,
+            params=params,
+        )
+
+    def _actions_for_selection(self, entry_id: Any, entry_payload: Any) -> list[dict[str, Any]]:
+        if not isinstance(entry_payload, dict):
+            raise ValueError("encounter_selection_stub entry_payload must be an object")
+
+        payload_actions = entry_payload.get("actions")
+        if payload_actions is None:
+            action_template_id = entry_payload.get("signal_id", entry_id)
+            if not isinstance(action_template_id, str) or not action_template_id:
+                raise ValueError("encounter action fallback template_id must be a non-empty string")
+            actions = [
+                {
+                    "action_type": "signal_intent",
+                    "template_id": action_template_id,
+                    "params": {"source": ENCOUNTER_SELECTION_STUB_EVENT_TYPE},
+                }
+            ]
+        else:
+            if not isinstance(payload_actions, list):
+                raise ValueError("encounter action payload field actions must be a list when present")
+            actions = payload_actions
+
+        return self._normalize_actions(actions)
+
+    def _normalize_actions(self, actions: list[Any]) -> list[dict[str, Any]]:
+        normalized_actions: list[dict[str, Any]] = []
+        for index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                raise ValueError(f"encounter action intent at actions[{index}] must be an object")
+
+            action_type = action.get("action_type")
+            template_id = action.get("template_id", action.get("action_id"))
+            if not isinstance(action_type, str) or not action_type:
+                raise ValueError(f"encounter action intent at actions[{index}] must contain non-empty action_type")
+            if not isinstance(template_id, str) or not template_id:
+                raise ValueError(f"encounter action intent at actions[{index}] must contain non-empty template_id")
+
+            params = action.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError(f"encounter action intent at actions[{index}] field params must be an object")
+
+            normalized_action: dict[str, Any] = {
+                "action_type": action_type,
+                "template_id": template_id,
+                "params": self._normalize_json_value(params, field_name=f"actions[{index}].params"),
+            }
+
+            for key in sorted(action):
+                if key in normalized_action or key == "action_id":
+                    continue
+                normalized_action[key] = self._normalize_json_value(action[key], field_name=f"actions[{index}].{key}")
+
+            normalized_actions.append(normalized_action)
+
+        return normalized_actions
+
+    def _normalize_json_value(self, value: Any, *, field_name: str) -> Any:
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        if isinstance(value, list):
+            return [self._normalize_json_value(item, field_name=field_name) for item in value]
+        if isinstance(value, dict):
+            normalized: dict[str, Any] = {}
+            for key in sorted(value):
+                if not isinstance(key, str):
+                    raise ValueError(f"{field_name} keys must be strings")
+                normalized[key] = self._normalize_json_value(value[key], field_name=field_name)
+            return normalized
+        raise ValueError(f"{field_name} must contain only JSON-serializable values")
 
 
 class EncounterCheckModule(RuleModule):

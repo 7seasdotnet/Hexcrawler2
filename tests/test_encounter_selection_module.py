@@ -10,8 +10,10 @@ from hexcrawler.content.encounters import (
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.core import Simulation
 from hexcrawler.sim.encounters import (
+    ENCOUNTER_ACTION_STUB_EVENT_TYPE,
     ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
     ENCOUNTER_SELECTION_STUB_EVENT_TYPE,
+    EncounterActionModule,
     EncounterSelectionModule,
 )
 from hexcrawler.sim.hash import simulation_hash
@@ -32,6 +34,7 @@ def _build_selection_sim(seed: int = 91) -> Simulation:
     world = load_world_json("content/examples/basic_map.json")
     sim = Simulation(world=world, seed=seed)
     sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
+    sim.register_rule_module(EncounterActionModule())
     return sim
 
 
@@ -90,6 +93,100 @@ def test_selection_stub_emitted_once_and_passthrough_fields_stable() -> None:
     }
 
 
+def test_action_stub_emitted_once_per_selection_and_passthrough_fields_stable() -> None:
+    sim = _build_selection_sim(seed=17)
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
+        params=_resolve_request_params(),
+    )
+
+    sim.advance_ticks(3)
+    selection_entries = [
+        entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_SELECTION_STUB_EVENT_TYPE
+    ]
+    action_entries = [
+        entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_STUB_EVENT_TYPE
+    ]
+
+    assert len(selection_entries) == 1
+    assert len(action_entries) == 1
+    action_params = action_entries[0]["params"]
+    assert action_params["tick"] == 0
+    assert action_params["context"] == "global"
+    assert action_params["trigger"] == "idle"
+    assert action_params["location"] == {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}}
+    assert action_params["roll"] == 40
+    assert action_params["category"] == "hostile"
+    assert action_params["table_id"] == "basic_encounters"
+    assert action_params["entry_id"] == "ominous_sign"
+
+
+def test_action_stub_actions_json_structure_and_default_fallback() -> None:
+    sim = _build_selection_sim(seed=17)
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
+        params=_resolve_request_params(),
+    )
+
+    sim.advance_ticks(3)
+    action_entries = [
+        entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_STUB_EVENT_TYPE
+    ]
+
+    assert len(action_entries) == 1
+    actions = action_entries[0]["params"]["actions"]
+    assert isinstance(actions, list)
+    assert actions == [
+        {
+            "action_type": "signal_intent",
+            "template_id": "ominous_sign",
+            "params": {"source": "encounter_selection_stub"},
+        }
+    ]
+
+
+def test_action_stub_passes_through_declared_actions_when_present() -> None:
+    world = load_world_json("content/examples/basic_map.json")
+    sim = Simulation(world=world, seed=2)
+    sim.register_rule_module(
+        EncounterSelectionModule(
+            load_encounter_table_json(
+                Path("tests/fixtures/encounters/actions_passthrough_table.json")
+            )
+        )
+    )
+    sim.register_rule_module(EncounterActionModule())
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
+        params=_resolve_request_params(),
+    )
+
+    sim.advance_ticks(3)
+    action_entries = [
+        entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_STUB_EVENT_TYPE
+    ]
+    assert len(action_entries) == 1
+    assert action_entries[0]["params"]["actions"] == [
+        {
+            "action_type": "weather_shift",
+            "template_id": "cold_front_minor",
+            "params": {
+                "duration_ticks": 12,
+                "modifiers": {"visibility": -1},
+            },
+            "unknown_extension": {"extra": True},
+        },
+        {
+            "action_type": "signal_intent",
+            "template_id": "omens.crows",
+            "params": {},
+        },
+    ]
+
+
 def test_selection_determinism_save_load_continuation_and_hash_identity(tmp_path: Path) -> None:
     contiguous = _build_selection_sim(seed=42)
     contiguous.schedule_event_at(
@@ -121,6 +218,7 @@ def test_selection_determinism_save_load_continuation_and_hash_identity(tmp_path
     save_game_json(save_path, split.state.world, split)
     _, loaded = load_game_json(save_path)
     loaded.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
+    loaded.register_rule_module(EncounterActionModule())
     loaded.advance_ticks(15)
 
     assert simulation_hash(contiguous) == simulation_hash(loaded)
@@ -165,5 +263,5 @@ def test_selection_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "fdf586eedfc8cdc61e4d38eedecd3cf0db41c68152257cba149f69181ab5af8b"
+        == "7e223ad7a83c88f81c5aaf94cbcc93ad8d88a8abb8ef5691ad369cdb63a882f7"
     )
