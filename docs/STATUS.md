@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 3B substrate — serialized `rules_state` store implemented for deterministic rule-module persistence.
-- **Next action:** Migrate rule modules that currently depend on implicit in-memory counters/caches to persist deterministic state exclusively through `Simulation.set_rules_state(...)` plus events/world APIs.
+- **Next action:** Continue Phase 3B documentation hardening by appending future prompt/summary/verification tuples to `docs/PROMPTLOG.md` for deterministic process traceability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -27,6 +27,8 @@
   - Package entrypoint routing to pygame viewer.
 - `run_game.py`
   - Simple launch script that injects `src/` into `sys.path` and runs the pygame viewer.
+- `docs/PROMPTLOG.md`
+  - Canonical reverse-chronological prompt history linking verbatim prompts, Codex summaries, commit references, and verification notes.
 
 ## Content/Runtime Save Workflow
 - Recommended content templates directory: `content/`
@@ -37,6 +39,7 @@
   - `python run_game.py`
 - Run replay tool from canonical save:
   - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
+- `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## Progress
 - ✅ Axial-coordinate hex world model implemented and keyed by `HexCoord`.
@@ -82,8 +85,9 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
+- `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added simulation-owned serialized `rules_state` (`dict[str, JSON-object]`) with validation-backed `get_rules_state`/`set_rules_state` APIs for replay/save-load-safe module persistence.
-- Included `rules_state` in canonical simulation payloads and `simulation_hash` so persistence changes are hash-covered and deterministic.
-- Added `tests/test_rules_state.py` and architecture contract updates documenting the new rules module persistence substrate.
+- Added `docs/PROMPTLOG.md` as the canonical reverse-chronological prompt history artifact with required fields (verbatim prompt, Codex summary, commit ref, and verification/manual notes).
+- Bootstrapped the first prompt-trace entry for this docs task to establish deterministic prompt-to-delivery traceability going forward.
+- Updated `docs/STATUS.md` to include the new prompt-log artifact, refreshed next action, and added a direct verification command for reviewing prompt history.
