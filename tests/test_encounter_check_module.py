@@ -13,6 +13,7 @@ from hexcrawler.sim.encounters import (
     EncounterCheckModule,
 )
 from hexcrawler.sim.hash import simulation_hash
+from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy
 from hexcrawler.sim.world import HexCoord
 
@@ -20,6 +21,7 @@ from hexcrawler.sim.world import HexCoord
 def _build_sim(seed: int = 123) -> Simulation:
     world = load_world_json("content/examples/basic_map.json")
     sim = Simulation(world=world, seed=seed)
+    sim.add_entity(EntityState.from_hex(entity_id="watcher", hex_coord=HexCoord(0, 0), speed_per_tick=0.0))
     sim.register_rule_module(EncounterCheckModule())
     return sim
 
@@ -44,6 +46,10 @@ def _input_log() -> list[SimCommand]:
         SimCommand(tick=2, command_type="noop_input", params={"source": "qa", "index": 0}),
         SimCommand(tick=17, command_type="noop_input", params={"source": "qa", "index": 1}),
     ]
+
+
+def _location(q: int, r: int) -> dict[str, object]:
+    return {"topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": q, "r": r}}
 
 
 def test_encounter_check_eligibility_deterministic_hash() -> None:
@@ -106,14 +112,17 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
         assert 1 <= roll <= 100
         assert entry["params"]["context"] == "global"
         assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
+        assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
 
     for entry in result_entries:
         assert entry["params"]["category"] in {"hostile", "neutral", "omen"}
         assert 1 <= int(entry["params"]["roll"]) <= 100
         assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
+        assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
 
     for entry in check_entries:
         assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
+        assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
 
 
 def test_encounter_result_stub_save_load_round_trip_hash(tmp_path: Path) -> None:
@@ -190,11 +199,14 @@ def test_encounter_trigger_propagates_check_to_roll_to_result_stub() -> None:
         source_tick = int(roll_entry["params"]["tick"])
         roll_value = int(roll_entry["params"]["roll"])
         trigger = roll_entry["params"]["trigger"]
+        location = roll_entry["params"]["location"]
 
         assert checks_by_tick[source_tick]["params"]["trigger"] == trigger
+        assert checks_by_tick[source_tick]["params"]["location"] == location
 
         result_key = (int(roll_entry["tick"]) + 1, roll_value)
         assert result_entries[result_key]["params"]["trigger"] == trigger
+        assert result_entries[result_key]["params"]["location"] == location
 
 
 def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path: Path) -> None:
@@ -206,8 +218,8 @@ def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path:
     ]
     assert len(pending_travel_steps) == 1
     assert pending_travel_steps[0].params["entity_id"] == "runner"
-    assert pending_travel_steps[0].params["from_hex"] == {"q": 0, "r": 0}
-    assert pending_travel_steps[0].params["to_hex"] == {"q": 1, "r": 0}
+    assert pending_travel_steps[0].params["location_from"] == {"topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 0, "r": 0}}
+    assert pending_travel_steps[0].params["location_to"] == {"topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 1, "r": 0}}
 
     save_path = tmp_path / "travel_step_save.json"
     save_game_json(save_path, sim.state.world, sim)
@@ -234,6 +246,7 @@ def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path:
 
     assert travel_check_entry["tick"] == travel_entry["tick"] + 1
     assert travel_check_entry["params"]["tick"] == travel_entry["params"]["tick"]
+    assert travel_check_entry["params"]["location"] == travel_entry["params"]["location_to"]
 
 
 def test_travel_trigger_propagates_through_roll_and_result_stub() -> None:
@@ -246,6 +259,7 @@ def test_travel_trigger_propagates_through_roll_and_result_stub() -> None:
             "context": "global",
             "roll": 60,
             "trigger": ENCOUNTER_TRIGGER_TRAVEL,
+            "location": _location(1, 0),
         },
     )
 
@@ -256,6 +270,7 @@ def test_travel_trigger_propagates_through_roll_and_result_stub() -> None:
         entry for entry in trace if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
     )
     assert result_entry["params"]["trigger"] == ENCOUNTER_TRIGGER_TRAVEL
+    assert result_entry["params"]["location"] == _location(1, 0)
 
 
 def test_travel_channel_save_load_and_replay_hash_identity(tmp_path: Path) -> None:
@@ -289,7 +304,7 @@ def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "38f3005bd55085f6f7f3256e08bb7d131884b61850cbfd977c448f56c349ef3e"
+        == "6f15bfc1609911fc7e628cb34aaf5578b2a79bb14ec72dfe860d6ab517dc2a1e"
     )
 
 
@@ -299,5 +314,5 @@ def test_travel_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "53f1da9d97fe80caf5d0272d3a86887ad2f445c19a88121d2bca59ad35d1e708"
+        == "b0fab20837607ab8ac5997473dd6482456f85238402791d408fd9133e1eb6314"
     )

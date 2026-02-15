@@ -112,13 +112,23 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** `encounter_check` params include explicit `trigger`.
 - **Contract:** Allowed values currently: `"idle"` and `"travel"`.
 - **Contract:** `TRAVEL_STEP_EVENT_TYPE = "travel_step"` is a deterministic serialized event emitted by simulation movement when an entity crosses a hex boundary.
-- **Contract:** `travel_step` params are minimal and deterministic: `tick`, `entity_id`, `from_hex`, and `to_hex`; no RNG usage and no world mutation side effects.
+- **Contract:** `travel_step` params are minimal and deterministic: `tick`, `entity_id`, `location_from`, and `location_to`; no RNG usage and no world mutation side effects.
 - **Contract:** Encounter module integration is reactive: on `travel_step`, `EncounterCheckModule` schedules `encounter_check` with `trigger="travel"` through normal simulation event APIs.
 - **Contract:** Periodic scheduler checks continue to emit `encounter_check` with `trigger="idle"`; interval/cooldown behavior remains unchanged.
-- **Contract:** `encounter_roll` must propagate `tick`, `context`, `roll`, and `trigger` exactly from the triggering check.
-- **Contract:** `encounter_result_stub` must propagate `tick`, `context`, `roll`, `category`, and `trigger` from `encounter_roll` with no added randomness.
+- **Contract:** `encounter_roll` must propagate `tick`, `context`, `roll`, `trigger`, and `location` exactly from the triggering check.
+- **Contract:** `encounter_result_stub` must propagate `tick`, `context`, `roll`, `category`, `trigger`, and `location` from `encounter_roll` with no added randomness.
 - **Contract:** Trigger channels are structural only in Phase 4E: no semantic branching by trigger value (no probability changes, terrain modifiers, or hex-based scaling).
 - **Contract:** RNG usage remains strictly `sim.rng_stream("encounter_check")`; no new RNG streams and no additional RNG draws.
+
+
+## 6H) LocationRef Contract (Phase 4F)
+- **Purpose:** Decouple encounter-facing event contracts from raw axial tuples while keeping simulation behavior/content unchanged.
+- **Contract:** `LocationRef` is an opaque, JSON-serializable value object with fields `topology_type` and `coord`.
+- **Contract:** In Phase 4F, overworld references use `topology_type="overworld_hex"` and `coord={"q": int, "r": int}`.
+- **Contract:** Event contracts must carry `LocationRef` payloads instead of raw coordinate dicts for encounter-facing seams (`travel_step.location_from/location_to`, `encounter_check.location`, `encounter_roll.location`, `encounter_result_stub.location`).
+- **Contract:** No simulation logic may branch on `LocationRef.topology_type` yet; the abstraction is structural only in this phase.
+- **Contract:** No new RNG streams or draws are introduced by `LocationRef`; event queue ordering and trigger semantics remain unchanged.
+- **Contract:** `LocationRef` exists to preserve forward compatibility for future nested or non-hex topologies without changing encounter event contracts again.
 
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
