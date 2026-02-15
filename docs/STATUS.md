@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4A domain skeleton — deterministic encounter-check module layered over hardened substrate.
-- **Next action:** Keep Phase 4A scope tight by validating encounter-check pacing/state invariants, then prepare Phase 4B planning (without adding encounter content logic yet).
+- **Current phase:** Phase 4B domain skeleton — deterministic encounter eligibility gate layered over Phase 4A encounter checks.
+- **Next action:** Plan Phase 4C boundaries for content-free downstream wiring while preserving strict no-content semantics (no encounter tables or resolution yet).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -12,7 +12,7 @@
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
-  - Encounter-check semantic skeleton (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule and persists pacing state in `rules_state`.
+  - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule, evaluates deterministic eligibility, and emits `encounter_roll` follow-on events only when eligible.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
@@ -63,8 +63,9 @@
 - ✅ Phase 3B substrate complete: serialized hash-covered `rules_state` store added to canonical simulation save/load and simulation hashing.
 - ✅ Phase 3C substrate complete: serialized hash-covered bounded `event_trace` execution history added with deterministic FIFO eviction and deep-copy read API.
 - ✅ Phase 4A complete: `EncounterCheckModule` emits deterministic structured `encounter_check` events via `PeriodicScheduler`, uses only serialized `rules_state` for pacing state, and remains save/load + replay hash stable.
+- ✅ Phase 4B complete: encounter checks now pass through a deterministic eligibility gate with cooldown accounting and emit `encounter_roll` events (content-free, no resolution).
 
-## New Public APIs (Phase 4A)
+## New Public APIs (Phase 4B)
 - `Simulation.get_rule_module(module_name)`
 - `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
 - `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
@@ -77,6 +78,9 @@
 - `hexcrawler.sim.encounters.EncounterCheckModule`
 - `hexcrawler.sim.encounters.ENCOUNTER_CHECK_EVENT_TYPE`
 - `hexcrawler.sim.encounters.ENCOUNTER_CHECK_INTERVAL`
+- `hexcrawler.sim.encounters.ENCOUNTER_ROLL_EVENT_TYPE`
+- `hexcrawler.sim.encounters.ENCOUNTER_CHANCE_PERCENT`
+- `hexcrawler.sim.encounters.ENCOUNTER_COOLDOWN_TICKS`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -99,6 +103,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added `EncounterCheckModule` as the first thin semantic rule module: it registers a fixed periodic task, emits structured `encounter_check` events, and updates only serialized `rules_state` (`last_check_tick`, `checks_emitted`).
-- Added focused Phase 4A tests for deterministic hash identity, save/load continuation, replay stability from input log, and `rules_state` persistence correctness (including event-trace visibility of `encounter_check`).
-- Updated architecture/status docs to lock Phase 4A scope as intentionally content-free (no encounter tables/factions/ecology/combat).
+- Extended `EncounterCheckModule` with a deterministic eligibility gate, persisted cooldown/accounting fields in `rules_state`, and content-free follow-on `encounter_roll` emission when checks are eligible.
+- Updated encounter module tests to cover deterministic hash identity, save/load continuation, eligibility/event-trace invariants, cooldown behavior, and persisted Phase 4B `rules_state` fields.
+- Updated architecture/status documentation to mark Phase 4B complete and explicitly keep encounter work content-free (no encounter tables or encounter resolution yet).

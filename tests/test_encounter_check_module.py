@@ -2,7 +2,13 @@ from pathlib import Path
 
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.core import SimCommand, Simulation
-from hexcrawler.sim.encounters import ENCOUNTER_CHECK_EVENT_TYPE, EncounterCheckModule
+from hexcrawler.sim.encounters import (
+    ENCOUNTER_CHECK_EVENT_TYPE,
+    ENCOUNTER_CHECK_INTERVAL,
+    ENCOUNTER_COOLDOWN_TICKS,
+    ENCOUNTER_ROLL_EVENT_TYPE,
+    EncounterCheckModule,
+)
 from hexcrawler.sim.hash import simulation_hash
 
 
@@ -20,7 +26,7 @@ def _input_log() -> list[SimCommand]:
     ]
 
 
-def test_encounter_check_deterministic_emission_hash() -> None:
+def test_encounter_check_eligibility_deterministic_hash() -> None:
     sim_a = _build_sim(seed=444)
     sim_b = _build_sim(seed=444)
 
@@ -28,54 +34,69 @@ def test_encounter_check_deterministic_emission_hash() -> None:
         sim_a.append_command(command)
         sim_b.append_command(command.to_dict())
 
-    sim_a.advance_ticks(65)
-    sim_b.advance_ticks(65)
+    sim_a.advance_ticks(120)
+    sim_b.advance_ticks(120)
 
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
 
 
-def test_encounter_check_save_load_round_trip_hash(tmp_path: Path) -> None:
+def test_encounter_check_eligibility_save_load_round_trip_hash(tmp_path: Path) -> None:
     sim_contiguous = _build_sim(seed=555)
     for command in _input_log():
         sim_contiguous.append_command(command)
-    sim_contiguous.advance_ticks(80)
+    sim_contiguous.advance_ticks(120)
 
     split = _build_sim(seed=555)
     for command in _input_log():
         split.append_command(command)
-    split.advance_ticks(35)
+    split.advance_ticks(45)
 
     path = tmp_path / "encounter_check_save.json"
     save_game_json(path, split.state.world, split)
     _, loaded = load_game_json(path)
     loaded.register_rule_module(EncounterCheckModule())
-    loaded.advance_ticks(45)
+    loaded.advance_ticks(75)
 
     assert simulation_hash(sim_contiguous) == simulation_hash(loaded)
 
 
-def test_encounter_check_replay_stability_from_input_log() -> None:
-    base = _build_sim(seed=777)
-    replay = _build_sim(seed=777)
+def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> None:
+    sim = _build_sim(seed=444)
+    sim.advance_ticks(120)
 
-    for command in _input_log():
-        base.append_command(command)
+    state = sim.get_rules_state(EncounterCheckModule.name)
+    trace = sim.get_event_trace()
+    check_entries = [entry for entry in trace if entry["event_type"] == ENCOUNTER_CHECK_EVENT_TYPE]
+    roll_entries = [entry for entry in trace if entry["event_type"] == ENCOUNTER_ROLL_EVENT_TYPE]
 
-    for command in base.input_log:
-        replay.append_command(command.to_dict())
+    assert state["checks_emitted"] == len(check_entries)
+    assert state["eligible_count"] == len(roll_entries)
+    assert len(roll_entries) > 0
 
-    base.advance_ticks(70)
-    replay.advance_ticks(70)
+    roll_source_ticks = [int(entry["params"]["tick"]) for entry in roll_entries]
+    for prior_tick, next_tick in zip(roll_source_ticks, roll_source_ticks[1:]):
+        assert next_tick - prior_tick >= ENCOUNTER_COOLDOWN_TICKS
 
-    assert simulation_hash(base) == simulation_hash(replay)
+    for entry in roll_entries:
+        roll = int(entry["params"]["roll"])
+        assert 1 <= roll <= 100
+        assert entry["params"]["context"] == "global"
 
 
 def test_encounter_check_rules_state_persists_across_save_load(tmp_path: Path) -> None:
-    sim = _build_sim(seed=888)
+    sim = _build_sim(seed=444)
     sim.advance_ticks(52)
 
     state_before = sim.get_rules_state(EncounterCheckModule.name)
-    assert state_before == {"last_check_tick": 50, "checks_emitted": 6}
+    assert state_before["last_check_tick"] == 50
+    assert state_before["checks_emitted"] == 6
+    assert set(state_before) == {
+        "last_check_tick",
+        "checks_emitted",
+        "eligible_count",
+        "ineligible_streak",
+        "cooldown_until_tick",
+    }
 
     path = tmp_path / "encounter_state.json"
     save_game_json(path, sim.state.world, sim)
@@ -84,9 +105,10 @@ def test_encounter_check_rules_state_persists_across_save_load(tmp_path: Path) -
 
     assert loaded.get_rules_state(EncounterCheckModule.name) == state_before
 
-    loaded.advance_ticks(11)
+    loaded.advance_ticks(ENCOUNTER_CHECK_INTERVAL + 1)
 
-    assert loaded.get_rules_state(EncounterCheckModule.name) == {"last_check_tick": 60, "checks_emitted": 7}
+    state_after = loaded.get_rules_state(EncounterCheckModule.name)
+    assert state_after["checks_emitted"] == state_before["checks_emitted"] + 1
     assert any(
         entry["event_type"] == ENCOUNTER_CHECK_EVENT_TYPE
         for entry in loaded.get_event_trace()

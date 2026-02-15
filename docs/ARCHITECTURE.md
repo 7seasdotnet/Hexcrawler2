@@ -91,12 +91,13 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Until an explicit serialized “module state” substrate is introduced and locked by tests, modules must be stateless beyond configuration constants.
 - **Contract:** `rules_state` is the explicit serialized per-module persistence substrate (`dict[str, JSON-object]`) and is hash-covered via `simulation_hash`/canonical saves; module persistent state must live only in `rules_state`, scheduled events, and/or world state APIs.
 
-## 6E) Encounter Check Semantic Skeleton (Phase 4A)
-- **Purpose:** Introduce the first thin domain-semantic layer without introducing encounter content logic.
-- **Contract:** `EncounterCheckModule` schedules a fixed-interval periodic task (via `PeriodicScheduler`) and emits serialized `SimEvent` records with `event_type="encounter_check"` and minimal structured params (`tick`, `context`).
-- **Contract:** Encounter checks are intentionally content-free in Phase 4A: no encounter table lookups, no faction/ecology logic, no world mutation side effects, and no combat spawning.
-- **Contract:** Pacing/accounting persistence is stored only in serialized `rules_state["encounter_check"]` (`last_check_tick`, `checks_emitted`); no in-memory counters are authoritative.
-- **Contract:** Any randomness used by this module must consume `sim.rng_stream("encounter_check")` to preserve deterministic stream continuity and hash stability across save/load/replay.
+## 6E) Encounter Check Eligibility Gate (Phase 4B)
+- **Purpose:** Extend the content-free encounter skeleton with deterministic eligibility accounting while still avoiding encounter content logic.
+- **Contract:** `EncounterCheckModule` emits fixed-interval `encounter_check` events and deterministically evaluates an eligibility gate per check.
+- **Contract:** On eligible checks, the module emits `encounter_roll` with deterministic params (`tick`, `context`, `roll`) using the same encounter RNG stream.
+- **Contract:** Encounter logic remains intentionally content-free in Phase 4B: no encounter table lookups, no encounter resolution, no faction/ecology logic, no world mutation side effects, and no combat spawning.
+- **Contract:** Eligibility/accounting persistence is stored only in serialized `rules_state["encounter_check"]` (`last_check_tick`, `checks_emitted`, `eligible_count`, `ineligible_streak`, `cooldown_until_tick`); no in-memory counters are authoritative.
+- **Contract:** All randomness in this module must consume `sim.rng_stream("encounter_check")` to preserve deterministic stream continuity and hash stability across save/load/replay.
 
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
