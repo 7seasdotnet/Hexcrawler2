@@ -125,10 +125,19 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Purpose:** Decouple encounter-facing event contracts from raw axial tuples while keeping simulation behavior/content unchanged.
 - **Contract:** `LocationRef` is an opaque, JSON-serializable value object with fields `topology_type` and `coord`.
 - **Contract:** In Phase 4F, overworld references use `topology_type="overworld_hex"` and `coord={"q": int, "r": int}`.
-- **Contract:** Event contracts must carry `LocationRef` payloads instead of raw coordinate dicts for encounter-facing seams (`travel_step.location_from/location_to`, `encounter_check.location`, `encounter_roll.location`, `encounter_result_stub.location`).
+- **Contract:** Event contracts must carry `LocationRef` payloads instead of raw coordinate dicts for encounter-facing seams (`travel_step.location_from/location_to`, `encounter_check.location`, `encounter_roll.location`, `encounter_result_stub.location`, `encounter_resolve_request.location`).
 - **Contract:** No simulation logic may branch on `LocationRef.topology_type` yet; the abstraction is structural only in this phase.
 - **Contract:** No new RNG streams or draws are introduced by `LocationRef`; event queue ordering and trigger semantics remain unchanged.
 - **Contract:** `LocationRef` exists to preserve forward compatibility for future nested or non-hex topologies without changing encounter event contracts again.
+
+
+## 6I) Encounter Resolution Request Seam (Phase 4G)
+- **Purpose:** Add a deterministic, content-free handoff seam after `encounter_result_stub` for future data-layer encounter selection systems.
+- **Contract:** When `encounter_result_stub` executes, `EncounterCheckModule` must schedule `encounter_resolve_request` at `event.tick + 1`.
+- **Contract:** `encounter_resolve_request` params are minimal and stable: `tick`, `context`, `trigger`, `location`, `roll`, and `category` only.
+- **Contract:** `trigger` and `location` are propagated unchanged from upstream seams (`encounter_check` → `encounter_roll` → `encounter_result_stub` → `encounter_resolve_request`); later seams must not re-derive location.
+- **Contract:** No additional RNG draws, no new RNG streams, and no semantic branching by trigger/category are introduced by this seam.
+- **Contract:** Phase 4G remains content-free: no table lookups, no spawns, no combat scheduling, no faction/ecology logic, and no world mutation side effects.
 
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
