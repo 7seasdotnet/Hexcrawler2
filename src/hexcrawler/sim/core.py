@@ -14,6 +14,7 @@ from hexcrawler.sim.world import HexCoord, WorldState
 
 TICKS_PER_DAY = 240
 TARGET_REACHED_THRESHOLD = 0.05
+TRAVEL_STEP_EVENT_TYPE = "travel_step"
 
 RNG_SIM_STREAM_NAME = "rng_sim"
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
@@ -466,6 +467,7 @@ class Simulation:
             self._event_execution_trace.append(event.event_id)
 
     def _advance_entity(self, entity: EntityState) -> None:
+        prior_hex = entity.hex_coord
         move_x = entity.move_input_x
         move_y = entity.move_input_y
         target = entity.target_position
@@ -498,6 +500,18 @@ class Simulation:
         if self._position_is_within_world(next_x, next_y):
             entity.position_x = next_x
             entity.position_y = next_y
+            next_hex = entity.hex_coord
+            if next_hex != prior_hex:
+                self.schedule_event_at(
+                    tick=self.state.tick + 1,
+                    event_type=TRAVEL_STEP_EVENT_TYPE,
+                    params={
+                        "tick": self.state.tick,
+                        "entity_id": entity.entity_id,
+                        "from_hex": prior_hex.to_dict(),
+                        "to_hex": next_hex.to_dict(),
+                    },
+                )
         elif target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
             entity.target_position = None
 

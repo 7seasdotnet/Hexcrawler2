@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from hexcrawler.sim.core import SimEvent, Simulation
+from hexcrawler.sim.core import TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
 
@@ -12,6 +12,7 @@ ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_TRIGGER_IDLE = "idle"
+ENCOUNTER_TRIGGER_TRAVEL = "travel"
 ENCOUNTER_CHANCE_PERCENT = 20
 ENCOUNTER_COOLDOWN_TICKS = 30
 
@@ -51,6 +52,9 @@ class EncounterCheckModule(RuleModule):
         scheduler.set_task_callback(self._TASK_NAME, self._build_emit_callback())
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == TRAVEL_STEP_EVENT_TYPE:
+            self._on_travel_step(sim, event)
+            return
         if event.event_type == ENCOUNTER_ROLL_EVENT_TYPE:
             self._on_encounter_roll(sim, event)
             return
@@ -106,6 +110,17 @@ class EncounterCheckModule(RuleModule):
                 "roll": roll,
                 "category": category,
                 "trigger": str(event.params.get("trigger", ENCOUNTER_TRIGGER_IDLE)),
+            },
+        )
+
+    def _on_travel_step(self, sim: Simulation, event: SimEvent) -> None:
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=ENCOUNTER_CHECK_EVENT_TYPE,
+            params={
+                "tick": int(event.params.get("tick", event.tick)),
+                "context": ENCOUNTER_CONTEXT_GLOBAL,
+                "trigger": ENCOUNTER_TRIGGER_TRAVEL,
             },
         )
 

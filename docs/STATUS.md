@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4D explicit encounter-trigger semantics — deterministic content-free encounter checks/rolls/result stubs now carry an explicit `trigger` contract (`idle`) end-to-end, with Phase 4V viewer gating preserved.
-- **Next action:** Add future trigger-channel entry points (for example `travel`) that emit `encounter_check` with explicit trigger values while preserving existing eligibility, cooldown, and deterministic propagation contracts.
+- **Current phase:** Phase 4E travel-triggered encounter channel — deterministic content-free encounter checks now support dual trigger channels (`idle` + `travel`) via serialized event-driven travel steps, with unchanged eligibility/cooldown/RNG contracts and Phase 4V viewer gating preserved.
+- **Next action:** Prepare a location abstraction seam (for example `HexRef`) so trigger/context payloads can evolve beyond raw axial dicts without coupling encounter semantics to movement internals.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -71,9 +71,10 @@
 - ✅ Phase 4B complete: encounter checks now pass through a deterministic eligibility gate with cooldown accounting and emit `encounter_roll` events (content-free, no resolution).
 - ✅ Phase 4C complete: eligible encounter rolls now emit deterministic content-free `encounter_result_stub` events with coarse categories (`hostile`, `neutral`, `omen`) and no world mutation side effects.
 - ✅ Phase 4D complete: `encounter_check` now carries explicit `trigger` semantics (`idle`) and the module propagates `trigger` deterministically through `encounter_roll` and `encounter_result_stub` with unchanged RNG/cooldown contracts.
+- ✅ Phase 4E complete: movement now emits serialized `travel_step` events on hex-boundary crossings and `EncounterCheckModule` reacts by scheduling `encounter_check` with `trigger="travel"` while keeping eligibility/cooldown/RNG behavior unchanged.
 - ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
-## New Public APIs (Phase 4D)
+## New Public APIs (Phase 4E)
 - `Simulation.get_rule_module(module_name)`
 - `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
 - `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
@@ -88,9 +89,11 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_CHECK_INTERVAL`
 - `hexcrawler.sim.encounters.ENCOUNTER_ROLL_EVENT_TYPE`
 - `hexcrawler.sim.encounters.ENCOUNTER_TRIGGER_IDLE`
+- `hexcrawler.sim.encounters.ENCOUNTER_TRIGGER_TRAVEL`
 - `hexcrawler.sim.encounters.ENCOUNTER_CHANCE_PERCENT`
 - `hexcrawler.sim.encounters.ENCOUNTER_COOLDOWN_TICKS`
 - `hexcrawler.sim.encounters.ENCOUNTER_RESULT_STUB_EVENT_TYPE`
+- `hexcrawler.sim.core.TRAVEL_STEP_EVENT_TYPE`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -114,6 +117,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Advanced encounter substrate to Phase 4D by adding explicit `trigger` semantics (`idle`) to emitted `encounter_check` events and deterministic propagation through `encounter_roll` and `encounter_result_stub`.
-- Expanded encounter module tests to assert `trigger` presence/propagation across check→roll→result seams plus deterministic hash identity across save/load and replay paths.
-- Updated architecture contracts with new section 6G to lock the trigger-semantics propagation boundary without adding content tables, world mutation, or trigger-based branching behavior.
+- Advanced encounter substrate to Phase 4E by introducing serialized `travel_step` events on authoritative hex-boundary crossings and wiring `EncounterCheckModule` to emit `encounter_check` with `trigger="travel"` reactively.
+- Expanded encounter tests to cover travel-step serialization/ordering, travel-trigger propagation through check→roll→result seams, deterministic save/load continuation identity, deterministic replay identity, and a travel-channel hash guard.
+- Updated architecture trigger contracts (section 6G) to formalize the dual-channel (`idle` + `travel`) event-driven design while explicitly forbidding trigger-based semantic branching in this phase.
