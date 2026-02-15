@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
@@ -508,8 +509,8 @@ class Simulation:
                     params={
                         "tick": self.state.tick,
                         "entity_id": entity.entity_id,
-                        "from_hex": prior_hex.to_dict(),
-                        "to_hex": next_hex.to_dict(),
+                        "location_from": LocationRef.from_overworld_hex(prior_hex).to_dict(),
+                        "location_to": LocationRef.from_overworld_hex(next_hex).to_dict(),
                     },
                 )
         elif target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:

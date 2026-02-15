@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from hexcrawler.sim.core import TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
+from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
 
@@ -64,6 +65,7 @@ class EncounterCheckModule(RuleModule):
         state = self._rules_state(sim)
         check_tick = int(event.params.get("tick", event.tick))
         trigger = str(event.params.get("trigger", ENCOUNTER_TRIGGER_IDLE))
+        location = self._location_for_check(sim=sim, event=event, trigger=trigger)
         rng = sim.rng_stream(self._RNG_STREAM_NAME)
 
         state[self._STATE_LAST_CHECK_TICK] = check_tick
@@ -91,6 +93,7 @@ class EncounterCheckModule(RuleModule):
                     "context": ENCOUNTER_CONTEXT_GLOBAL,
                     "roll": encounter_roll,
                     "trigger": trigger,
+                    "location": location.to_dict(),
                 },
             )
         else:
@@ -110,6 +113,7 @@ class EncounterCheckModule(RuleModule):
                 "roll": roll,
                 "category": category,
                 "trigger": str(event.params.get("trigger", ENCOUNTER_TRIGGER_IDLE)),
+                "location": dict(event.params["location"]),
             },
         )
 
@@ -121,6 +125,7 @@ class EncounterCheckModule(RuleModule):
                 "tick": int(event.params.get("tick", event.tick)),
                 "context": ENCOUNTER_CONTEXT_GLOBAL,
                 "trigger": ENCOUNTER_TRIGGER_TRAVEL,
+                "location": dict(event.params["location_to"]),
             },
         )
 
@@ -134,6 +139,25 @@ class EncounterCheckModule(RuleModule):
             return "neutral"
         return "omen"
 
+
+    @staticmethod
+    def _idle_location(sim: Simulation) -> LocationRef:
+        if not sim.state.entities:
+            return LocationRef.from_overworld_hex(next(iter(sorted(sim.state.world.hexes))))
+        first_entity = sim.state.entities[sorted(sim.state.entities)[0]]
+        return LocationRef.from_overworld_hex(first_entity.hex_coord)
+
+    def _location_for_check(self, sim: Simulation, event: SimEvent, trigger: str) -> LocationRef:
+        location_payload = event.params.get("location")
+        if isinstance(location_payload, dict):
+            return LocationRef.from_dict(location_payload)
+        if trigger == ENCOUNTER_TRIGGER_TRAVEL:
+            location_to = event.params.get("location_to")
+            if not isinstance(location_to, dict):
+                raise ValueError("travel_step must include location_to")
+            return LocationRef.from_dict(location_to)
+        return self._idle_location(sim)
+
     def _build_emit_callback(self):
         def _emit(sim: Simulation, tick: int) -> None:
             sim.schedule_event_at(
@@ -143,6 +167,7 @@ class EncounterCheckModule(RuleModule):
                     "tick": tick,
                     "context": ENCOUNTER_CONTEXT_GLOBAL,
                     "trigger": ENCOUNTER_TRIGGER_IDLE,
+                    "location": self._idle_location(sim).to_dict(),
                 },
             )
 

@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4E travel-triggered encounter channel — deterministic content-free encounter checks now support dual trigger channels (`idle` + `travel`) via serialized event-driven travel steps, with unchanged eligibility/cooldown/RNG contracts and Phase 4V viewer gating preserved.
-- **Next action:** Prepare a location abstraction seam (for example `HexRef`) so trigger/context payloads can evolve beyond raw axial dicts without coupling encounter semantics to movement internals.
+- **Current phase:** Phase 4F LocationRef abstraction — encounter-facing travel/check/roll/result event contracts now carry opaque `LocationRef` payloads instead of raw axial coordinate dicts, with unchanged eligibility/cooldown/RNG/trigger semantics.
+- **Next action:** Harden location-aware encounter contract seams (validation + compatibility tests) before any content-table or topology-semantic expansion.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -15,6 +15,7 @@
   - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule with explicit trigger semantics, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
+  - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
 - `src/hexcrawler/cli/viewer.py`
@@ -72,6 +73,7 @@
 - ✅ Phase 4C complete: eligible encounter rolls now emit deterministic content-free `encounter_result_stub` events with coarse categories (`hostile`, `neutral`, `omen`) and no world mutation side effects.
 - ✅ Phase 4D complete: `encounter_check` now carries explicit `trigger` semantics (`idle`) and the module propagates `trigger` deterministically through `encounter_roll` and `encounter_result_stub` with unchanged RNG/cooldown contracts.
 - ✅ Phase 4E complete: movement now emits serialized `travel_step` events on hex-boundary crossings and `EncounterCheckModule` reacts by scheduling `encounter_check` with `trigger="travel"` while keeping eligibility/cooldown/RNG behavior unchanged.
+- ✅ Phase 4F complete: introduced opaque `LocationRef` contracts and migrated encounter-facing travel/check/roll/result event payloads from raw axial dicts to location references without semantic or RNG changes.
 - ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
 ## New Public APIs (Phase 4E)
@@ -94,6 +96,8 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_COOLDOWN_TICKS`
 - `hexcrawler.sim.encounters.ENCOUNTER_RESULT_STUB_EVENT_TYPE`
 - `hexcrawler.sim.core.TRAVEL_STEP_EVENT_TYPE`
+- `hexcrawler.sim.location.LocationRef`
+- `hexcrawler.sim.location.OVERWORLD_HEX_TOPOLOGY`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -117,6 +121,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Advanced encounter substrate to Phase 4E by introducing serialized `travel_step` events on authoritative hex-boundary crossings and wiring `EncounterCheckModule` to emit `encounter_check` with `trigger="travel"` reactively.
-- Expanded encounter tests to cover travel-step serialization/ordering, travel-trigger propagation through check→roll→result seams, deterministic save/load continuation identity, deterministic replay identity, and a travel-channel hash guard.
-- Updated architecture trigger contracts (section 6G) to formalize the dual-channel (`idle` + `travel`) event-driven design while explicitly forbidding trigger-based semantic branching in this phase.
+- Advanced encounter substrate to Phase 4F by introducing `LocationRef` and migrating `travel_step` payloads to `location_from`/`location_to` while keeping movement/event ordering deterministic.
+- Updated `EncounterCheckModule` to carry `location` through `encounter_check` → `encounter_roll` → `encounter_result_stub` and to source travel-channel checks from `travel_step.location_to` with unchanged eligibility/cooldown/RNG behavior.
+- Expanded tests + architecture docs to assert LocationRef serialization/propagation and refreshed deterministic hash guards for the LocationRef contract migration.
