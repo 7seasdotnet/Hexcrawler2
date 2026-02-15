@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
-from hexcrawler.sim.core import SimCommand, Simulation
+from hexcrawler.sim.core import EntityState, SimCommand, Simulation, TRAVEL_STEP_EVENT_TYPE
 from hexcrawler.sim.encounters import (
     ENCOUNTER_CHECK_EVENT_TYPE,
     ENCOUNTER_CHECK_INTERVAL,
@@ -9,15 +9,33 @@ from hexcrawler.sim.encounters import (
     ENCOUNTER_RESULT_STUB_EVENT_TYPE,
     ENCOUNTER_ROLL_EVENT_TYPE,
     ENCOUNTER_TRIGGER_IDLE,
+    ENCOUNTER_TRIGGER_TRAVEL,
     EncounterCheckModule,
 )
 from hexcrawler.sim.hash import simulation_hash
+from hexcrawler.sim.movement import axial_to_world_xy
+from hexcrawler.sim.world import HexCoord
 
 
 def _build_sim(seed: int = 123) -> Simulation:
     world = load_world_json("content/examples/basic_map.json")
     sim = Simulation(world=world, seed=seed)
     sim.register_rule_module(EncounterCheckModule())
+    return sim
+
+
+def _build_travel_sim(seed: int = 123) -> Simulation:
+    sim = _build_sim(seed=seed)
+    sim.add_entity(EntityState.from_hex(entity_id="runner", hex_coord=HexCoord(0, 0), speed_per_tick=2.0))
+    to_x, to_y = axial_to_world_xy(HexCoord(1, 0))
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="runner",
+            command_type="set_target_position",
+            params={"x": to_x, "y": to_y},
+        )
+    )
     return sim
 
 
@@ -87,15 +105,15 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
         roll = int(entry["params"]["roll"])
         assert 1 <= roll <= 100
         assert entry["params"]["context"] == "global"
-        assert entry["params"]["trigger"] == ENCOUNTER_TRIGGER_IDLE
+        assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
 
     for entry in result_entries:
         assert entry["params"]["category"] in {"hostile", "neutral", "omen"}
         assert 1 <= int(entry["params"]["roll"]) <= 100
-        assert entry["params"]["trigger"] == ENCOUNTER_TRIGGER_IDLE
+        assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
 
     for entry in check_entries:
-        assert entry["params"]["trigger"] == ENCOUNTER_TRIGGER_IDLE
+        assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
 
 
 def test_encounter_result_stub_save_load_round_trip_hash(tmp_path: Path) -> None:
@@ -179,6 +197,89 @@ def test_encounter_trigger_propagates_check_to_roll_to_result_stub() -> None:
         assert result_entries[result_key]["params"]["trigger"] == trigger
 
 
+def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path: Path) -> None:
+    sim = _build_travel_sim(seed=21)
+    sim.advance_ticks(1)
+
+    pending_travel_steps = [
+        event for event in sim.pending_events() if event.event_type == TRAVEL_STEP_EVENT_TYPE
+    ]
+    assert len(pending_travel_steps) == 1
+    assert pending_travel_steps[0].params["entity_id"] == "runner"
+    assert pending_travel_steps[0].params["from_hex"] == {"q": 0, "r": 0}
+    assert pending_travel_steps[0].params["to_hex"] == {"q": 1, "r": 0}
+
+    save_path = tmp_path / "travel_step_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(save_path)
+    loaded.register_rule_module(EncounterCheckModule())
+
+    loaded_travel_steps = [
+        event for event in loaded.pending_events() if event.event_type == TRAVEL_STEP_EVENT_TYPE
+    ]
+    assert [event.to_dict() for event in loaded_travel_steps] == [
+        event.to_dict() for event in pending_travel_steps
+    ]
+
+    loaded.advance_ticks(2)
+
+    trace = loaded.get_event_trace()
+    travel_entry = next(entry for entry in trace if entry["event_type"] == TRAVEL_STEP_EVENT_TYPE)
+    travel_check_entry = next(
+        entry
+        for entry in trace
+        if entry["event_type"] == ENCOUNTER_CHECK_EVENT_TYPE
+        and entry["params"]["trigger"] == ENCOUNTER_TRIGGER_TRAVEL
+    )
+
+    assert travel_check_entry["tick"] == travel_entry["tick"] + 1
+    assert travel_check_entry["params"]["tick"] == travel_entry["params"]["tick"]
+
+
+def test_travel_trigger_propagates_through_roll_and_result_stub() -> None:
+    sim = _build_sim(seed=90)
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_ROLL_EVENT_TYPE,
+        params={
+            "tick": 0,
+            "context": "global",
+            "roll": 60,
+            "trigger": ENCOUNTER_TRIGGER_TRAVEL,
+        },
+    )
+
+    sim.advance_ticks(2)
+    trace = sim.get_event_trace()
+
+    result_entry = next(
+        entry for entry in trace if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
+    )
+    assert result_entry["params"]["trigger"] == ENCOUNTER_TRIGGER_TRAVEL
+
+
+def test_travel_channel_save_load_and_replay_hash_identity(tmp_path: Path) -> None:
+    contiguous = _build_travel_sim(seed=314)
+    contiguous.advance_ticks(80)
+
+    split = _build_travel_sim(seed=314)
+    split.advance_ticks(35)
+
+    save_path = tmp_path / "travel_trigger_save.json"
+    save_game_json(save_path, split.state.world, split)
+    _, loaded = load_game_json(save_path)
+    loaded.register_rule_module(EncounterCheckModule())
+    loaded.advance_ticks(45)
+
+    replay_a = _build_travel_sim(seed=314)
+    replay_b = _build_travel_sim(seed=314)
+    replay_a.advance_ticks(80)
+    replay_b.advance_ticks(80)
+
+    assert simulation_hash(contiguous) == simulation_hash(loaded)
+    assert simulation_hash(replay_a) == simulation_hash(replay_b)
+
+
 def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
     sim = _build_sim(seed=444)
     for command in _input_log():
@@ -189,4 +290,14 @@ def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
     assert (
         simulation_hash(sim)
         == "38f3005bd55085f6f7f3256e08bb7d131884b61850cbfd977c448f56c349ef3e"
+    )
+
+
+def test_travel_trigger_contract_regression_hash_is_stable() -> None:
+    sim = _build_travel_sim(seed=21)
+    sim.advance_ticks(80)
+
+    assert (
+        simulation_hash(sim)
+        == "53f1da9d97fe80caf5d0272d3a86887ad2f445c19a88121d2bca59ad35d1e708"
     )
