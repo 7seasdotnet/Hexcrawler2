@@ -102,6 +102,7 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Canonical save loader fails fast on `save_hash` mismatch.
 - **Contract:** Legacy world-only payloads (`world_hash` + top-level world fields) remain loadable for compatibility with existing viewers.
 - **Contract:** Unknown fields should be preserved where feasible (especially `metadata`) for forward compatibility.
+- **Contract:** `event_trace` is a bounded, serialized, hash-covered execution history buffer for inspection and debugging.
 
 ## 8) Movement Contract
 - **Contract:** Motion is continuous in simulation space (`position_x`, `position_y`).
