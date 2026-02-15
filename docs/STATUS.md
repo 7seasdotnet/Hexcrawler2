@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4V UI visibility pass — read-only encounter inspector panel layered over the Phase 4B encounter skeleton, now explicitly gated behind a viewer CLI flag.
-- **Next action:** Plan Phase 4C boundaries for content-free downstream wiring while preserving strict no-content semantics (no encounter tables or resolution yet), with viewer runtime kept neutral unless encounter inspection is explicitly enabled.
+- **Current phase:** Phase 4C encounter-result seam — deterministic content-free encounter result stubs now follow encounter rolls, with Phase 4V viewer gating preserved.
+- **Next action:** Keep the Phase 4C result-stub contract stable while designing explicit trigger semantics (travel vs idle channels) without introducing encounter content tables or world mutations.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -12,7 +12,7 @@
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
-  - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule, evaluates deterministic eligibility, and emits `encounter_roll` follow-on events only when eligible.
+  - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
@@ -69,9 +69,10 @@
 - ✅ Phase 3C substrate complete: serialized hash-covered bounded `event_trace` execution history added with deterministic FIFO eviction and deep-copy read API.
 - ✅ Phase 4A complete: `EncounterCheckModule` emits deterministic structured `encounter_check` events via `PeriodicScheduler`, uses only serialized `rules_state` for pacing state, and remains save/load + replay hash stable.
 - ✅ Phase 4B complete: encounter checks now pass through a deterministic eligibility gate with cooldown accounting and emit `encounter_roll` events (content-free, no resolution).
+- ✅ Phase 4C complete: eligible encounter rolls now emit deterministic content-free `encounter_result_stub` events with coarse categories (`hostile`, `neutral`, `omen`) and no world mutation side effects.
 - ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
-## New Public APIs (Phase 4B)
+## New Public APIs (Phase 4C)
 - `Simulation.get_rule_module(module_name)`
 - `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
 - `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
@@ -87,6 +88,7 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_ROLL_EVENT_TYPE`
 - `hexcrawler.sim.encounters.ENCOUNTER_CHANCE_PERCENT`
 - `hexcrawler.sim.encounters.ENCOUNTER_COOLDOWN_TICKS`
+- `hexcrawler.sim.encounters.ENCOUNTER_RESULT_STUB_EVENT_TYPE`
 
 ## Out of Scope Kept
 - No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
@@ -110,6 +112,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added explicit pygame viewer CLI wiring for `--with-encounters` (default off) and `--map-path`, and routed `run_game.py` / package entrypoint through the viewer CLI parser.
-- Removed unconditional encounter module registration from default viewer startup; encounter module now registers only when `--with-encounters` is passed.
-- Updated Encounter Debug panel absent-module messaging and status/run instructions to document neutral-default behavior and the explicit enablement command.
+- Added Phase 4C encounter result seam: `EncounterCheckModule` now handles `encounter_roll` by scheduling deterministic content-free `encounter_result_stub` events with coarse categories (`hostile`, `neutral`, `omen`).
+- Expanded encounter module tests to assert result-stub emission/count/category expectations and save/load continuation hash identity with result stubs in the executed trace.
+- Advanced status documentation to Phase 4C and updated public API listing to include the new `ENCOUNTER_RESULT_STUB_EVENT_TYPE` constant.

@@ -99,6 +99,14 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Eligibility/accounting persistence is stored only in serialized `rules_state["encounter_check"]` (`last_check_tick`, `checks_emitted`, `eligible_count`, `ineligible_streak`, `cooldown_until_tick`); no in-memory counters are authoritative.
 - **Contract:** All randomness in this module must consume `sim.rng_stream("encounter_check")` to preserve deterministic stream continuity and hash stability across save/load/replay.
 
+## 6F) Encounter Result Stub Seam (Phase 4C)
+- **Purpose:** Add a stable, deterministic downstream seam after `encounter_roll` while remaining strictly content-free.
+- **Contract:** When `encounter_roll` executes, `EncounterCheckModule` must schedule `encounter_result_stub` at `event.tick + 1`.
+- **Contract:** `encounter_result_stub` params are deterministic and minimal: `tick`, `context`, `roll`, and coarse `category` only.
+- **Contract:** Category derivation is deterministic from roll bands (`1-40 => hostile`, `41-75 => neutral`, `76-100 => omen`) and uses no additional RNG.
+- **Contract:** Phase 4C remains content-free: no encounter-table selection, no NPC/spawn creation, no faction/ecology logic, and no world mutation side effects.
+- **Contract:** Save/load/replay determinism is enforced by serialized event queue + event trace + rules_state; no module in-memory state is authoritative.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
