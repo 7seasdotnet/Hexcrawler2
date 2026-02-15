@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4C encounter-result seam — deterministic content-free encounter result stubs now follow encounter rolls, with Phase 4V viewer gating preserved.
-- **Next action:** Keep the Phase 4C result-stub contract stable while designing explicit trigger semantics (travel vs idle channels) without introducing encounter content tables or world mutations.
+- **Current phase:** Phase 4D explicit encounter-trigger semantics — deterministic content-free encounter checks/rolls/result stubs now carry an explicit `trigger` contract (`idle`) end-to-end, with Phase 4V viewer gating preserved.
+- **Next action:** Add future trigger-channel entry points (for example `travel`) that emit `encounter_check` with explicit trigger values while preserving existing eligibility, cooldown, and deterministic propagation contracts.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -12,7 +12,7 @@
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
-  - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll.
+  - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule with explicit trigger semantics, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
 - `src/hexcrawler/content/`
@@ -70,9 +70,10 @@
 - ✅ Phase 4A complete: `EncounterCheckModule` emits deterministic structured `encounter_check` events via `PeriodicScheduler`, uses only serialized `rules_state` for pacing state, and remains save/load + replay hash stable.
 - ✅ Phase 4B complete: encounter checks now pass through a deterministic eligibility gate with cooldown accounting and emit `encounter_roll` events (content-free, no resolution).
 - ✅ Phase 4C complete: eligible encounter rolls now emit deterministic content-free `encounter_result_stub` events with coarse categories (`hostile`, `neutral`, `omen`) and no world mutation side effects.
+- ✅ Phase 4D complete: `encounter_check` now carries explicit `trigger` semantics (`idle`) and the module propagates `trigger` deterministically through `encounter_roll` and `encounter_result_stub` with unchanged RNG/cooldown contracts.
 - ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
-## New Public APIs (Phase 4C)
+## New Public APIs (Phase 4D)
 - `Simulation.get_rule_module(module_name)`
 - `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
 - `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
@@ -86,6 +87,7 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_CHECK_EVENT_TYPE`
 - `hexcrawler.sim.encounters.ENCOUNTER_CHECK_INTERVAL`
 - `hexcrawler.sim.encounters.ENCOUNTER_ROLL_EVENT_TYPE`
+- `hexcrawler.sim.encounters.ENCOUNTER_TRIGGER_IDLE`
 - `hexcrawler.sim.encounters.ENCOUNTER_CHANCE_PERCENT`
 - `hexcrawler.sim.encounters.ENCOUNTER_COOLDOWN_TICKS`
 - `hexcrawler.sim.encounters.ENCOUNTER_RESULT_STUB_EVENT_TYPE`
@@ -112,6 +114,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added Phase 4C encounter result seam: `EncounterCheckModule` now handles `encounter_roll` by scheduling deterministic content-free `encounter_result_stub` events with coarse categories (`hostile`, `neutral`, `omen`).
-- Expanded encounter module tests to assert result-stub emission/count/category expectations and save/load continuation hash identity with result stubs in the executed trace.
-- Advanced status documentation to Phase 4C and updated public API listing to include the new `ENCOUNTER_RESULT_STUB_EVENT_TYPE` constant.
+- Advanced encounter substrate to Phase 4D by adding explicit `trigger` semantics (`idle`) to emitted `encounter_check` events and deterministic propagation through `encounter_roll` and `encounter_result_stub`.
+- Expanded encounter module tests to assert `trigger` presence/propagation across check→roll→result seams plus deterministic hash identity across save/load and replay paths.
+- Updated architecture contracts with new section 6G to lock the trigger-semantics propagation boundary without adding content tables, world mutation, or trigger-based branching behavior.
