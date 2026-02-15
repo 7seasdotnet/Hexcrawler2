@@ -8,6 +8,7 @@ from hexcrawler.sim.encounters import (
     ENCOUNTER_COOLDOWN_TICKS,
     ENCOUNTER_RESULT_STUB_EVENT_TYPE,
     ENCOUNTER_ROLL_EVENT_TYPE,
+    ENCOUNTER_TRIGGER_IDLE,
     EncounterCheckModule,
 )
 from hexcrawler.sim.hash import simulation_hash
@@ -86,10 +87,15 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
         roll = int(entry["params"]["roll"])
         assert 1 <= roll <= 100
         assert entry["params"]["context"] == "global"
+        assert entry["params"]["trigger"] == ENCOUNTER_TRIGGER_IDLE
 
     for entry in result_entries:
         assert entry["params"]["category"] in {"hostile", "neutral", "omen"}
         assert 1 <= int(entry["params"]["roll"]) <= 100
+        assert entry["params"]["trigger"] == ENCOUNTER_TRIGGER_IDLE
+
+    for entry in check_entries:
+        assert entry["params"]["trigger"] == ENCOUNTER_TRIGGER_IDLE
 
 
 def test_encounter_result_stub_save_load_round_trip_hash(tmp_path: Path) -> None:
@@ -141,4 +147,46 @@ def test_encounter_check_rules_state_persists_across_save_load(tmp_path: Path) -
     assert any(
         entry["event_type"] == ENCOUNTER_CHECK_EVENT_TYPE
         for entry in loaded.get_event_trace()
+    )
+
+
+def test_encounter_trigger_propagates_check_to_roll_to_result_stub() -> None:
+    sim = _build_sim(seed=777)
+    sim.advance_ticks(220)
+
+    trace = sim.get_event_trace()
+    checks_by_tick = {
+        int(entry["params"]["tick"]): entry
+        for entry in trace
+        if entry["event_type"] == ENCOUNTER_CHECK_EVENT_TYPE
+    }
+    roll_entries = [entry for entry in trace if entry["event_type"] == ENCOUNTER_ROLL_EVENT_TYPE]
+    result_entries = {
+        (int(entry["tick"]), int(entry["params"]["roll"])): entry
+        for entry in trace
+        if entry["event_type"] == ENCOUNTER_RESULT_STUB_EVENT_TYPE
+    }
+
+    assert roll_entries
+    for roll_entry in roll_entries:
+        source_tick = int(roll_entry["params"]["tick"])
+        roll_value = int(roll_entry["params"]["roll"])
+        trigger = roll_entry["params"]["trigger"]
+
+        assert checks_by_tick[source_tick]["params"]["trigger"] == trigger
+
+        result_key = (int(roll_entry["tick"]) + 1, roll_value)
+        assert result_entries[result_key]["params"]["trigger"] == trigger
+
+
+def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
+    sim = _build_sim(seed=444)
+    for command in _input_log():
+        sim.append_command(command)
+
+    sim.advance_ticks(120)
+
+    assert (
+        simulation_hash(sim)
+        == "38f3005bd55085f6f7f3256e08bb7d131884b61850cbfd977c448f56c349ef3e"
     )

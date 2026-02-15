@@ -11,6 +11,7 @@ ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
 ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
+ENCOUNTER_TRIGGER_IDLE = "idle"
 ENCOUNTER_CHANCE_PERCENT = 20
 ENCOUNTER_COOLDOWN_TICKS = 30
 
@@ -58,6 +59,7 @@ class EncounterCheckModule(RuleModule):
 
         state = self._rules_state(sim)
         check_tick = int(event.params.get("tick", event.tick))
+        trigger = str(event.params.get("trigger", ENCOUNTER_TRIGGER_IDLE))
         rng = sim.rng_stream(self._RNG_STREAM_NAME)
 
         state[self._STATE_LAST_CHECK_TICK] = check_tick
@@ -84,6 +86,7 @@ class EncounterCheckModule(RuleModule):
                     "tick": check_tick,
                     "context": ENCOUNTER_CONTEXT_GLOBAL,
                     "roll": encounter_roll,
+                    "trigger": trigger,
                 },
             )
         else:
@@ -102,6 +105,7 @@ class EncounterCheckModule(RuleModule):
                 "context": event.params.get("context", ENCOUNTER_CONTEXT_GLOBAL),
                 "roll": roll,
                 "category": category,
+                "trigger": str(event.params.get("trigger", ENCOUNTER_TRIGGER_IDLE)),
             },
         )
 
@@ -120,7 +124,11 @@ class EncounterCheckModule(RuleModule):
             sim.schedule_event_at(
                 tick=tick + 1,
                 event_type=ENCOUNTER_CHECK_EVENT_TYPE,
-                params={"tick": tick, "context": ENCOUNTER_CONTEXT_GLOBAL},
+                params={
+                    "tick": tick,
+                    "context": ENCOUNTER_CONTEXT_GLOBAL,
+                    "trigger": ENCOUNTER_TRIGGER_IDLE,
+                },
             )
 
         return _emit

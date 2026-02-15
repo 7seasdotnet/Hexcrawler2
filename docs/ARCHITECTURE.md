@@ -107,6 +107,17 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Phase 4C remains content-free: no encounter-table selection, no NPC/spawn creation, no faction/ecology logic, and no world mutation side effects.
 - **Contract:** Save/load/replay determinism is enforced by serialized event queue + event trace + rules_state; no module in-memory state is authoritative.
 
+## 6G) Encounter Trigger Semantics Contract (Phase 4D)
+- **Purpose:** Make encounter trigger source explicit in event contracts while keeping encounter logic content-free and behaviorally unchanged.
+- **Contract:** `encounter_check` params include explicit `trigger`.
+- **Contract:** Allowed values currently: `"idle"`.
+- **Contract:** Future phases may extend allowed values (for example: `"travel"`) without refactoring the eligibility gate or result-stub seam.
+- **Contract:** Periodic scheduler-based checks must emit `encounter_check` with `trigger="idle"`; interval/cooldown behavior remains unchanged.
+- **Contract:** `encounter_roll` must propagate `tick`, `context`, `roll`, and `trigger` exactly from the triggering check.
+- **Contract:** `encounter_result_stub` must propagate `tick`, `context`, `roll`, `category`, and `trigger` from `encounter_roll` with no added randomness.
+- **Contract:** Trigger is a declarative seam only in Phase 4D; no semantic branching by trigger value is introduced yet.
+- **Contract:** RNG usage remains strictly `sim.rng_stream("encounter_check")`; no new RNG streams and no additional RNG draws.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
