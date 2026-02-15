@@ -262,10 +262,15 @@ class Simulation:
         self.advance_ticks(days * TICKS_PER_DAY)
 
     def rng_state_payload(self) -> dict[str, Any]:
+        stream_states = {
+            name: stream.getstate()
+            for name, stream in sorted(self._rng_streams.items(), key=lambda item: item[0])
+        }
         return {
             "master_seed": self.master_seed,
             "rng_sim_state": self.rng_sim.getstate(),
             "rng_worldgen_state": self.rng_worldgen.getstate(),
+            "rng_stream_states": stream_states,
         }
 
     def restore_rng_state(self, payload: dict[str, Any]) -> None:
@@ -273,12 +278,25 @@ class Simulation:
         self.seed = self.master_seed
         self.rng_worldgen = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_WORLDGEN_STREAM_NAME))
         self.rng_sim = random.Random(derive_stream_seed(master_seed=self.master_seed, stream_name=RNG_SIM_STREAM_NAME))
-        self.rng_sim.setstate(_json_list_to_tuple(payload["rng_sim_state"]))
-        self.rng_worldgen.setstate(_json_list_to_tuple(payload["rng_worldgen_state"]))
-        self._rng_streams = {
-            RNG_WORLDGEN_STREAM_NAME: self.rng_worldgen,
-            RNG_SIM_STREAM_NAME: self.rng_sim,
-        }
+        stream_states = payload.get("rng_stream_states")
+        if isinstance(stream_states, dict):
+            restored_streams: dict[str, random.Random] = {}
+            for name in sorted(stream_states):
+                stream = random.Random(
+                    derive_stream_seed(master_seed=self.master_seed, stream_name=name)
+                )
+                stream.setstate(_json_list_to_tuple(stream_states[name]))
+                restored_streams[name] = stream
+            self._rng_streams = restored_streams
+            self.rng_sim = self._rng_streams[RNG_SIM_STREAM_NAME]
+            self.rng_worldgen = self._rng_streams[RNG_WORLDGEN_STREAM_NAME]
+        else:
+            self.rng_sim.setstate(_json_list_to_tuple(payload["rng_sim_state"]))
+            self.rng_worldgen.setstate(_json_list_to_tuple(payload["rng_worldgen_state"]))
+            self._rng_streams = {
+                RNG_WORLDGEN_STREAM_NAME: self.rng_worldgen,
+                RNG_SIM_STREAM_NAME: self.rng_sim,
+            }
         self.rng = self.rng_sim
 
     def rng_stream(self, name: str) -> random.Random:

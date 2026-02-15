@@ -1,5 +1,6 @@
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import Simulation
+from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.rng import derive_stream_seed
 
 
@@ -31,3 +32,17 @@ def test_worldgen_draws_do_not_perturb_sim_stream() -> None:
     values_after = [sim_b.rng_sim.random() for _ in range(3)]
 
     assert values_before == values_after
+
+
+def test_named_rng_stream_state_round_trips_through_save_payload() -> None:
+    world = load_world_json("content/examples/basic_map.json")
+    sim = Simulation(world=world, seed=222)
+
+    bandit_stream = sim.rng_stream("bandit_ai")
+    _ = [bandit_stream.random() for _ in range(5)]
+
+    reloaded = Simulation.from_simulation_payload(sim.simulation_payload())
+    reloaded_bandit_stream = reloaded.rng_stream("bandit_ai")
+
+    assert reloaded_bandit_stream.random() == bandit_stream.random()
+    assert simulation_hash(reloaded) == simulation_hash(sim)
