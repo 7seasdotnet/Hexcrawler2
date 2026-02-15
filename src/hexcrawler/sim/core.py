@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ TARGET_REACHED_THRESHOLD = 0.05
 
 RNG_SIM_STREAM_NAME = "rng_sim"
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
+MAX_EVENT_TRACE = 256
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -156,6 +158,7 @@ class SimulationState:
     tick: int = 0
     entities: dict[str, EntityState] = field(default_factory=dict)
     rules_state: dict[str, dict[str, Any]] = field(default_factory=dict)
+    event_trace: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def day(self) -> int:
@@ -224,6 +227,9 @@ class Simulation:
 
     def event_execution_trace(self) -> tuple[str, ...]:
         return tuple(self._event_execution_trace)
+
+    def get_event_trace(self) -> list[dict[str, Any]]:
+        return copy.deepcopy(self.state.event_trace)
 
     def set_entity_destination(self, entity_id: str, destination: HexCoord) -> None:
         if self.state.world.get_hex_record(destination) is None:
@@ -330,6 +336,7 @@ class Simulation:
             ],
             "input_log": [command.to_dict() for command in self.input_log],
             "pending_events": [event.to_dict() for event in self.pending_events()],
+            "event_trace": copy.deepcopy(self.state.event_trace),
         }
 
     @classmethod
@@ -368,6 +375,15 @@ class Simulation:
 
         for row in payload.get("pending_events", []):
             sim.schedule_event(SimEvent.from_dict(row))
+
+        raw_event_trace = payload.get("event_trace", [])
+        if not isinstance(raw_event_trace, list):
+            raise ValueError("event_trace must be a list")
+        sim.state.event_trace = []
+        for entry in raw_event_trace:
+            if not isinstance(entry, dict):
+                raise ValueError("event_trace entries must be objects")
+            sim._append_event_trace_entry(entry)
 
         if "rng_state" in payload:
             sim.restore_rng_state(payload["rng_state"])
@@ -417,6 +433,15 @@ class Simulation:
             self._execute_event(event)
             for module in self.rule_modules:
                 module.on_event_executed(self, event)
+            self._append_event_trace_entry(
+                {
+                    "tick": tick,
+                    "event_id": self._trace_event_id_as_int(event.event_id),
+                    "event_type": event.event_type,
+                    "params": copy.deepcopy(event.params),
+                    "module_hooks_called": bool(self.rule_modules),
+                }
+            )
 
     def _execute_event(self, event: SimEvent) -> None:
         if event.event_type in {"noop", "debug_marker"}:
@@ -460,6 +485,35 @@ class Simulation:
 
     def _position_is_within_world(self, x: float, y: float) -> bool:
         return self.state.world.get_hex_record(world_xy_to_axial(x, y)) is not None
+
+    def _append_event_trace_entry(self, entry: dict[str, Any]) -> None:
+        if not isinstance(entry, dict):
+            raise ValueError("event_trace entries must be objects")
+        required = {"tick", "event_id", "event_type", "params"}
+        if not required.issubset(entry):
+            raise ValueError("event_trace entries missing required fields")
+        if not isinstance(entry["tick"], int) or entry["tick"] < 0:
+            raise ValueError("event_trace tick must be a non-negative integer")
+        if not isinstance(entry["event_id"], int):
+            raise ValueError("event_trace event_id must be an integer")
+        if not isinstance(entry["event_type"], str) or not entry["event_type"]:
+            raise ValueError("event_trace event_type must be a non-empty string")
+        if not isinstance(entry["params"], dict):
+            raise ValueError("event_trace params must be an object")
+        _validate_json_value(entry["params"], field_name="event_trace.params")
+        if "module_hooks_called" in entry and not isinstance(entry["module_hooks_called"], bool):
+            raise ValueError("event_trace module_hooks_called must be boolean")
+        self.state.event_trace.append(copy.deepcopy(entry))
+        if len(self.state.event_trace) > MAX_EVENT_TRACE:
+            overflow = len(self.state.event_trace) - MAX_EVENT_TRACE
+            del self.state.event_trace[:overflow]
+
+    @staticmethod
+    def _trace_event_id_as_int(event_id: str) -> int:
+        if event_id.startswith("evt-") and event_id[4:].isdigit():
+            return int(event_id[4:])
+        digest = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        return int(digest[:16], 16)
 
 
 def run_replay(

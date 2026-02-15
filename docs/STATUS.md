@@ -1,13 +1,14 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 3B substrate — serialized `rules_state` store implemented for deterministic rule-module persistence.
-- **Next action:** Continue Phase 3B documentation hardening by appending future prompt/summary/verification tuples to `docs/PROMPTLOG.md` for deterministic process traceability.
+- **Current phase:** Phase 3C substrate — deterministic serialized bounded event execution trace buffer implemented for inspection/debugging.
+- **Next action:** Continue Phase 3C hardening with additional editor-facing read-only inspection wiring that consumes `Simulation.get_event_trace()` without mutating simulation state.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
+  - Deterministic bounded execution trace substrate (`SimulationState.event_trace`) for executed events only, serialized in canonical saves and included in `simulation_hash`.
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
@@ -59,9 +60,12 @@
 - ✅ Phase 2C hardening complete: periodic rehydration now prevents duplicate chains and rejects interval conflicts deterministically.
 - ✅ Phase 3A substrate complete: stateless `CheckRunner` now emits serialized `check` events via `PeriodicScheduler` callbacks.
 - ✅ Phase 3B substrate complete: serialized hash-covered `rules_state` store added to canonical simulation save/load and simulation hashing.
+- ✅ Phase 3C substrate complete: serialized hash-covered bounded `event_trace` execution history added with deterministic FIFO eviction and deep-copy read API.
 
-## New Public APIs (Phase 3A)
+## New Public APIs (Phase 3C)
 - `Simulation.get_rule_module(module_name)`
+- `Simulation.get_event_trace()` (deep-copy, read-only inspection surface for executed-event trace)
+- `hexcrawler.sim.core.MAX_EVENT_TRACE` (hard cap: 256 entries)
 - `Simulation.get_rules_state(module_name)` (copy semantics; mutate via `set_rules_state`)
 - `Simulation.set_rules_state(module_name, state)`
 - `hexcrawler.sim.checks.CheckRunner`
@@ -82,12 +86,13 @@
 - `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py`
 - `PYTHONPATH=src pytest -q tests/test_rule_modules.py`
 - `PYTHONPATH=src pytest -q tests/test_event_queue.py`
+- `PYTHONPATH=src pytest -q tests/test_event_trace.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Added `docs/PROMPTLOG.md` as the canonical reverse-chronological prompt history artifact with required fields (verbatim prompt, Codex summary, commit ref, and verification/manual notes).
-- Bootstrapped the first prompt-trace entry for this docs task to establish deterministic prompt-to-delivery traceability going forward.
-- Updated `docs/STATUS.md` to include the new prompt-log artifact, refreshed next action, and added a direct verification command for reviewing prompt history.
+- Added `SimulationState.event_trace` as a deterministic bounded FIFO buffer (max 256) of executed-event records (`tick`, integer `event_id`, `event_type`, JSON-primitive `params`, optional `module_hooks_called`) with deep-copy read API `Simulation.get_event_trace()`.
+- Wired `event_trace` into canonical simulation save/load payloads and `simulation_hash` so trace history is save/load-safe, replay-safe, and hash-covered.
+- Added substrate tests covering execution recording/order, bounded eviction, hash contribution, canonical save/load round-trip identity, and replay stability.

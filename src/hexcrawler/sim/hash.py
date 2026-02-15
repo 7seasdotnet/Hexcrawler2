@@ -57,6 +57,7 @@ def simulation_hash(simulation: Simulation) -> str:
         "rules_state": dict(sorted(simulation.state.rules_state.items())),
         "next_event_counter": simulation._next_event_counter,
         "pending_events": [event.to_dict() for event in simulation.pending_events()],
+        "event_trace": simulation.get_event_trace(),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
