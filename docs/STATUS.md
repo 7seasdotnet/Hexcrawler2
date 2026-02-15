@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4B domain skeleton — deterministic encounter eligibility gate layered over Phase 4A encounter checks.
-- **Next action:** Plan Phase 4C boundaries for content-free downstream wiring while preserving strict no-content semantics (no encounter tables or resolution yet).
+- **Current phase:** Phase 4V UI visibility pass — read-only encounter inspector panel layered over the Phase 4B encounter skeleton.
+- **Next action:** Plan Phase 4C boundaries for content-free downstream wiring while preserving strict no-content semantics (no encounter tables or resolution yet), now that encounter internals are visible in the running UI.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -20,7 +20,8 @@
 - `src/hexcrawler/cli/viewer.py`
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`).
 - `src/hexcrawler/cli/pygame_viewer.py`
-  - Graphical Phase 1 viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
+  - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
+  - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields, shows cooldown summary values, and lists recent `encounter_check`/`encounter_roll` entries from the executed event trace.
 - `src/hexcrawler/cli/replay_tool.py`
   - Headless replay forensics CLI operating on canonical game saves.
 - `src/hexcrawler/cli/new_save_from_map.py`
@@ -39,6 +40,7 @@
   - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - Run pygame viewer directly from a map template (legacy-compatible flow):
   - `python run_game.py`
+  - Encounter panel location: upper-right "Encounter Debug" section in the running window.
 - Run replay tool from canonical save:
   - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
@@ -64,6 +66,7 @@
 - ✅ Phase 3C substrate complete: serialized hash-covered bounded `event_trace` execution history added with deterministic FIFO eviction and deep-copy read API.
 - ✅ Phase 4A complete: `EncounterCheckModule` emits deterministic structured `encounter_check` events via `PeriodicScheduler`, uses only serialized `rules_state` for pacing state, and remains save/load + replay hash stable.
 - ✅ Phase 4B complete: encounter checks now pass through a deterministic eligibility gate with cooldown accounting and emit `encounter_roll` events (content-free, no resolution).
+- ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
 ## New Public APIs (Phase 4B)
 - `Simulation.get_rule_module(module_name)`
@@ -103,6 +106,6 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## What Changed in This Commit
-- Extended `EncounterCheckModule` with a deterministic eligibility gate, persisted cooldown/accounting fields in `rules_state`, and content-free follow-on `encounter_roll` emission when checks are eligible.
-- Updated encounter module tests to cover deterministic hash identity, save/load continuation, eligibility/event-trace invariants, cooldown behavior, and persisted Phase 4B `rules_state` fields.
-- Updated architecture/status documentation to mark Phase 4B complete and explicitly keep encounter work content-free (no encounter tables or encounter resolution yet).
+- Added a read-only `Encounter Debug` section to the pygame viewer that displays `encounter_check` rules-state values and UI-only cooldown summary fields.
+- Added recent executed encounter event visibility (`encounter_check` + `encounter_roll`) sourced from `Simulation.get_event_trace()` with newest-first bounded display.
+- Updated status documentation to mark Phase 4V encounter visibility as complete and documented where to open the panel in the running app.
