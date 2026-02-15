@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "table_id": "actions_passthrough",
+  "description": "Fixture for action passthrough contract",
+  "entries": [
+    {
+      "entry_id": "custom_actions_entry",
+      "weight": 1,
+      "tags": ["fixture"],
+      "payload": {
+        "actions": [
+          {
+            "action_type": "weather_shift",
+            "template_id": "cold_front_minor",
+            "params": {
+              "duration_ticks": 12,
+              "modifiers": {
+                "visibility": -1
+              }
+            },
+            "unknown_extension": {
+              "extra": true
+            }
+          },
+          {
+            "action_type": "signal_intent",
+            "template_id": "omens.crows",
+            "params": {}
+          }
+        ]
+      }
+    }
+  ]
+}

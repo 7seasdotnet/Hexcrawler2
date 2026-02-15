@@ -149,6 +149,15 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Propagation Contract:** `tick/context/trigger/location/roll/category` are passthrough fields from `encounter_resolve_request` and must be copied unchanged.
 - **Phase Boundary (Hard):** Phase 4H selection is descriptive only; no entity spawning, no world/object mutation, no combat scheduling, no faction/ecology logic, and no trigger/category-based semantic branching beyond default table selection.
 
+## 6K) Encounter Action Grammar Stub (Phase 4I)
+- **Purpose:** Introduce an extensible declarative seam that translates deterministic `encounter_selection_stub` outputs into action vocabulary containers without executing outcomes.
+- **Scheduling Contract:** `EncounterActionModule` listens for `encounter_selection_stub` and schedules `encounter_action_stub` at `event.tick + 1`.
+- **Payload Contract:** `encounter_action_stub` preserves upstream passthrough fields (`tick`, `context`, `trigger`, `location`, `roll`, `category`, `table_id`, `entry_id`) and includes `actions: list[ActionIntent]`.
+- **ActionIntent Contract:** Each action intent is JSON-serializable and contains `action_type: string`, `template_id: string`, and `params: object`; unknown extension fields are preserved when present.
+- **Mapping Contract:** If `entry_payload.actions` exists, pass it through after deterministic normalization; otherwise emit a single fallback action intent (`action_type="signal_intent"`, `template_id=entry_id|signal_id`, `params={"source": "encounter_selection_stub"}`).
+- **Determinism Contract:** Phase 4I introduces no new RNG streams and no RNG draws; save/load and replay hashes must remain stable with action stubs in the event trace.
+- **Phase Boundary (Hard):** `encounter_action_stub` is descriptive only in Phase 4I—no action execution, no spawning, no combat startup, and no world/faction/ecology/object mutation side effects.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
