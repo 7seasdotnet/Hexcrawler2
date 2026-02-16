@@ -16,6 +16,7 @@ ARTIFACT_PRINT_TRACK_LIMIT = 10
 ARTIFACT_PRINT_SPAWN_LIMIT = 10
 ARTIFACT_PRINT_OUTCOME_LIMIT = 20
 ARTIFACT_PRINT_ENTITY_LIMIT = 20
+ARTIFACT_PRINT_RUMOR_LIMIT = 20
 
 
 def _non_negative_int(value: str) -> int:
@@ -148,6 +149,24 @@ def _print_artifacts(simulation: Simulation) -> None:
             f"action_uid={action_uid}"
         )
 
+
+
+    print(f"artifacts.rumors.limit={ARTIFACT_PRINT_RUMOR_LIMIT}")
+    recent_rumors = list(reversed(simulation.state.world.rumors[-ARTIFACT_PRINT_RUMOR_LIMIT:]))
+    if not recent_rumors:
+        print("artifacts.rumor none")
+    for record in recent_rumors:
+        print(
+            "artifacts.rumor "
+            f"rumor_id={record.get('rumor_id', '?')} "
+            f"tick={record.get('created_tick', '?')} "
+            f"location={_format_location(record.get('location'))} "
+            f"template_id={record.get('template_id', '?')} "
+            f"source_action_uid={record.get('source_action_uid', '?')} "
+            f"hop={record.get('hop', '?')} "
+            f"confidence={record.get('confidence', '?')} "
+            f"expires_tick={record.get('expires_tick', '?')}"
+        )
 
     print(f"artifacts.entities.limit={ARTIFACT_PRINT_ENTITY_LIMIT}")
     spawned_entities = [

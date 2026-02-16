@@ -273,3 +273,26 @@ def test_game_loader_rejects_malformed_simulation_state_tick_type(tmp_path: Path
 
     with pytest.raises(ValueError, match="simulation_state.tick"):
         load_game_json(path)
+
+def test_game_save_load_round_trip_preserves_rumors_exactly(tmp_path: Path) -> None:
+    world = load_world_json("content/examples/basic_map.json")
+    simulation = Simulation(world=world, seed=77)
+    simulation.state.world.rumors = [
+        {
+            "rumor_id": "rumor-abc",
+            "created_tick": 4,
+            "location": {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+            "template_id": "rumor.signal_intent",
+            "source_action_uid": "evt-source:0",
+            "confidence": 0.75,
+            "hop": 1,
+            "expires_tick": 200,
+            "payload": {"note": "test"},
+        }
+    ]
+
+    path = tmp_path / "rumors_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+    _, loaded = load_game_json(path)
+
+    assert loaded.state.world.rumors == simulation.state.world.rumors

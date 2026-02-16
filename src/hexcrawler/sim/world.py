@@ -11,6 +11,26 @@ RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
 
 
+def _is_json_primitive(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float, str))
+
+
+def _validate_json_value(value: Any, *, field_name: str) -> None:
+    if _is_json_primitive(value):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_value(item, field_name=field_name)
+        return
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{field_name} keys must be strings")
+            _validate_json_value(nested_value, field_name=field_name)
+        return
+    raise ValueError(f"{field_name} must contain only canonical JSON primitives")
+
+
 def _build_default_hex_record(rng_worldgen: random.Random) -> HexRecord:
     return HexRecord(terrain_type=rng_worldgen.choice(DEFAULT_TERRAIN_OPTIONS))
 
@@ -83,6 +103,73 @@ class HexRecord:
 
 
 @dataclass
+class RumorRecord:
+    rumor_id: str
+    created_tick: int
+    location: dict[str, Any]
+    template_id: str
+    source_action_uid: str
+    confidence: float
+    hop: int
+    expires_tick: int
+    payload: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rumor_id, str) or not self.rumor_id:
+            raise ValueError("rumor_id must be a non-empty string")
+        if not isinstance(self.created_tick, int):
+            raise ValueError("created_tick must be an integer")
+        if not isinstance(self.location, dict):
+            raise ValueError("location must be an object")
+        if not isinstance(self.template_id, str) or not self.template_id:
+            raise ValueError("template_id must be a non-empty string")
+        if not isinstance(self.source_action_uid, str) or not self.source_action_uid:
+            raise ValueError("source_action_uid must be a non-empty string")
+        if not isinstance(self.confidence, (int, float)):
+            raise ValueError("confidence must be numeric")
+        self.confidence = float(self.confidence)
+        if self.confidence < 0.0 or self.confidence > 1.0:
+            raise ValueError("confidence must be within [0.0, 1.0]")
+        if not isinstance(self.hop, int) or self.hop < 0:
+            raise ValueError("hop must be a non-negative integer")
+        if not isinstance(self.expires_tick, int):
+            raise ValueError("expires_tick must be an integer")
+        if self.payload is not None:
+            if not isinstance(self.payload, dict):
+                raise ValueError("payload must be an object when present")
+            _validate_json_value(self.payload, field_name="rumor.payload")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {
+            "rumor_id": self.rumor_id,
+            "created_tick": self.created_tick,
+            "location": dict(self.location),
+            "template_id": self.template_id,
+            "source_action_uid": self.source_action_uid,
+            "confidence": self.confidence,
+            "hop": self.hop,
+            "expires_tick": self.expires_tick,
+        }
+        if self.payload is not None:
+            data["payload"] = dict(self.payload)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RumorRecord":
+        return cls(
+            rumor_id=str(data["rumor_id"]),
+            created_tick=int(data["created_tick"]),
+            location=dict(data["location"]),
+            template_id=str(data["template_id"]),
+            source_action_uid=str(data["source_action_uid"]),
+            confidence=float(data["confidence"]),
+            hop=int(data["hop"]),
+            expires_tick=int(data["expires_tick"]),
+            payload=(dict(data["payload"]) if data.get("payload") is not None else None),
+        )
+
+
+@dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
@@ -90,6 +177,7 @@ class WorldState:
     signals: list[dict[str, Any]] = field(default_factory=list)
     tracks: list[dict[str, Any]] = field(default_factory=list)
     spawn_descriptors: list[dict[str, Any]] = field(default_factory=list)
+    rumors: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def create_with_topology(
@@ -140,6 +228,8 @@ class WorldState:
             )
         if self.spawn_descriptors:
             payload["spawn_descriptors"] = [dict(record) for record in self.spawn_descriptors]
+        if self.rumors:
+            payload["rumors"] = [RumorRecord.from_dict(record).to_dict() for record in self.rumors]
         return payload
 
     @classmethod
@@ -166,6 +256,11 @@ class WorldState:
         if not isinstance(raw_spawn_descriptors, list):
             raise ValueError("spawn_descriptors must be a list")
         world.spawn_descriptors = [dict(row) for row in raw_spawn_descriptors]
+
+        raw_rumors = data.get("rumors", [])
+        if not isinstance(raw_rumors, list):
+            raise ValueError("rumors must be a list")
+        world.rumors = [RumorRecord.from_dict(dict(row)).to_dict() for row in raw_rumors]
         return world
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:
@@ -186,3 +281,7 @@ class WorldState:
 
     def append_spawn_descriptor(self, record: dict[str, Any]) -> None:
         self.spawn_descriptors.append(dict(record))
+
+    def append_rumor(self, record: RumorRecord | dict[str, Any]) -> None:
+        normalized = record if isinstance(record, RumorRecord) else RumorRecord.from_dict(record)
+        self.rumors.append(normalized.to_dict())
