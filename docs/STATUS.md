@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5C — Minimal Entity Instantiation from spawn descriptors (engine-first, no combat/AI).
-- **Next action:** Phase 5D planning: connect materialized entities to explicit command-driven movement/content mappings without introducing autonomous behaviors.
-- **Phase status:** ✅ Phase 5C complete.
+- **Current phase:** Phase 5E — Rumor Pipeline (minimal, deterministic, idempotent).
+- **Next action:** Phase 5F planning: integrate rumor template/content tuning and track discovery UX while preserving deterministic save/load/replay contracts.
+- **Phase status:** ✅ Phase 5E complete.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -19,6 +19,7 @@
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
+  - Rumor pipeline seam (`RumorPipelineModule`) that deterministically creates `world.rumors` from executed `encounter_action_outcome` events, persists emitted-rumor ledger state in `rules_state["rumor_pipeline"]`, and runs serialized periodic propagation/expiration accounting (hop cap 4).
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
@@ -33,11 +34,12 @@
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
   - Uses split layout regions (left world viewport + right fixed-width Encounter Debug panel) so world rendering and the player marker remain visible in the viewport.
-  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/spawns/spawned-entities/outcomes with stable forensic identifiers and newest-first ordering.
-  - World viewport now renders spawned entities distinctly from the player marker while keeping UI rendering strictly read-only.
+  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/spawns/spawned-entities/rumors/outcomes with stable forensic identifiers and newest-first ordering.
+  - Encounter panel rows now wrap by pixel width so long forensic lines stay inside panel bounds.
+  - World viewport renders deterministic decluttered in-hex marker slots for signals/tracks/spawn descriptors/spawned entities while keeping UI rendering strictly read-only.
   - Supports deterministic canonical session persistence in-viewer (`F5` save / `F9` load) using `save_game_json`/`load_game_json` contracts.
 - `src/hexcrawler/cli/replay_tool.py`
-  - Headless replay forensics CLI operating on canonical game saves; artifact output now includes spawned entity IDs/template/location/source-action details.
+  - Headless replay forensics CLI operating on canonical game saves; artifact output includes signals/tracks/spawns/rumors/entities/outcomes.
 - `src/hexcrawler/cli/new_save_from_map.py`
   - CLI bridge that converts a world-only map template into canonical runtime save JSON with seed-controlled simulation initialization.
 - `src/hexcrawler/__main__.py`
@@ -130,12 +132,12 @@
 - `hexcrawler.sim.location.OVERWORLD_HEX_TOPOLOGY`
 
 ## Out of Scope Kept
-- No pathfinding, terrain costs, factions, combat, rumors, wounds, or armor systems in this phase.
+- No pathfinding, terrain costs, factions, combat, wounds, or armor systems in this phase.
 - No networking in this phase.
 
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
-- `python run_game.py [--map-path ...] [--with-encounters] [--save-path ...] [--load-save ...]`
+- `python run_game.py [--map-path ...] [--with-encounters] [--save-path ...] [--load-save ...]  # default map: content/examples/viewer_map.json`
 - `python run_game.py --headless`
 - `HEXCRAWLER_HEADLESS=1 python run_game.py --with-encounters`
 - `python run_game.py --with-encounters --save-path saves/canonical_with_artifacts.json`
@@ -169,8 +171,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Implemented Phase 5C deterministic spawn materialization: `SpawnMaterializationModule` now ensures every spawn descriptor creates stable inert entities (`spawn:<action_uid>:<i>`) exactly once, with serialized/hash-covered ledger state and save/load/replay idempotence.
-- Extended visibility surfaces: pygame viewer now renders spawned entities in-world and lists “Spawned Entities (N=20)” (entity_id/template/location/source action), and replay forensics now prints spawned entity artifacts.
-- Added deterministic test coverage for materialization creation/idempotence/save-load/replay identity and refreshed hash-regression baselines impacted by expanded entity hash coverage.
+- Implemented Phase 5E rumor artifacts: added canonical/hash-covered `world.rumors` records (`rumor_id`, location, source_action_uid, confidence `[0.0,1.0]`, hop, TTL, optional payload), schema validation, and deterministic save/load round-trip support.
+- Added `RumorPipelineModule` to generate rumors only from executed encounter outcomes, enforce idempotence with serialized ledger keys in `rules_state["rumor_pipeline"]`, and run deterministic periodic propagation/expiration accounting using serialized `PeriodicScheduler` events.
+- Fixed viewer UX: wrapped Encounter Debug lines to panel width, added “Recent Rumors (N=20)”, added deterministic in-hex marker slot decluttering, and switched viewer defaults to a larger example map (`content/examples/viewer_map.json`) to avoid the previous ~3-hex exploration trap.
+
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

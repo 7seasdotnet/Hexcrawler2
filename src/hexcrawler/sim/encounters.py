@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
@@ -8,7 +9,7 @@ from hexcrawler.sim.core import EntityState, TRAVEL_STEP_EVENT_TYPE, SimEvent, S
 from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import HexCoord
+from hexcrawler.sim.world import HexCoord, RumorRecord
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -25,6 +26,10 @@ ENCOUNTER_TRIGGER_IDLE = "idle"
 ENCOUNTER_TRIGGER_TRAVEL = "travel"
 ENCOUNTER_CHANCE_PERCENT = 20
 ENCOUNTER_COOLDOWN_TICKS = 30
+RUMOR_PROPAGATION_TASK_NAME = "rumor_pipeline:propagate"
+RUMOR_PROPAGATION_INTERVAL_TICKS = 50
+RUMOR_HOP_CAP = 4
+RUMOR_TTL_TICKS = 200
 
 
 class EncounterSelectionModule(RuleModule):
@@ -327,6 +332,170 @@ class EncounterActionExecutionModule(RuleModule):
         if not isinstance(location, dict):
             raise ValueError("encounter_action_execute location must be an object")
         return copy.deepcopy(location)
+
+
+
+
+class RumorPipelineModule(RuleModule):
+    """Phase 5E deterministic rumor pipeline from executed encounter outcomes."""
+
+    name = "rumor_pipeline"
+
+    def on_simulation_start(self, sim: Simulation) -> None:
+        scheduler = sim.get_rule_module(PeriodicScheduler.name)
+        if scheduler is None:
+            scheduler = PeriodicScheduler()
+            sim.register_rule_module(scheduler)
+        if not isinstance(scheduler, PeriodicScheduler):
+            raise TypeError("periodic_scheduler module must be a PeriodicScheduler")
+
+        sim.set_rules_state(self.name, self._rules_state(sim))
+        scheduler.register_task(
+            task_name=RUMOR_PROPAGATION_TASK_NAME,
+            interval_ticks=RUMOR_PROPAGATION_INTERVAL_TICKS,
+            start_tick=0,
+        )
+        scheduler.set_task_callback(RUMOR_PROPAGATION_TASK_NAME, self._build_tick_callback())
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE:
+            return
+        params = event.params
+        if str(params.get("outcome", "")) != "executed":
+            return
+        action_uid = str(params.get("action_uid", ""))
+        if not action_uid:
+            raise ValueError("encounter_action_outcome.action_uid must be a non-empty string")
+
+        state = self._rules_state(sim)
+        emitted = set(state["emitted_ledger_keys"])
+        ledger_key = f"base:{action_uid}"
+        if ledger_key in emitted:
+            return
+
+        location = self._location_dict(params.get("location"))
+        created_tick = int(event.tick)
+        record = RumorRecord(
+            rumor_id=self._rumor_id_for_identity(ledger_key),
+            created_tick=created_tick,
+            location=location,
+            template_id=f"rumor.{str(params.get('action_type', 'unknown'))}",
+            source_action_uid=action_uid,
+            confidence=0.75,
+            hop=0,
+            expires_tick=created_tick + RUMOR_TTL_TICKS,
+            payload={
+                "source_outcome_event_id": event.event_id,
+                "mutation": str(params.get("mutation", "none")),
+            },
+        )
+        sim.state.world.append_rumor(record)
+        emitted.add(ledger_key)
+        state["emitted_ledger_keys"] = sorted(emitted)
+        sim.set_rules_state(self.name, state)
+
+    def _build_tick_callback(self):
+        def _on_periodic(sim: Simulation, tick: int) -> None:
+            self._process_periodic_tick(sim, tick)
+
+        return _on_periodic
+
+    def _process_periodic_tick(self, sim: Simulation, tick: int) -> None:
+        state = self._rules_state(sim)
+        emitted = set(state["emitted_ledger_keys"])
+
+        for index, rumor in enumerate(sim.state.world.rumors):
+            payload = rumor.get("payload")
+            payload = payload if isinstance(payload, dict) else None
+            expires_tick = int(rumor.get("expires_tick", -1))
+            if tick > expires_tick and payload is not None and payload.get("expired") is not True:
+                next_payload = dict(payload)
+                next_payload["expired"] = True
+                next_payload["expired_tick"] = tick
+                sim.state.world.rumors[index]["payload"] = next_payload
+
+        for rumor in list(sim.state.world.rumors):
+            if int(rumor.get("hop", 0)) >= RUMOR_HOP_CAP:
+                continue
+            if tick > int(rumor.get("expires_tick", -1)):
+                continue
+            next_location = self._propagated_location(sim, rumor)
+            if next_location is None:
+                continue
+
+            next_hop = int(rumor.get("hop", 0)) + 1
+            source_action_uid = str(rumor.get("source_action_uid", ""))
+            ledger_key = (
+                f"prop:{str(rumor.get('rumor_id', '?'))}:"
+                f"{next_hop}:{next_location['coord']['q']}:{next_location['coord']['r']}"
+            )
+            if ledger_key in emitted:
+                continue
+
+            parent_confidence = float(rumor.get("confidence", 0.0))
+            confidence = max(0.1, round(parent_confidence * 0.8, 4))
+            child = RumorRecord(
+                rumor_id=self._rumor_id_for_identity(ledger_key),
+                created_tick=tick,
+                location=next_location,
+                template_id=str(rumor.get("template_id", "rumor.unknown")),
+                source_action_uid=source_action_uid,
+                confidence=confidence,
+                hop=next_hop,
+                expires_tick=tick + RUMOR_TTL_TICKS,
+                payload={"derived_from": str(rumor.get("rumor_id", ""))},
+            )
+            sim.state.world.append_rumor(child)
+            emitted.add(ledger_key)
+
+        state["emitted_ledger_keys"] = sorted(emitted)
+        sim.set_rules_state(self.name, state)
+
+    def _propagated_location(self, sim: Simulation, rumor: dict[str, Any]) -> dict[str, Any] | None:
+        location = LocationRef.from_dict(self._location_dict(rumor.get("location")))
+        if location.topology_type != "overworld_hex":
+            return None
+        source = HexCoord(q=int(location.coord["q"]), r=int(location.coord["r"]))
+        neighbors = [
+            HexCoord(source.q + 1, source.r),
+            HexCoord(source.q + 1, source.r - 1),
+            HexCoord(source.q, source.r - 1),
+            HexCoord(source.q - 1, source.r),
+            HexCoord(source.q - 1, source.r + 1),
+            HexCoord(source.q, source.r + 1),
+        ]
+        preferred = self._stable_index(f"{rumor.get('rumor_id','')}:{rumor.get('hop', 0)}", len(neighbors))
+        for offset in range(len(neighbors)):
+            candidate = neighbors[(preferred + offset) % len(neighbors)]
+            if sim.state.world.get_hex_record(candidate) is None:
+                continue
+            return LocationRef.from_overworld_hex(candidate).to_dict()
+        return None
+
+    def _location_dict(self, payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("rumor pipeline expected dict location")
+        return LocationRef.from_dict(payload).to_dict()
+
+    def _rules_state(self, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        raw_ledger = state.get("emitted_ledger_keys", [])
+        if not isinstance(raw_ledger, list):
+            raise ValueError("rumor_pipeline.rules_state.emitted_ledger_keys must be a list")
+        normalized: list[str] = []
+        for item in raw_ledger:
+            if not isinstance(item, str) or not item:
+                raise ValueError("rumor_pipeline.rules_state.emitted_ledger_keys entries must be non-empty strings")
+            normalized.append(item)
+        return {"emitted_ledger_keys": sorted(set(normalized))}
+
+    def _rumor_id_for_identity(self, identity: str) -> str:
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        return f"rumor-{digest[:20]}"
+
+    def _stable_index(self, value: str, width: int) -> int:
+        digest = hashlib.sha256(value.encode("utf-8")).digest()
+        return int.from_bytes(digest[:4], byteorder="big") % width
 
 
 class SpawnMaterializationModule(RuleModule):

@@ -92,6 +92,14 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
             field_name=f"{field_prefix}.spawn_descriptors[{index}]",
         )
 
+    rumors = payload.get("rumors", [])
+    if not isinstance(rumors, list):
+        raise ValueError(f"{field_prefix}.rumors must be a list when present")
+    for index, record in enumerate(rumors):
+        if not isinstance(record, dict):
+            raise ValueError(f"{field_prefix}.rumors[{index}] must be an object")
+        _validate_rumor_record(record, field_name=f"{field_prefix}.rumors[{index}]")
+
 
 def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -> None:
     required_int_fields = {"created_tick", "quantity"}
@@ -114,6 +122,37 @@ def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -
     if expires_tick is not None and not isinstance(expires_tick, int):
         raise ValueError(f"{field_name}.expires_tick must be an integer when present")
 
+
+
+
+def _validate_rumor_record(record: dict[str, Any], *, field_name: str) -> None:
+    required_string_fields = {"rumor_id", "template_id", "source_action_uid"}
+    for key in required_string_fields:
+        value = record.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{field_name}.{key} must be a non-empty string")
+
+    required_int_fields = {"created_tick", "hop", "expires_tick"}
+    for key in required_int_fields:
+        value = record.get(key)
+        if not isinstance(value, int):
+            raise ValueError(f"{field_name}.{key} must be an integer")
+
+    confidence = record.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        raise ValueError(f"{field_name}.confidence must be numeric")
+    if float(confidence) < 0.0 or float(confidence) > 1.0:
+        raise ValueError(f"{field_name}.confidence must be within [0.0, 1.0]")
+
+    location = record.get("location")
+    if not isinstance(location, dict):
+        raise ValueError(f"{field_name}.location must be an object")
+
+    payload = record.get("payload")
+    if payload is not None:
+        if not isinstance(payload, dict):
+            raise ValueError(f"{field_name}.payload must be an object when present")
+        _validate_json_value(payload, field_name=f"{field_name}.payload")
 
 def validate_world_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -20,6 +21,7 @@ from hexcrawler.sim.encounters import (
     EncounterActionModule,
     EncounterCheckModule,
     EncounterSelectionModule,
+    RumorPipelineModule,
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
@@ -49,7 +51,24 @@ ENCOUNTER_DEBUG_TRACK_LIMIT = 10
 ENCOUNTER_DEBUG_SPAWN_LIMIT = 10
 ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
+ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
+
+MARKER_SLOT_OFFSETS: tuple[tuple[int, int], ...] = (
+    (0, 0),
+    (8, 0),
+    (4, 7),
+    (-4, 7),
+    (-8, 0),
+    (-4, -7),
+    (4, -7),
+    (12, 0),
+    (6, 11),
+    (-6, 11),
+    (-12, 0),
+    (-6, -11),
+    (6, -11),
+)
 
 pygame: Any | None = None
 
@@ -69,6 +88,7 @@ class EncounterPanelScrollState:
     spawns_offset: int = 0
     outcomes_offset: int = 0
     entities_offset: int = 0
+    rumors_offset: int = 0
 
     def offset_for(self, section: str) -> int:
         if section == "signals":
@@ -79,6 +99,8 @@ class EncounterPanelScrollState:
             return self.spawns_offset
         if section == "entities":
             return self.entities_offset
+        if section == "rumors":
+            return self.rumors_offset
         return self.outcomes_offset
 
     def scroll(self, section: str, delta: int, total_count: int, page_size: int) -> None:
@@ -92,6 +114,8 @@ class EncounterPanelScrollState:
             self.spawns_offset = next_offset
         elif section == "entities":
             self.entities_offset = next_offset
+        elif section == "rumors":
+            self.rumors_offset = next_offset
         else:
             self.outcomes_offset = next_offset
 
@@ -206,6 +230,113 @@ def _panel_rect() -> pygame.Rect:
     return pygame.Rect(panel_x, PANEL_MARGIN, PANEL_WIDTH, WINDOW_SIZE[1] - (PANEL_MARGIN * 2))
 
 
+
+
+def _stable_index(key: str, width: int) -> int:
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], byteorder="big") % width
+
+
+def _wrap_text_to_pixel_width(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+    if max_width <= 0:
+        return [text]
+    words = text.split(" ")
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if font.size(candidate)[0] <= max_width:
+            current = candidate
+            continue
+        if font.size(current)[0] > max_width:
+            lines.extend(_hard_wrap_text(current, font, max_width))
+        else:
+            lines.append(current)
+        current = word
+    if font.size(current)[0] > max_width:
+        lines.extend(_hard_wrap_text(current, font, max_width))
+    else:
+        lines.append(current)
+    return lines
+
+
+def _hard_wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+    if not text:
+        return [""]
+    rows: list[str] = []
+    remaining = text
+    while remaining:
+        cut = len(remaining)
+        while cut > 1 and font.size(remaining[:cut])[0] > max_width:
+            cut -= 1
+        rows.append(remaining[:cut])
+        remaining = remaining[cut:]
+    return rows
+
+
+def _coord_from_location(location: object) -> HexCoord | None:
+    if not isinstance(location, dict):
+        return None
+    coord = location.get("coord")
+    if not isinstance(coord, dict):
+        return None
+    try:
+        return HexCoord(q=int(coord["q"]), r=int(coord["r"]))
+    except Exception:
+        return None
+
+
+def _draw_world_markers(
+    screen: pygame.Surface,
+    sim: Simulation,
+    center: tuple[float, float],
+) -> None:
+    markers_by_hex: dict[HexCoord, list[tuple[str, tuple[int, int, int], int]]] = {}
+
+    def add_marker(hex_coord: HexCoord | None, marker_id: str, color: tuple[int, int, int], radius: int) -> None:
+        if hex_coord is None:
+            return
+        markers_by_hex.setdefault(hex_coord, []).append((marker_id, color, radius))
+
+    for record in sim.state.world.signals:
+        marker_id = f"signal:{record.get('signal_uid', '')}"
+        add_marker(_coord_from_location(record.get("location")), marker_id, (255, 202, 96), 4)
+
+    for record in sim.state.world.tracks:
+        marker_id = f"track:{record.get('track_uid', '')}"
+        add_marker(_coord_from_location(record.get("location")), marker_id, (205, 183, 255), 3)
+
+    for index, record in enumerate(sim.state.world.spawn_descriptors):
+        action_uid = str(record.get("action_uid", "?"))
+        marker_id = f"spawn_desc:{action_uid}:{index}"
+        add_marker(_coord_from_location(record.get("location")), marker_id, (96, 198, 255), 4)
+
+    for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+        if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
+            continue
+        add_marker(entity.hex_coord, f"entity:{entity.entity_id}", (140, 225, 255), 5)
+
+    for hex_coord in sorted(markers_by_hex):
+        center_x, center_y = _axial_to_pixel(hex_coord, center)
+        markers = sorted(markers_by_hex[hex_coord], key=lambda row: row[0])
+        used_slots: set[int] = set()
+        for marker_id, color, radius in markers:
+            preferred = _stable_index(marker_id, len(MARKER_SLOT_OFFSETS))
+            slot_index = preferred
+            for offset in range(len(MARKER_SLOT_OFFSETS)):
+                candidate = (preferred + offset) % len(MARKER_SLOT_OFFSETS)
+                if candidate not in used_slots:
+                    slot_index = candidate
+                    break
+            used_slots.add(slot_index)
+            offset_x, offset_y = MARKER_SLOT_OFFSETS[slot_index]
+            x = int(center_x + offset_x)
+            y = int(center_y + offset_y)
+            pygame.draw.circle(screen, color, (x, y), radius)
+            pygame.draw.circle(screen, (14, 24, 30), (x, y), radius, 1)
+
 def _draw_world(
     screen: pygame.Surface,
     sim: Simulation,
@@ -228,6 +359,8 @@ def _draw_world(
         if record and record.site_type != "none":
             site_color = SITE_COLORS.get(record.site_type, (245, 245, 120))
             pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
+
+    _draw_world_markers(screen, sim, center)
     screen.set_clip(old_clip)
 
 
@@ -341,6 +474,7 @@ def _draw_encounter_debug_panel(
     recent_signals = list(reversed(sim.state.world.signals[-ENCOUNTER_DEBUG_SIGNAL_LIMIT:]))
     recent_tracks = list(reversed(sim.state.world.tracks[-ENCOUNTER_DEBUG_TRACK_LIMIT:]))
     recent_spawns = list(reversed(sim.state.world.spawn_descriptors[-ENCOUNTER_DEBUG_SPAWN_LIMIT:]))
+    recent_rumors = list(reversed(sim.state.world.rumors[-ENCOUNTER_DEBUG_RUMOR_LIMIT:]))
     spawned_entities = [
         entity for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id)
         if entity.entity_id != PLAYER_ID and entity.entity_id.startswith("spawn:")
@@ -393,6 +527,17 @@ def _draw_encounter_debug_panel(
     ]
 
 
+    rumor_rows = [
+        (
+            f"  rumor_id={record.get('rumor_id', '?')} "
+            f"hop={record.get('hop', '?')} "
+            f"confidence={record.get('confidence', '?')} "
+            f"location={_format_location(record.get('location'))} "
+            f"template={record.get('template_id', '?')}"
+        )
+        for record in recent_rumors
+    ]
+
     entity_rows = [
         (
             f"  entity_id={entity.entity_id} "
@@ -424,8 +569,10 @@ def _draw_encounter_debug_panel(
             screen.blit(font.render("  none", True, (205, 205, 210)), (panel_rect.x + 10, y))
             y += 16
         for row in slice_rows:
-            screen.blit(font.render(row, True, (205, 205, 210)), (panel_rect.x + 10, y))
-            y += 16
+            wrapped = _wrap_text_to_pixel_width(row, font, panel_rect.width - 24)
+            for wrapped_row in wrapped:
+                screen.blit(font.render(wrapped_row, True, (205, 205, 210)), (panel_rect.x + 10, y))
+                y += 16
         section_rects[section] = pygame.Rect(panel_rect.x + 6, section_top, panel_rect.width - 12, y - section_top)
         y += 6
 
@@ -434,6 +581,7 @@ def _draw_encounter_debug_panel(
     render_section("tracks", "Recent Tracks", track_rows)
     render_section("spawns", "Recent Spawns (N=10)", spawn_rows)
     render_section("entities", "Spawned Entities (N=20)", entity_rows)
+    render_section("rumors", "Recent Rumors (N=20)", rumor_rows)
     render_section("outcomes", "Recent Action Outcomes", outcome_rows)
     return section_rects, section_counts
 
@@ -479,7 +627,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--map-path",
-        default="content/examples/basic_map.json",
+        default="content/examples/viewer_map.json",
         help="Path to world map JSON template.",
     )
     parser.add_argument(
@@ -540,6 +688,7 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
     sim.register_rule_module(EncounterActionModule())
     sim.register_rule_module(EncounterActionExecutionModule())
+    sim.register_rule_module(RumorPipelineModule())
     sim.register_rule_module(SpawnMaterializationModule())
 
 
@@ -580,7 +729,7 @@ def _save_viewer_simulation(sim: Simulation, save_path: str) -> None:
 
 
 def run_pygame_viewer(
-    map_path: str = "content/examples/basic_map.json",
+    map_path: str = "content/examples/viewer_map.json",
     *,
     with_encounters: bool = False,
     headless: bool = False,
@@ -735,13 +884,6 @@ def run_pygame_viewer(
         interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, PLAYER_ID, alpha)
         if interpolated is not None:
             _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
-        for entity_id in sorted(sim.state.entities):
-            if entity_id == PLAYER_ID or not entity_id.startswith("spawn:"):
-                continue
-            entity_pos = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
-            if entity_pos is None:
-                continue
-            _draw_spawned_entity(screen, entity_pos[0], entity_pos[1], world_center, clip_rect=viewport_rect)
         _draw_hud(screen, sim, font)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll)
         _draw_context_menu(screen, font, context_menu, viewport_rect)
