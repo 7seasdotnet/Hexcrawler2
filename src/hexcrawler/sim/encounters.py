@@ -4,10 +4,11 @@ import copy
 from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
-from hexcrawler.sim.core import TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
+from hexcrawler.sim.core import EntityState, TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.world import HexCoord
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -17,6 +18,7 @@ ENCOUNTER_SELECTION_STUB_EVENT_TYPE = "encounter_selection_stub"
 ENCOUNTER_ACTION_STUB_EVENT_TYPE = "encounter_action_stub"
 ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE = "encounter_action_execute"
 ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE = "encounter_action_outcome"
+SPAWN_ENTITY_ID_PREFIX = "spawn"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_TRIGGER_IDLE = "idle"
@@ -325,6 +327,75 @@ class EncounterActionExecutionModule(RuleModule):
         if not isinstance(location, dict):
             raise ValueError("encounter_action_execute location must be an object")
         return copy.deepcopy(location)
+
+
+class SpawnMaterializationModule(RuleModule):
+    """Phase 5C deterministic materialization from spawn descriptors into entities."""
+
+    name = "spawn_materialization"
+
+    def on_simulation_start(self, sim: Simulation) -> None:
+        sim.set_rules_state(self.name, self._rules_state(sim))
+
+    def on_tick_start(self, sim: Simulation, tick: int) -> None:
+        self._materialize(sim)
+
+    def _materialize(self, sim: Simulation) -> None:
+        state = self._rules_state(sim)
+        materialized_ids = set(state["materialized_entity_ids"])
+
+        for descriptor in sim.state.world.spawn_descriptors:
+            action_uid = self._required_non_empty_string(descriptor.get("action_uid"), field_name="action_uid")
+            template_id = self._required_non_empty_string(descriptor.get("template_id"), field_name="template_id")
+            quantity = int(descriptor.get("quantity", 0))
+            if quantity < 1:
+                raise ValueError("spawn_descriptor quantity must be >= 1")
+
+            spawn_hex = self._hex_from_location(descriptor.get("location"))
+            for index in range(quantity):
+                entity_id = self._entity_id(action_uid=action_uid, index=index)
+                if entity_id in sim.state.entities:
+                    materialized_ids.add(entity_id)
+                    continue
+
+                entity = EntityState.from_hex(entity_id=entity_id, hex_coord=spawn_hex, speed_per_tick=0.0)
+                entity.template_id = template_id
+                entity.source_action_uid = action_uid
+                sim.add_entity(entity)
+                materialized_ids.add(entity_id)
+
+        state["materialized_entity_ids"] = sorted(materialized_ids)
+        sim.set_rules_state(self.name, state)
+
+    def _rules_state(self, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        raw_ids = state.get("materialized_entity_ids", [])
+        if not isinstance(raw_ids, list):
+            raise ValueError("spawn_materialization.rules_state.materialized_entity_ids must be a list")
+        normalized_ids: list[str] = []
+        for value in raw_ids:
+            if not isinstance(value, str) or not value:
+                raise ValueError("spawn_materialization.rules_state.materialized_entity_ids entries must be strings")
+            normalized_ids.append(value)
+        return {"materialized_entity_ids": sorted(set(normalized_ids))}
+
+    def _hex_from_location(self, location_payload: Any):
+        if not isinstance(location_payload, dict):
+            raise ValueError("spawn_descriptor.location must be an object")
+        location = LocationRef.from_dict(location_payload)
+        if location.topology_type != "overworld_hex":
+            raise ValueError("spawn_descriptor.location.topology_type must be overworld_hex")
+        q = int(location.coord["q"])
+        r = int(location.coord["r"])
+        return HexCoord(q=q, r=r)
+
+    def _required_non_empty_string(self, value: Any, *, field_name: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"spawn_descriptor {field_name} must be a non-empty string")
+        return value
+
+    def _entity_id(self, *, action_uid: str, index: int) -> str:
+        return f"{SPAWN_ENTITY_ID_PREFIX}:{action_uid}:{index}"
 
 
 class EncounterCheckModule(RuleModule):

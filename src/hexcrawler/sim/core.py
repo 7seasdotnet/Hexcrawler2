@@ -141,6 +141,8 @@ class EntityState:
     move_input_x: float = 0.0
     move_input_y: float = 0.0
     target_position: tuple[float, float] | None = None
+    template_id: str | None = None
+    source_action_uid: str | None = None
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -352,6 +354,8 @@ class Simulation:
                     "move_input_x": entity.move_input_x,
                     "move_input_y": entity.move_input_y,
                     "target_position": list(entity.target_position) if entity.target_position else None,
+                    "template_id": entity.template_id,
+                    "source_action_uid": entity.source_action_uid,
                 }
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
@@ -388,6 +392,10 @@ class Simulation:
                 move_input_x=float(row.get("move_input_x", 0.0)),
                 move_input_y=float(row.get("move_input_y", 0.0)),
                 target_position=(tuple(row["target_position"]) if row.get("target_position") is not None else None),
+                template_id=(str(row["template_id"]) if row.get("template_id") is not None else None),
+                source_action_uid=(
+                    str(row["source_action_uid"]) if row.get("source_action_uid") is not None else None
+                ),
             )
             sim.add_entity(entity)
 

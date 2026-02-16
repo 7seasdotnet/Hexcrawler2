@@ -20,6 +20,7 @@ from hexcrawler.sim.encounters import (
     EncounterActionModule,
     EncounterCheckModule,
     EncounterSelectionModule,
+    SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
@@ -47,6 +48,7 @@ ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
 ENCOUNTER_DEBUG_TRACK_LIMIT = 10
 ENCOUNTER_DEBUG_SPAWN_LIMIT = 10
 ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
+ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 
 pygame: Any | None = None
@@ -66,6 +68,7 @@ class EncounterPanelScrollState:
     tracks_offset: int = 0
     spawns_offset: int = 0
     outcomes_offset: int = 0
+    entities_offset: int = 0
 
     def offset_for(self, section: str) -> int:
         if section == "signals":
@@ -74,6 +77,8 @@ class EncounterPanelScrollState:
             return self.tracks_offset
         if section == "spawns":
             return self.spawns_offset
+        if section == "entities":
+            return self.entities_offset
         return self.outcomes_offset
 
     def scroll(self, section: str, delta: int, total_count: int, page_size: int) -> None:
@@ -85,6 +90,8 @@ class EncounterPanelScrollState:
             self.tracks_offset = next_offset
         elif section == "spawns":
             self.spawns_offset = next_offset
+        elif section == "entities":
+            self.entities_offset = next_offset
         else:
             self.outcomes_offset = next_offset
 
@@ -241,6 +248,25 @@ def _draw_entity(
     screen.set_clip(old_clip)
 
 
+
+
+def _draw_spawned_entity(
+    screen: pygame.Surface,
+    world_x: float,
+    world_y: float,
+    center: tuple[float, float],
+    *,
+    clip_rect: pygame.Rect,
+) -> None:
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
+    x = int(center[0] + world_x * HEX_SIZE)
+    y = int(center[1] + world_y * HEX_SIZE)
+    pygame.draw.circle(screen, (140, 225, 255), (x, y), 5)
+    pygame.draw.circle(screen, (14, 24, 30), (x, y), 5, 1)
+    screen.set_clip(old_clip)
+
+
 def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -> None:
     entity = sim.state.entities[PLAYER_ID]
     lines = [
@@ -315,6 +341,10 @@ def _draw_encounter_debug_panel(
     recent_signals = list(reversed(sim.state.world.signals[-ENCOUNTER_DEBUG_SIGNAL_LIMIT:]))
     recent_tracks = list(reversed(sim.state.world.tracks[-ENCOUNTER_DEBUG_TRACK_LIMIT:]))
     recent_spawns = list(reversed(sim.state.world.spawn_descriptors[-ENCOUNTER_DEBUG_SPAWN_LIMIT:]))
+    spawned_entities = [
+        entity for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id)
+        if entity.entity_id != PLAYER_ID and entity.entity_id.startswith("spawn:")
+    ]
     filtered_trace = [
         entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
     ]
@@ -362,6 +392,17 @@ def _draw_encounter_debug_panel(
         for record in recent_spawns
     ]
 
+
+    entity_rows = [
+        (
+            f"  entity_id={entity.entity_id} "
+            f"template={entity.template_id if entity.template_id else '-'} "
+            f"location=overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r} "
+            f"action_uid={entity.source_action_uid if entity.source_action_uid else '-'}"
+        )
+        for entity in reversed(spawned_entities[-ENCOUNTER_DEBUG_ENTITY_LIMIT:])
+    ]
+
     section_rects: dict[str, pygame.Rect] = {}
     section_counts: dict[str, int] = {}
 
@@ -392,6 +433,7 @@ def _draw_encounter_debug_panel(
     render_section("signals", "Recent Signals", signal_rows)
     render_section("tracks", "Recent Tracks", track_rows)
     render_section("spawns", "Recent Spawns (N=10)", spawn_rows)
+    render_section("entities", "Spawned Entities (N=20)", entity_rows)
     render_section("outcomes", "Recent Action Outcomes", outcome_rows)
     return section_rects, section_counts
 
@@ -498,6 +540,7 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
     sim.register_rule_module(EncounterActionModule())
     sim.register_rule_module(EncounterActionExecutionModule())
+    sim.register_rule_module(SpawnMaterializationModule())
 
 
 def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulation:
@@ -692,6 +735,13 @@ def run_pygame_viewer(
         interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, PLAYER_ID, alpha)
         if interpolated is not None:
             _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
+        for entity_id in sorted(sim.state.entities):
+            if entity_id == PLAYER_ID or not entity_id.startswith("spawn:"):
+                continue
+            entity_pos = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
+            if entity_pos is None:
+                continue
+            _draw_spawned_entity(screen, entity_pos[0], entity_pos[1], world_center, clip_rect=viewport_rect)
         _draw_hud(screen, sim, font)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll)
         _draw_context_menu(screen, font, context_menu, viewport_rect)

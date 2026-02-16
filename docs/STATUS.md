@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5B — Spawn Descriptor Records (data-only spawn intents, no entity instantiation).
-- **Next action:** Phase 5C planning: consume spawn descriptors in downstream deterministic systems while preserving replay/save idempotence boundaries.
-- **Phase status:** ✅ Phase 5B complete.
+- **Current phase:** Phase 5C — Minimal Entity Instantiation from spawn descriptors (engine-first, no combat/AI).
+- **Next action:** Phase 5D planning: connect materialized entities to explicit command-driven movement/content mappings without introducing autonomous behaviors.
+- **Phase status:** ✅ Phase 5C complete.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -18,6 +18,7 @@
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
+  - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
@@ -32,10 +33,11 @@
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
   - Uses split layout regions (left world viewport + right fixed-width Encounter Debug panel) so world rendering and the player marker remain visible in the viewport.
-  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/spawns/outcomes with stable forensic identifiers and newest-first ordering.
+  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/spawns/spawned-entities/outcomes with stable forensic identifiers and newest-first ordering.
+  - World viewport now renders spawned entities distinctly from the player marker while keeping UI rendering strictly read-only.
   - Supports deterministic canonical session persistence in-viewer (`F5` save / `F9` load) using `save_game_json`/`load_game_json` contracts.
 - `src/hexcrawler/cli/replay_tool.py`
-  - Headless replay forensics CLI operating on canonical game saves.
+  - Headless replay forensics CLI operating on canonical game saves; artifact output now includes spawned entity IDs/template/location/source-action details.
 - `src/hexcrawler/cli/new_save_from_map.py`
   - CLI bridge that converts a world-only map template into canonical runtime save JSON with seed-controlled simulation initialization.
 - `src/hexcrawler/__main__.py`
@@ -119,6 +121,7 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE`
 - `hexcrawler.sim.encounters.ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE`
 - `hexcrawler.sim.encounters.EncounterActionExecutionModule`
+- `hexcrawler.sim.encounters.SpawnMaterializationModule`
 - `hexcrawler.content.encounters.load_encounter_table_json(path)`
 - `hexcrawler.content.encounters.validate_encounter_table_payload(payload)`
 - `hexcrawler.content.encounters.DEFAULT_ENCOUNTER_TABLE_PATH`
@@ -159,10 +162,15 @@
 - `track_intent`
 - `spawn_intent`
 
-## What Changed in This Commit
-- Added Phase 5B deterministic spawn recording substrate: `world.spawn_descriptors` is now a serialized/hash-covered world container and `EncounterActionExecutionModule` now executes `spawn_intent` by appending data-only descriptors with action-UID idempotence (no entity spawning/AI/combat).
-- Extended visibility tooling: replay CLI `--print-artifacts` now prints recent spawn descriptors (newest-first, limit=10), and pygame Encounter Debug now includes a scrollable “Recent Spawns (N=10)” section with created tick/location/template/quantity/expiry/action UID.
-- Added coverage for spawn-intent execution/idempotence/replay summary stability, save/load spawn-descriptor round-trip + malformed-schema rejection, and content validation/examples including `spawn_intent` actions.
+## Track Emission Note
+- `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
 
+## Repo Hygiene Note
+- Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
+
+## What Changed in This Commit
+- Implemented Phase 5C deterministic spawn materialization: `SpawnMaterializationModule` now ensures every spawn descriptor creates stable inert entities (`spawn:<action_uid>:<i>`) exactly once, with serialized/hash-covered ledger state and save/load/replay idempotence.
+- Extended visibility surfaces: pygame viewer now renders spawned entities in-world and lists “Spawned Entities (N=20)” (entity_id/template/location/source action), and replay forensics now prints spawned entity artifacts.
+- Added deterministic test coverage for materialization creation/idempotence/save-load/replay identity and refreshed hash-regression baselines impacted by expanded entity hash coverage.
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

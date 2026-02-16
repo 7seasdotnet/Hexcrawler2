@@ -50,6 +50,8 @@ def simulation_hash(simulation: Simulation) -> str:
                     if entity.target_position
                     else None
                 ),
+                "template_id": entity.template_id,
+                "source_action_uid": entity.source_action_uid,
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],

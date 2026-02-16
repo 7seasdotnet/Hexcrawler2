@@ -16,6 +16,7 @@ from hexcrawler.sim.encounters import (
     EncounterActionModule,
     EncounterCheckModule,
     EncounterSelectionModule,
+    SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash
 
@@ -53,10 +54,12 @@ def test_viewer_simulation_registers_encounter_modules_only_when_enabled() -> No
     assert neutral_sim.get_rule_module(EncounterSelectionModule.name) is None
     assert neutral_sim.get_rule_module(EncounterActionModule.name) is None
     assert neutral_sim.get_rule_module(EncounterActionExecutionModule.name) is None
+    assert neutral_sim.get_rule_module(SpawnMaterializationModule.name) is None
     assert enabled_sim.get_rule_module(EncounterCheckModule.name) is not None
     assert enabled_sim.get_rule_module(EncounterSelectionModule.name) is not None
     assert enabled_sim.get_rule_module(EncounterActionModule.name) is not None
     assert enabled_sim.get_rule_module(EncounterActionExecutionModule.name) is not None
+    assert enabled_sim.get_rule_module(SpawnMaterializationModule.name) is not None
 
 
 def test_simulation_controller_appends_move_vector_command() -> None:
