@@ -8,7 +8,7 @@ import pygame
 
 from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
 from hexcrawler.content.io import load_world_json
-from hexcrawler.sim.core import EntityState, Simulation, TICKS_PER_DAY
+from hexcrawler.sim.core import EntityState, SimCommand, Simulation, TICKS_PER_DAY
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
@@ -55,10 +55,24 @@ class SimulationController:
     entity_id: str
 
     def set_move_vector(self, x: float, y: float) -> None:
-        self.sim.set_entity_move_vector(self.entity_id, x, y)
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="set_move_vector",
+                params={"x": x, "y": y},
+            )
+        )
 
     def set_target_world(self, x: float, y: float) -> None:
-        self.sim.set_entity_target_position(self.entity_id, x, y)
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="set_target_position",
+                params={"x": x, "y": y},
+            )
+        )
 
     def tick_once(self) -> None:
         self.sim.advance_ticks(1)

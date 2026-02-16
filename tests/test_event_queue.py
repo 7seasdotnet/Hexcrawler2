@@ -1,9 +1,26 @@
+import pytest
 from pathlib import Path
 
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
-from hexcrawler.sim.core import Simulation
+from hexcrawler.sim.core import MAX_EVENTS_PER_TICK, Simulation
 from hexcrawler.sim.hash import simulation_hash
 
+from hexcrawler.sim.rules import RuleModule
+
+
+class _SameTickScheduler(RuleModule):
+    name = "same_tick_scheduler"
+
+    def on_event_executed(self, sim: Simulation, event) -> None:
+        if event.event_type == "first":
+            sim.schedule_event_at(sim.state.tick, "second", {"via": "module"})
+
+
+class _InfiniteSameTickScheduler(RuleModule):
+    name = "infinite_same_tick_scheduler"
+
+    def on_event_executed(self, sim: Simulation, event) -> None:
+        sim.schedule_event_at(sim.state.tick, "loop", {"source": event.event_id})
 
 def _build_sim(seed: int) -> Simulation:
     world = load_world_json("content/examples/basic_map.json")
@@ -61,3 +78,28 @@ def test_ordering_same_tick() -> None:
     sim.advance_ticks(4)
 
     assert sim.event_execution_trace() == (first, second, third)
+
+
+def test_same_tick_event_scheduled_during_execution_is_drained() -> None:
+    sim = _build_sim(seed=101)
+    sim.register_rule_module(_SameTickScheduler())
+
+    first_event_id = sim.schedule_event_at(0, "first", {})
+    sim.advance_ticks(1)
+
+    trace_event_ids = [entry["event_id"] for entry in sim.get_event_trace()]
+    assert trace_event_ids[0] == int(first_event_id.split("-")[1])
+    trace_types = [entry["event_type"] for entry in sim.get_event_trace()]
+    assert trace_types == ["first", "second"]
+
+
+def test_same_tick_event_guard_fails_deterministically() -> None:
+    sim = _build_sim(seed=202)
+    sim.register_rule_module(_InfiniteSameTickScheduler())
+
+    sim.schedule_event_at(0, "loop", {})
+
+    with pytest.raises(RuntimeError, match="MAX_EVENTS_PER_TICK"):
+        sim.advance_ticks(1)
+
+    assert len(sim.get_event_trace()) == min(MAX_EVENTS_PER_TICK, 256)

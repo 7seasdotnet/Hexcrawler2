@@ -20,6 +20,7 @@ TRAVEL_STEP_EVENT_TYPE = "travel_step"
 RNG_SIM_STREAM_NAME = "rng_sim"
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 MAX_EVENT_TRACE = 256
+MAX_EVENTS_PER_TICK = 10_000
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -445,23 +446,30 @@ class Simulation:
             self.stop_entity(entity_id)
 
     def _execute_events_for_tick(self, tick: int) -> None:
-        if tick not in self._pending_events_by_tick:
-            return
-        events = self._pending_events_by_tick.pop(tick)
-        for event in events:
-            self._event_tick_by_id.pop(event.event_id, None)
-            self._execute_event(event)
-            for module in self.rule_modules:
-                module.on_event_executed(self, event)
-            self._append_event_trace_entry(
-                {
-                    "tick": tick,
-                    "event_id": self._trace_event_id_as_int(event.event_id),
-                    "event_type": event.event_type,
-                    "params": copy.deepcopy(event.params),
-                    "module_hooks_called": bool(self.rule_modules),
-                }
-            )
+        executed_count = 0
+        while True:
+            events = self._pending_events_by_tick.pop(tick, None)
+            if not events:
+                return
+            for event in events:
+                executed_count += 1
+                if executed_count > MAX_EVENTS_PER_TICK:
+                    raise RuntimeError(
+                        f"event execution guard tripped at tick {tick}; exceeded MAX_EVENTS_PER_TICK={MAX_EVENTS_PER_TICK}"
+                    )
+                self._event_tick_by_id.pop(event.event_id, None)
+                self._execute_event(event)
+                for module in self.rule_modules:
+                    module.on_event_executed(self, event)
+                self._append_event_trace_entry(
+                    {
+                        "tick": tick,
+                        "event_id": self._trace_event_id_as_int(event.event_id),
+                        "event_type": event.event_type,
+                        "params": copy.deepcopy(event.params),
+                        "module_hooks_called": bool(self.rule_modules),
+                    }
+                )
 
     def _execute_event(self, event: SimEvent) -> None:
         if event.event_type in {"noop", "debug_marker"}:

@@ -35,6 +35,8 @@ This document locks core engine contracts and invariants for the simulation subs
 ## 5) Event Queue Substrate Contract
 - **Contract:** Simulation owns a deterministic event queue substrate with serialized `SimEvent` records (`tick`, `event_id`, `event_type`, `params`, `unknown_fields`).
 - **Contract:** Pending events are keyed by absolute tick and preserve insertion order for events scheduled on the same tick.
+- **Contract:** While executing tick `T`, same-tick events scheduled during event execution are drained deterministically in FIFO order until tick `T` is empty.
+- **Contract:** Same-tick draining includes a deterministic safety guard (`MAX_EVENTS_PER_TICK`) that raises a runtime error on runaway self-rescheduling loops instead of silently dropping work.
 - **Contract:** Authoritative per-tick phase ordering is: (1) apply commands for tick `T`, (2) execute events for tick `T`, (3) run entity updates for tick `T`, (4) increment tick counter.
 - **Contract:** Replay runs use the exact same command/event execution path as runtime simulation (no replay-specific event path).
 - **Contract:** Event queue state (including future-tick events and event ID counter) is serialized in canonical saves and contributes to `simulation_hash`.

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from hexcrawler.content.io import load_world_json
-from hexcrawler.sim.core import EntityState, Simulation
+from hexcrawler.sim.core import EntityState, SimCommand, Simulation
+from hexcrawler.sim.movement import axial_to_world_xy
 from hexcrawler.sim.world import HexCoord
 
 SITE_GLYPHS = {"none": ".", "town": "T", "dungeon": "D"}
@@ -43,7 +44,18 @@ class SimulationController:
         self.sim = sim
 
     def set_destination(self, entity_id: str, q: int, r: int) -> None:
-        self.sim.set_entity_destination(entity_id, HexCoord(q, r))
+        destination = HexCoord(q, r)
+        if self.sim.state.world.get_hex_record(destination) is None:
+            return
+        world_x, world_y = axial_to_world_xy(destination)
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=entity_id,
+                command_type="set_target_position",
+                params={"x": world_x, "y": world_y},
+            )
+        )
 
     def advance_ticks(self, ticks: int) -> None:
         self.sim.advance_ticks(ticks)
