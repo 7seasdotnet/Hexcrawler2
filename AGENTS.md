@@ -107,6 +107,18 @@ When asked to implement:
 - Keep graphics minimal early; prioritize simulation + editor + pipelines.
 - Avoid feature creep not serving the core loop.
 
+## Phase 5 Discipline (Execution & Mutation Safety)
+- Any new world mutation must be:
+  1) deterministic,
+  2) serialized + hash-covered,
+  3) replay/save-load stable,
+  4) idempotent across restart boundaries (action_uid or equivalent),
+  5) accompanied by targeted tests.
+- Unknown action intents must remain safe: ignore deterministically with a recorded outcome; never crash or mutate.
+- Viewer/UI must remain read-only with respect to simulation state (commands/events only).
+- STATUS.md must list the currently supported action intent types (provisional; subject to rename/expansion later).
+
+
 ## UPDATED AND NEW INSTRUCTIONS
 - After every change that affects functionality, tests, run commands, file locations, or phase progress: update docs/STATUS.md in the same commit.
 
