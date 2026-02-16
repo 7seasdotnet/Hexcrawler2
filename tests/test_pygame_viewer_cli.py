@@ -1,3 +1,5 @@
+import pytest
+
 from hexcrawler.cli.pygame_viewer import PLAYER_ID, SimulationController, _build_parser, _build_viewer_simulation
 from hexcrawler.sim.encounters import (
     EncounterActionExecutionModule,
@@ -52,3 +54,26 @@ def test_simulation_controller_appends_move_vector_command() -> None:
     assert sim.input_log[-1].tick == sim.state.tick
     assert sim.input_log[-1].entity_id == PLAYER_ID
     assert sim.input_log[-1].params == {"x": 1.0, "y": -1.0}
+
+
+def test_main_help_prints_usage_without_starting_viewer(capsys: pytest.CaptureFixture[str]) -> None:
+    from hexcrawler.cli.pygame_viewer import main
+
+    with pytest.raises(SystemExit) as result:
+        main(["--help"])
+
+    captured = capsys.readouterr()
+    assert result.value.code == 0
+    assert "usage:" in captured.out
+    assert "--headless" in captured.out
+
+
+def test_main_headless_mode_exits_cleanly_and_warns(capsys: pytest.CaptureFixture[str]) -> None:
+    from hexcrawler.cli.pygame_viewer import main
+
+    with pytest.raises(SystemExit) as result:
+        main(["--headless"])
+
+    captured = capsys.readouterr()
+    assert result.value.code == 0
+    assert "headless mode active" in captured.out

@@ -28,7 +28,8 @@
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
   - Viewer controller input paths now append `SimCommand`s at current simulation tick instead of mutating movement state directly.
-  - Includes CLI parsing for viewer boundary configuration (`--map-path`, `--with-encounters`).
+  - Includes CLI parsing for viewer boundary configuration (`--map-path`, `--with-encounters`, `--headless`).
+  - Startup diagnostics now print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` now emit actionable stderr hints and non-zero exits.
   - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields and now also lists recent world `signals`, world `tracks`, and `encounter_action_outcome` forensic events (newest-first, fixed truncation limits) when encounters are enabled; otherwise it shows `not enabled; run with --with-encounters`.
 - `src/hexcrawler/cli/replay_tool.py`
   - Headless replay forensics CLI operating on canonical game saves.
@@ -47,10 +48,11 @@
 - Build runtime save from template:
   - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - Run pygame viewer directly from a map template (legacy-compatible flow):
-  - `python run_game.py`
-  - `python run_game.py --with-encounters`
+  - `python run_game.py [--map-path ...] [--with-encounters] [--headless]`
+  - `HEXCRAWLER_HEADLESS=1 python run_game.py [--map-path ...] [--with-encounters]`
   - Encounter panel location: upper-right "Encounter Debug" section in the running window.
   - Encounter debug data appears only when run with `--with-encounters`; otherwise the panel shows an explicit enablement hint.
+  - Troubleshooting: if `SDL_VIDEODRIVER=dummy` (explicitly, via `--headless`, or via `HEXCRAWLER_HEADLESS=1`) or you are in WSL/remote/headless environments, no real window will appear.
 - Run replay tool from canonical save:
   - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200 --print-artifacts`
@@ -127,9 +129,10 @@
 
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
-- `python run_game.py`
-- `python run_game.py --with-encounters`
-- `PYTHONPATH=src pytest -q`
+- `python run_game.py [--map-path ...] [--with-encounters]`
+- `python run_game.py --headless`
+- `HEXCRAWLER_HEADLESS=1 python run_game.py --with-encounters`
+- `set PYTHONPATH=src && pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
 - `PYTHONPATH=src pytest -q tests/test_rules_state.py`
 - `PYTHONPATH=src pytest -q tests/test_periodic_scheduler.py`
@@ -149,6 +152,6 @@
 - `track_intent`
 
 ## What Changed in This Commit
-- Fixed high-severity event-queue stranding: `_execute_events_for_tick` now drains same-tick events until empty, preserving deterministic FIFO ordering for events queued before and during execution, and raises a deterministic runtime error if per-tick execution exceeds `MAX_EVENTS_PER_TICK`.
-- Remediated viewer/controller command-log bypass for common movement paths by routing ASCII `goto`, pygame WASD move vectors, and pygame move-target actions through `SimCommand` append semantics at the current tick.
-- Deepened canonical save validation to fail fast on malformed nested `world_state`/`simulation_state` shapes (including `signals`/`tracks` container types and required simulation-state key types), with regression tests for malformed payloads.
+- Hardened pygame viewer startup diagnostics: startup banner now prints Python/pygame/platform + SDL env vars before initialization, and `pygame.init()`/`pygame.display.set_mode(...)` failures now report actionable stderr hints and return non-zero exit codes instead of silent exits.
+- Added explicit headless startup controls (`--headless` and `HEXCRAWLER_HEADLESS=1`) that force `SDL_VIDEODRIVER=dummy`, print a no-window warning, and exit cleanly for CI/testing workflows.
+- Added GUI-free regression tests for CLI help and headless startup paths so `main(["--help"])` prints argparse usage without initializing pygame and headless mode exits cleanly with diagnostic output.

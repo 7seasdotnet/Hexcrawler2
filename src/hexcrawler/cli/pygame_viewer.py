@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import math
+import os
+import platform
+import sys
 from dataclasses import dataclass
-
-import pygame
+from typing import Any
 
 from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
 from hexcrawler.content.io import load_world_json
@@ -37,6 +40,8 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
 ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
 ENCOUNTER_DEBUG_TRACK_LIMIT = 10
 ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
+
+pygame: Any | None = None
 
 
 @dataclass
@@ -342,7 +347,41 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable encounter module registration for encounter debug data.",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Force SDL dummy video driver for CI/testing and exit without opening a real window.",
+    )
     return parser
+
+
+def _env_flag_enabled(var_name: str) -> bool:
+    return os.environ.get(var_name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _print_startup_banner() -> None:
+    try:
+        pygame_version = importlib.metadata.version("pygame")
+    except importlib.metadata.PackageNotFoundError:
+        pygame_version = "not-installed"
+    print(
+        "[hexcrawler.viewer] startup "
+        f"python={platform.python_version()} "
+        f"pygame={pygame_version} "
+        f"platform={platform.platform()}"
+    )
+    for name in ("SDL_VIDEODRIVER", "SDL_AUDIODRIVER", "SDL_VIDEO_WINDOW_POS"):
+        value = os.environ.get(name, "<unset>")
+        print(f"[hexcrawler.viewer] env {name}={value}")
+
+
+def _ensure_pygame_imported() -> Any:
+    global pygame
+    if pygame is None:
+        import pygame as pygame_module
+
+        pygame = pygame_module
+    return pygame
 
 
 def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulation:
@@ -365,16 +404,51 @@ def run_pygame_viewer(
     map_path: str = "content/examples/basic_map.json",
     *,
     with_encounters: bool = False,
-) -> None:
+    headless: bool = False,
+) -> int:
+    if headless:
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+        print("[hexcrawler.viewer] warning: headless mode active; no window will open.")
+
+    _print_startup_banner()
+    pygame_module = _ensure_pygame_imported()
+
+    try:
+        pygame_module.init()
+    except Exception as exc:
+        print(
+            "[hexcrawler.viewer] failed during pygame.init(): "
+            f"{exc}. Hint: verify a working SDL video driver (set SDL_VIDEODRIVER=dummy for headless mode).",
+            file=sys.stderr,
+        )
+        return 1
+
     sim = _build_viewer_simulation(map_path, with_encounters=with_encounters)
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
 
-    pygame.init()
-    pygame.display.set_caption("Hexcrawler Phase 1 Viewer")
-    screen = pygame.display.set_mode(WINDOW_SIZE)
-    clock = pygame.time.Clock()
-    font = pygame.font.SysFont("consolas", 22)
-    debug_font = pygame.font.SysFont("consolas", 16)
+    try:
+        pygame_module.display.set_caption("Hexcrawler Phase 1 Viewer")
+        screen = pygame_module.display.set_mode(WINDOW_SIZE)
+    except Exception as exc:
+        print(
+            "[hexcrawler.viewer] failed during pygame.display.set_mode(...): "
+            f"{exc}. Hint: GUI sessions require a valid display; in CI/WSL/remote shells use --headless or HEXCRAWLER_HEADLESS=1.",
+            file=sys.stderr,
+        )
+        pygame_module.quit()
+        return 1
+
+    driver_name = pygame_module.display.get_driver()
+    print(f"[hexcrawler.viewer] display initialized: {driver_name}, window size={WINDOW_SIZE}")
+
+    if headless:
+        controller.tick_once()
+        pygame_module.quit()
+        return 0
+
+    clock = pygame_module.time.Clock()
+    font = pygame_module.font.SysFont("consolas", 22)
+    debug_font = pygame_module.font.SysFont("consolas", 16)
 
     center = (WINDOW_SIZE[0] / 2.0, WINDOW_SIZE[1] / 2.0)
     accumulator = 0.0
@@ -383,26 +457,26 @@ def run_pygame_viewer(
     previous_snapshot = extract_render_snapshot(sim)
     current_snapshot = previous_snapshot
     tick_duration_seconds = SIM_TICK_SECONDS
-    last_tick_time = pygame.time.get_ticks() / 1000.0
+    last_tick_time = pygame_module.time.get_ticks() / 1000.0
 
     while running:
         dt = clock.tick(60) / 1000.0
         accumulator += dt
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+        for event in pygame_module.event.get():
+            if event.type == pygame_module.QUIT:
                 running = False
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_ESCAPE:
                 running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
                 world_x, world_y = _pixel_to_world(event.pos[0], event.pos[1], center)
                 target_hex = world_xy_to_axial(world_x, world_y)
                 if sim.state.world.get_hex_record(target_hex) is None:
                     context_menu = None
                 else:
                     context_menu = ContextMenuState(event.pos[0], event.pos[1], world_x, world_y)
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
-                menu_rect = pygame.Rect(context_menu.pixel_x, context_menu.pixel_y, 130, 34)
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
+                menu_rect = pygame_module.Rect(context_menu.pixel_x, context_menu.pixel_y, 130, 34)
                 if menu_rect.collidepoint(event.pos):
                     controller.set_target_world(context_menu.world_x, context_menu.world_y)
                 context_menu = None
@@ -414,10 +488,10 @@ def run_pygame_viewer(
             previous_snapshot = current_snapshot
             controller.tick_once()
             current_snapshot = extract_render_snapshot(sim)
-            last_tick_time = pygame.time.get_ticks() / 1000.0
+            last_tick_time = pygame_module.time.get_ticks() / 1000.0
             accumulator -= SIM_TICK_SECONDS
 
-        now_seconds = pygame.time.get_ticks() / 1000.0
+        now_seconds = pygame_module.time.get_ticks() / 1000.0
         alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
 
         screen.fill((17, 18, 25))
@@ -428,12 +502,24 @@ def run_pygame_viewer(
         _draw_hud(screen, sim, font)
         _draw_encounter_debug_panel(screen, sim, debug_font)
         _draw_context_menu(screen, font, context_menu)
-        pygame.display.flip()
+        pygame_module.display.flip()
 
-    pygame.quit()
+    pygame_module.quit()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    run_pygame_viewer(map_path=args.map_path, with_encounters=args.with_encounters)
+    headless = args.headless or _env_flag_enabled("HEXCRAWLER_HEADLESS")
+    raise SystemExit(
+        run_pygame_viewer(
+            map_path=args.map_path,
+            with_encounters=args.with_encounters,
+            headless=headless,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
