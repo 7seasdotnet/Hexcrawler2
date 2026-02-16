@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4I Encounter Action Grammar Stub — encounter pipeline now maps deterministic `encounter_selection_stub` outputs into descriptive `encounter_action_stub` action-intent containers with no world mutation or action execution.
-- **Next action:** Phase 4J Action Execution Subsystem (first tightly-controlled world-mutation seam, likely starting with spawn descriptor execution under explicit contracts).
+- **Current phase:** Phase 4J Encounter Action Execution Substrate — encounter pipeline now schedules deterministic `encounter_action_execute` events from `encounter_action_stub` and executes a minimal idempotent world-mutation action set into serialized records (`signals`/`tracks`) with forensic outcomes.
+- **Next action:** Phase 4K spawn descriptor seam (non-AI inert descriptor planning) or explicit action-set expansion planning under the 4J determinism/idempotence contracts.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -14,7 +14,8 @@
   - Generic check emission substrate (`CheckRunner`) that registers periodic tasks and emits serialized `check` events for deterministic forensics/debugging.
   - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule with explicit trigger semantics, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll, and emits deterministic `encounter_resolve_request` follow-on seam events (+1 tick) for downstream resolution consumers.
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
-  - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions), without spawning or world mutation.
+  - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
+  - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`), records deterministic forensic outcomes, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
@@ -80,6 +81,7 @@
 - ✅ Phase 4G complete: `encounter_result_stub` now deterministically schedules `encounter_resolve_request` at +1 tick with a minimal passthrough payload (`tick`, `context`, `trigger`, `location`, `roll`, `category`) and no content selection side effects.
 - ✅ Phase 4H complete: validated encounter-table content now feeds deterministic weighted selection in `EncounterSelectionModule`, emitting descriptive `encounter_selection_stub` events via RNG stream `encounter_selection` with save/load + replay hash stability.
 - ✅ Phase 4I complete: `EncounterActionModule` now emits deterministic descriptive `encounter_action_stub` events (+1 tick after selection) with extensible declarative `actions` intents and no action execution or world mutation.
+- ✅ Phase 4J complete: `EncounterActionExecutionModule` now schedules deterministic `encounter_action_execute` events (+1 tick after action stubs), executes provisional `signal_intent`/`track_intent` records idempotently, persists a serialized executed UID ledger in rules-state, and emits deterministic `encounter_action_outcome` forensic events (including `ignored_unsupported`).
 - ✅ Phase 4V complete: pygame UI now has a read-only encounter visibility panel for `encounter_check` rules-state and recent encounter execution trace entries.
 
 ## New Public APIs (Phase 4I)
@@ -106,6 +108,9 @@
 - `hexcrawler.sim.encounters.ENCOUNTER_SELECTION_STUB_EVENT_TYPE`
 - `hexcrawler.sim.encounters.EncounterActionModule`
 - `hexcrawler.sim.encounters.ENCOUNTER_ACTION_STUB_EVENT_TYPE`
+- `hexcrawler.sim.encounters.ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE`
+- `hexcrawler.sim.encounters.ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE`
+- `hexcrawler.sim.encounters.EncounterActionExecutionModule`
 - `hexcrawler.content.encounters.load_encounter_table_json(path)`
 - `hexcrawler.content.encounters.validate_encounter_table_payload(payload)`
 - `hexcrawler.content.encounters.DEFAULT_ENCOUNTER_TABLE_PATH`
@@ -135,7 +140,11 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
+## Initial Supported Action Set (provisional)
+- `signal_intent`
+- `track_intent`
+
 ## What Changed in This Commit
-- Added `EncounterActionModule` plus `ENCOUNTER_ACTION_STUB_EVENT_TYPE`, scheduling `encounter_action_stub` at +1 tick from `encounter_selection_stub` with strict passthrough of selection context fields.
-- Added deterministic action-intent packaging rules: passthrough of declarative `payload.actions` when present, otherwise fallback `signal_intent` action, with JSON-safe normalization and preserved extension fields.
-- Expanded deterministic tests and viewer wiring to include the Phase 4I action seam, and updated architecture/status documentation for the new non-mutating action grammar contract.
+- Added Phase 4J `EncounterActionExecutionModule` plus serialized events `encounter_action_execute`/`encounter_action_outcome`, deterministic `action_uid` derivation, and a hash-covered idempotence ledger in `rules_state`.
+- Added deterministic world record containers (`world.signals`, `world.tracks`) with action-UID keyed inserts for supported actions and deterministic `ignored_unsupported` outcomes for unknown action types.
+- Expanded deterministic test coverage (scheduling, idempotence, unsupported actions, replay/save-load hash identity, and hash guard baseline) and wired encounter-enabled viewer simulation to register the execution module.

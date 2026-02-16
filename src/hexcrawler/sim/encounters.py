@@ -15,6 +15,8 @@ ENCOUNTER_RESULT_STUB_EVENT_TYPE = "encounter_result_stub"
 ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE = "encounter_resolve_request"
 ENCOUNTER_SELECTION_STUB_EVENT_TYPE = "encounter_selection_stub"
 ENCOUNTER_ACTION_STUB_EVENT_TYPE = "encounter_action_stub"
+ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE = "encounter_action_execute"
+ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE = "encounter_action_outcome"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
 ENCOUNTER_TRIGGER_IDLE = "idle"
@@ -162,6 +164,143 @@ class EncounterActionModule(RuleModule):
                 normalized[key] = self._normalize_json_value(value[key], field_name=field_name)
             return normalized
         raise ValueError(f"{field_name} must contain only JSON-serializable values")
+
+
+class EncounterActionExecutionModule(RuleModule):
+    """Phase 4J deterministic action execution substrate.
+
+    Executes a minimal, explicitly bounded set of action intents into
+    deterministic world records with a serialized idempotence ledger.
+    """
+
+    name = "encounter_action_execution"
+    _STATE_EXECUTED_ACTION_UIDS = "executed_action_uids"
+    _SUPPORTED_ACTION_TYPES = {"signal_intent", "track_intent"}
+
+    def on_simulation_start(self, sim: Simulation) -> None:
+        sim.set_rules_state(self.name, self._rules_state(sim))
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == ENCOUNTER_ACTION_STUB_EVENT_TYPE:
+            self._schedule_execute_event(sim, event)
+            return
+        if event.event_type != ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE:
+            return
+        self._execute_actions(sim, event)
+
+    def _schedule_execute_event(self, sim: Simulation, event: SimEvent) -> None:
+        params = copy.deepcopy(event.params)
+        params["source_event_id"] = event.event_id
+        params["source_tick"] = int(event.tick)
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE,
+            params=params,
+        )
+
+    def _execute_actions(self, sim: Simulation, event: SimEvent) -> None:
+        source_event_id = str(event.params.get("source_event_id", ""))
+        actions = event.params.get("actions", [])
+        if not isinstance(actions, list):
+            raise ValueError("encounter_action_execute actions must be a list")
+
+        state = self._rules_state(sim)
+        executed_action_uids = set(state[self._STATE_EXECUTED_ACTION_UIDS])
+
+        for action_index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                raise ValueError(f"encounter_action_execute actions[{action_index}] must be an object")
+
+            action_uid = self._action_uid(source_event_id=source_event_id, action_index=action_index)
+            action_type = str(action.get("action_type", ""))
+            template_id = str(action.get("template_id", ""))
+            params = action.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError(f"encounter_action_execute actions[{action_index}].params must be an object")
+
+            outcome = "executed"
+            mutation = "none"
+            if action_uid in executed_action_uids:
+                outcome = "already_executed"
+            elif action_type not in self._SUPPORTED_ACTION_TYPES:
+                outcome = "ignored_unsupported"
+                executed_action_uids.add(action_uid)
+            elif action_type == "signal_intent":
+                created = sim.state.world.upsert_signal(
+                    {
+                        "signal_uid": action_uid,
+                        "template_id": template_id,
+                        "location": self._location_from_execute_event(event),
+                        "created_tick": int(event.tick),
+                        "params": copy.deepcopy(params),
+                        "expires_tick": self._optional_expires_tick(params=params, created_tick=int(event.tick)),
+                    }
+                )
+                mutation = "signal_created" if created else "signal_existing"
+                executed_action_uids.add(action_uid)
+            elif action_type == "track_intent":
+                created = sim.state.world.upsert_track(
+                    {
+                        "track_uid": action_uid,
+                        "template_id": template_id,
+                        "location": self._location_from_execute_event(event),
+                        "created_tick": int(event.tick),
+                        "params": copy.deepcopy(params),
+                        "expires_tick": self._optional_expires_tick(params=params, created_tick=int(event.tick)),
+                    }
+                )
+                mutation = "track_created" if created else "track_existing"
+                executed_action_uids.add(action_uid)
+
+            sim.schedule_event_at(
+                tick=event.tick + 1,
+                event_type=ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
+                params={
+                    "source_event_id": source_event_id,
+                    "execute_event_id": event.event_id,
+                    "action_index": action_index,
+                    "action_uid": action_uid,
+                    "action_type": action_type,
+                    "template_id": template_id,
+                    "outcome": outcome,
+                    "mutation": mutation,
+                },
+            )
+
+        state[self._STATE_EXECUTED_ACTION_UIDS] = sorted(executed_action_uids)
+        sim.set_rules_state(self.name, state)
+
+    def _rules_state(self, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        executed_action_uids = state.get(self._STATE_EXECUTED_ACTION_UIDS, [])
+        if not isinstance(executed_action_uids, list):
+            raise ValueError("encounter_action_execution.rules_state.executed_action_uids must be a list")
+        normalized_uids: list[str] = []
+        for uid in executed_action_uids:
+            if not isinstance(uid, str) or not uid:
+                raise ValueError("encounter_action_execution.rules_state.executed_action_uids entries must be strings")
+            normalized_uids.append(uid)
+        return {self._STATE_EXECUTED_ACTION_UIDS: sorted(set(normalized_uids))}
+
+    def _action_uid(self, *, source_event_id: str, action_index: int) -> str:
+        if not source_event_id:
+            raise ValueError("encounter_action_execute source_event_id must be a non-empty string")
+        return f"{source_event_id}:{action_index}"
+
+    def _optional_expires_tick(self, *, params: dict[str, Any], created_tick: int) -> int | None:
+        expires_tick = params.get("expires_tick")
+        if expires_tick is not None:
+            return int(expires_tick)
+        ttl_ticks = params.get("ttl_ticks")
+        if ttl_ticks is None:
+            return None
+        return created_tick + int(ttl_ticks)
+
+    def _location_from_execute_event(self, event: SimEvent) -> dict[str, Any]:
+        location = event.params.get("location")
+        if not isinstance(location, dict):
+            raise ValueError("encounter_action_execute location must be an object")
+        return copy.deepcopy(location)
 
 
 class EncounterCheckModule(RuleModule):

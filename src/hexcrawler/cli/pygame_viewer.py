@@ -12,6 +12,7 @@ from hexcrawler.sim.core import EntityState, Simulation, TICKS_PER_DAY
 from hexcrawler.sim.encounters import (
     ENCOUNTER_CHECK_EVENT_TYPE,
     ENCOUNTER_ROLL_EVENT_TYPE,
+    EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
     EncounterSelectionModule,
@@ -302,6 +303,7 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
             )
         )
         sim.register_rule_module(EncounterActionModule())
+        sim.register_rule_module(EncounterActionExecutionModule())
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     return sim
 

@@ -158,6 +158,22 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Determinism Contract:** Phase 4I introduces no new RNG streams and no RNG draws; save/load and replay hashes must remain stable with action stubs in the event trace.
 - **Phase Boundary (Hard):** `encounter_action_stub` is descriptive only in Phase 4I—no action execution, no spawning, no combat startup, and no world/faction/ecology/object mutation side effects.
 
+
+## 6L) Action Execution Substrate (Phase 4J)
+- **Purpose:** Introduce a deterministic, serialized action execution seam that converts `encounter_action_stub` intents into minimal world records with forensic outcome tracking.
+- **Scheduling Contract:** `EncounterActionExecutionModule` listens for `encounter_action_stub` and schedules `encounter_action_execute` at `event.tick + 1` with passthrough context fields, `source_event_id`, and the full `actions` list.
+- **Action UID Contract:** Each action intent maps to a deterministic `action_uid = f"{source_event_id}:{action_index}"` (source event identity + list index), and this UID is authoritative for idempotence.
+- **Idempotence Ledger Contract:** Executed action UIDs are persisted in serialized, hash-covered rules state (`simulation_state.rules_state["encounter_action_execution"].executed_action_uids`).
+- **Execution Contract:**
+  - If `action_uid` already exists in the ledger: no world mutation and outcome `already_executed`.
+  - If `action_type` is unknown: no world mutation and outcome `ignored_unsupported`.
+  - If `action_type` is supported: execute deterministic mutation and mark UID as executed.
+- **Initial Supported Action Set (provisional):** `signal_intent`, `track_intent`.
+- **World Mutation Boundary:** Supported actions may only create deterministic data records in world containers (`world.signals`, `world.tracks`) keyed by `signal_uid`/`track_uid` using `action_uid`; no combat, spawning, AI, faction/ecology, or pathfinding side effects are allowed.
+- **Forensic Trace Contract:** For each processed action, schedule `encounter_action_outcome` with `action_uid` and deterministic outcome details.
+- **Determinism Contract:** Phase 4J introduces no new RNG streams and no RNG draws; save/load continuation and replay must keep identical hashes.
+- **Forward-Compatibility Note:** The initial supported action set is intentionally provisional and may be renamed/expanded in later phases under explicit contract updates.
+
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.
 - **Contract:** Save payloads include top-level `schema_version`.
