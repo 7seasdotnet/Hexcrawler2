@@ -87,6 +87,8 @@ class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
     topology_params: dict[str, int] = field(default_factory=dict)
+    signals: list[dict[str, Any]] = field(default_factory=list)
+    tracks: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def create_with_topology(
@@ -120,11 +122,22 @@ class WorldState:
         hex_rows = []
         for coord in sorted(self.hexes):
             hex_rows.append({"coord": coord.to_dict(), "record": self.hexes[coord].to_dict()})
-        return {
+        payload = {
             "topology_type": self.topology_type,
             "topology_params": self.topology_params,
             "hexes": hex_rows,
         }
+        if self.signals:
+            payload["signals"] = sorted(
+                (dict(record) for record in self.signals),
+                key=lambda record: str(record.get("signal_uid", "")),
+            )
+        if self.tracks:
+            payload["tracks"] = sorted(
+                (dict(record) for record in self.tracks),
+                key=lambda record: str(record.get("track_uid", "")),
+            )
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorldState":
@@ -136,4 +149,29 @@ class WorldState:
             coord = HexCoord.from_dict(row["coord"])
             record = HexRecord.from_dict(row["record"])
             world.set_hex_record(coord, record)
+        raw_signals = data.get("signals", [])
+        if not isinstance(raw_signals, list):
+            raise ValueError("signals must be a list")
+        world.signals = [dict(row) for row in raw_signals]
+
+        raw_tracks = data.get("tracks", [])
+        if not isinstance(raw_tracks, list):
+            raise ValueError("tracks must be a list")
+        world.tracks = [dict(row) for row in raw_tracks]
         return world
+
+    def upsert_signal(self, record: dict[str, Any]) -> bool:
+        signal_uid = str(record["signal_uid"])
+        for existing in self.signals:
+            if str(existing.get("signal_uid")) == signal_uid:
+                return False
+        self.signals.append(dict(record))
+        return True
+
+    def upsert_track(self, record: dict[str, Any]) -> bool:
+        track_uid = str(record["track_uid"])
+        for existing in self.tracks:
+            if str(existing.get("track_uid")) == track_uid:
+                return False
+        self.tracks.append(dict(record))
+        return True
