@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,15 +83,26 @@ def _write_atomic_json(path: str | Path, payload: dict[str, Any]) -> None:
         raise
 
 
+def _legacy_world_hash(world: WorldState) -> str:
+    encoded = json.dumps(
+        world.to_legacy_dict(),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _load_legacy_world_payload(payload: dict[str, Any]) -> WorldState:
     validate_world_payload(payload)
     world = WorldState.from_dict(payload)
     expected_hash = payload["world_hash"]
     actual_hash = world_hash(world)
     if expected_hash != actual_hash:
-        raise ValueError(
-            f"world_hash mismatch while loading save (stored={expected_hash}, recomputed={actual_hash})"
-        )
+        legacy_hash = _legacy_world_hash(world)
+        if expected_hash != legacy_hash:
+            raise ValueError(
+                f"world_hash mismatch while loading save (stored={expected_hash}, recomputed={actual_hash})"
+            )
     return world
 
 

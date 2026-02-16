@@ -50,7 +50,7 @@ def _input_log() -> list[SimCommand]:
 
 
 def _location(q: int, r: int) -> dict[str, object]:
-    return {"topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": q, "r": r}}
+    return {"space_id": "overworld", "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": q, "r": r}}
 
 
 def test_encounter_check_eligibility_deterministic_hash() -> None:
@@ -245,8 +245,8 @@ def test_travel_step_event_serializes_and_emits_travel_triggered_check(tmp_path:
     ]
     assert len(pending_travel_steps) == 1
     assert pending_travel_steps[0].params["entity_id"] == "runner"
-    assert pending_travel_steps[0].params["location_from"] == {"topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 0, "r": 0}}
-    assert pending_travel_steps[0].params["location_to"] == {"topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 1, "r": 0}}
+    assert pending_travel_steps[0].params["location_from"] == {"space_id": "overworld", "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 0, "r": 0}}
+    assert pending_travel_steps[0].params["location_to"] == {"space_id": "overworld", "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 1, "r": 0}}
 
     save_path = tmp_path / "travel_step_save.json"
     save_game_json(save_path, sim.state.world, sim)
@@ -343,7 +343,7 @@ def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "3586035d0dbbaeed8a8e7f08715ae272aa3b2489906baf8d454227f65bd02a3b"
+        == "25b6912e9e0fcc6b6fad0ce481e8bea929b136837299f7fac5ed2967a25d55f1"
     )
 
 
@@ -353,5 +353,5 @@ def test_travel_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "3260b8d3cc91bbf7a45621adc0265a46a7fe5f38bfbbaaae8a61e334c052177a"
+        == "01195b7daa7ad7dab5c8ab1b28905660628fc6225d4c3dc0f8235e24b28d791c"
     )

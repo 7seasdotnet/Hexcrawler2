@@ -5,7 +5,7 @@ from typing import Any
 SUPPORTED_SCHEMA_VERSIONS = {1}
 REQUIRED_HEX_RECORD_FIELDS = {"terrain_type", "site_type", "metadata"}
 VALID_SITE_TYPES = {"none", "town", "dungeon"}
-VALID_TOPOLOGY_TYPES = {"custom", "hex_disk", "hex_rectangle"}
+VALID_TOPOLOGY_TYPES = {"custom", "hex_disk", "hex_rectangle", "overworld_hex", "dungeon_grid"}
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -28,44 +28,71 @@ def _validate_json_value(value: Any, *, field_name: str) -> None:
     raise ValueError(f"{field_name} must contain only canonical JSON primitives")
 
 
-def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None:
-    topology_type = payload.get("topology_type")
+
+
+def _validate_space_shape(space: dict[str, Any], *, field_name: str) -> None:
+    space_id = space.get("space_id")
+    if not isinstance(space_id, str) or not space_id:
+        raise ValueError(f"{field_name}.space_id must be a non-empty string")
+
+    topology_type = space.get("topology_type")
     if not isinstance(topology_type, str):
-        raise ValueError(f"{field_prefix} must contain string field: topology_type")
+        raise ValueError(f"{field_name}.topology_type must be a string")
     if topology_type not in VALID_TOPOLOGY_TYPES:
         raise ValueError(f"unsupported topology_type: {topology_type}")
 
-    topology_params = payload.get("topology_params")
+    topology_params = space.get("topology_params")
     if not isinstance(topology_params, dict):
-        raise ValueError(f"{field_prefix} must contain object field: topology_params")
+        raise ValueError(f"{field_name}.topology_params must be an object")
 
-    hexes = payload.get("hexes")
+    hexes = space.get("hexes")
     if not isinstance(hexes, list):
-        raise ValueError(f"{field_prefix} must contain a list field: hexes")
+        raise ValueError(f"{field_name}.hexes must be a list")
 
     for index, row in enumerate(hexes):
         if not isinstance(row, dict):
-            raise ValueError(f"hex row {index} must be an object")
+            raise ValueError(f"{field_name}.hexes[{index}] must be an object")
         if "coord" not in row or "record" not in row:
-            raise ValueError(f"hex row {index} missing coord or record")
+            raise ValueError(f"{field_name}.hexes[{index}] missing coord or record")
 
         coord = row["coord"]
         if not isinstance(coord, dict) or not {"q", "r"} <= coord.keys():
-            raise ValueError(f"hex row {index} invalid coord")
+            raise ValueError(f"{field_name}.hexes[{index}] invalid coord")
 
         record = row["record"]
         if not isinstance(record, dict):
-            raise ValueError(f"hex row {index} record must be object")
+            raise ValueError(f"{field_name}.hexes[{index}].record must be object")
 
         missing = REQUIRED_HEX_RECORD_FIELDS - set(record.keys())
         if missing:
-            raise ValueError(f"hex row {index} missing record fields: {sorted(missing)}")
+            raise ValueError(f"{field_name}.hexes[{index}] missing record fields: {sorted(missing)}")
 
         if record["site_type"] not in VALID_SITE_TYPES:
-            raise ValueError(f"hex row {index} invalid site_type: {record['site_type']}")
+            raise ValueError(f"{field_name}.hexes[{index}] invalid site_type: {record['site_type']}")
 
         if not isinstance(record["metadata"], dict):
-            raise ValueError(f"hex row {index} metadata must be object")
+            raise ValueError(f"{field_name}.hexes[{index}] metadata must be object")
+
+def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None:
+    spaces = payload.get("spaces")
+    if spaces is not None:
+        if not isinstance(spaces, list):
+            raise ValueError(f"{field_prefix}.spaces must be a list when present")
+        for index, space in enumerate(spaces):
+            if not isinstance(space, dict):
+                raise ValueError(f"{field_prefix}.spaces[{index}] must be an object")
+            _validate_space_shape(space, field_name=f"{field_prefix}.spaces[{index}]")
+
+        if not any(space.get("space_id") == "overworld" for space in spaces if isinstance(space, dict)):
+            raise ValueError(f"{field_prefix}.spaces must include default space_id: overworld")
+    else:
+        legacy_space = {
+            "space_id": "overworld",
+            "topology_type": payload.get("topology_type"),
+            "topology_params": payload.get("topology_params"),
+            "hexes": payload.get("hexes"),
+        }
+        _validate_space_shape(legacy_space, field_name=field_prefix)
 
     signals = payload.get("signals", [])
     if not isinstance(signals, list):
