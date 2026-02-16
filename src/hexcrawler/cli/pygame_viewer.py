@@ -10,8 +10,7 @@ from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_enc
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import EntityState, Simulation, TICKS_PER_DAY
 from hexcrawler.sim.encounters import (
-    ENCOUNTER_CHECK_EVENT_TYPE,
-    ENCOUNTER_ROLL_EVENT_TYPE,
+    ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
@@ -35,7 +34,9 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
     "town": (80, 160, 255),
     "dungeon": (210, 85, 85),
 }
-ENCOUNTER_DEBUG_EVENT_LIMIT = 20
+ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
+ENCOUNTER_DEBUG_TRACK_LIMIT = 10
+ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 
 
 @dataclass
@@ -170,7 +171,7 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
 
 
 def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -> None:
-    panel_rect = pygame.Rect(WINDOW_SIZE[0] - 388, 12, 376, 360)
+    panel_rect = pygame.Rect(WINDOW_SIZE[0] - 588, 12, 576, WINDOW_SIZE[1] - 24)
     pygame.draw.rect(screen, (24, 26, 36), panel_rect)
     pygame.draw.rect(screen, (95, 98, 110), panel_rect, 1)
 
@@ -182,7 +183,7 @@ def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: p
     module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
     if not module_present:
         message = font.render(
-            "Encounter module not enabled. Run with --with-encounters.",
+            "Encounter debug not enabled; run with --with-encounters",
             True,
             (220, 180, 130),
         )
@@ -203,43 +204,81 @@ def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: p
         ("last_check_tick", str(last_check_tick)),
         ("checks_emitted", str(checks_emitted)),
         ("eligible_count", str(eligible_count)),
-        ("ineligible_streak", str(ineligible_streak)),
-        ("cooldown_until_tick", str(cooldown_until_tick)),
-        ("cooldown_active", str(cooldown_active)),
         ("cooldown_ticks_left", str(cooldown_ticks_remaining)),
+        ("ineligible_streak", str(ineligible_streak)),
     ]
     for key, value in kv_rows:
         line = font.render(f"{key}: {value}", True, (224, 224, 224))
         screen.blit(line, (panel_rect.x + 10, y))
         y += 18
 
-    y += 4
-    list_header = font.render("Recent encounter events", True, (245, 245, 245))
-    screen.blit(list_header, (panel_rect.x + 10, y))
-    y += 20
+    def render_line(text: str, color: tuple[int, int, int]) -> None:
+        nonlocal y
+        if y > panel_rect.bottom - 16:
+            return
+        screen.blit(font.render(text, True, color), (panel_rect.x + 10, y))
+        y += 16
 
-    filtered_trace = [
-        entry
-        for entry in sim.get_event_trace()
-        if entry.get("event_type") in {ENCOUNTER_CHECK_EVENT_TYPE, ENCOUNTER_ROLL_EVENT_TYPE}
-    ]
-    for entry in reversed(filtered_trace[-ENCOUNTER_DEBUG_EVENT_LIMIT:]):
-        params = entry.get("params", {})
-        tick = entry.get("tick")
-        event_type = entry.get("event_type")
-        source_tick = params.get("tick")
-        context = params.get("context")
-        roll = params.get("roll")
-        roll_text = f", roll={roll}" if roll is not None else ""
-        line = font.render(
-            f"t={tick} {event_type} src={source_tick} ctx={context}{roll_text}",
-            True,
+    def compact_location(location: object) -> str:
+        if not isinstance(location, dict):
+            return "loc=?"
+        topology = str(location.get("topology_type", "?"))
+        coord = location.get("coord")
+        if isinstance(coord, dict):
+            q = coord.get("q")
+            r = coord.get("r")
+            return f"{topology}:{q},{r}"
+        return f"{topology}:?"
+
+    y += 4
+    render_line("Recent Signals (N=10)", (245, 245, 245))
+    recent_signals = list(reversed(sim.state.world.signals[-ENCOUNTER_DEBUG_SIGNAL_LIMIT:]))
+    if not recent_signals:
+        render_line("  none", (205, 205, 210))
+    for record in recent_signals:
+        created_tick = record.get("created_tick", "?")
+        template_id = record.get("template_id", "?")
+        expires_tick = record.get("expires_tick")
+        expires_text = "-" if expires_tick is None else str(expires_tick)
+        render_line(
+            f"  t={created_tick} {compact_location(record.get('location'))} tpl={template_id} exp={expires_text}",
             (205, 205, 210),
         )
-        screen.blit(line, (panel_rect.x + 10, y))
-        y += 16
-        if y > panel_rect.bottom - 16:
-            break
+
+    render_line("Recent Tracks (N=10)", (245, 245, 245))
+    recent_tracks = list(reversed(sim.state.world.tracks[-ENCOUNTER_DEBUG_TRACK_LIMIT:]))
+    if not recent_tracks:
+        render_line("  none", (205, 205, 210))
+    for record in recent_tracks:
+        created_tick = record.get("created_tick", "?")
+        template_id = record.get("template_id", "?")
+        expires_tick = record.get("expires_tick")
+        expires_text = "-" if expires_tick is None else str(expires_tick)
+        render_line(
+            f"  t={created_tick} {compact_location(record.get('location'))} tpl={template_id} exp={expires_text}",
+            (205, 205, 210),
+        )
+
+    render_line("Recent Action Outcomes (N=20)", (245, 245, 245))
+    filtered_trace = [
+        entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
+    ]
+    outcomes = list(reversed(filtered_trace[-ENCOUNTER_DEBUG_OUTCOME_LIMIT:]))
+    if not outcomes:
+        render_line("  none", (205, 205, 210))
+    for entry in outcomes:
+        params = entry.get("params")
+        params = params if isinstance(params, dict) else {}
+        tick = entry.get("tick", "?")
+        action_uid = params.get("action_uid", "?")
+        action_type = params.get("action_type", "?")
+        outcome = params.get("outcome", "?")
+        template_id = params.get("template_id")
+        template_text = "-" if template_id in (None, "") else str(template_id)
+        render_line(
+            f"  t={tick} uid={action_uid} type={action_type} outcome={outcome} tpl={template_text}",
+            (205, 205, 210),
+        )
 
 
 def _draw_context_menu(

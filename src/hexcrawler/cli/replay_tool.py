@@ -8,7 +8,12 @@ from typing import Sequence
 
 from hexcrawler.content.io import load_game_json, save_game_json
 from hexcrawler.sim.core import Simulation
+from hexcrawler.sim.encounters import ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash
+
+ARTIFACT_PRINT_SIGNAL_LIMIT = 10
+ARTIFACT_PRINT_TRACK_LIMIT = 10
+ARTIFACT_PRINT_OUTCOME_LIMIT = 20
 
 
 def _non_negative_int(value: str) -> int:
@@ -37,6 +42,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--print-input-summary",
         action="store_true",
         help="Print command counts grouped by command_type",
+    )
+    parser.add_argument(
+        "--print-artifacts",
+        action="store_true",
+        help="Print concise recent signal/track/action-outcome artifacts after replay",
     )
     parser.add_argument(
         "--dump-final-save",
@@ -70,6 +80,79 @@ def _print_input_summary(simulation: Simulation) -> None:
     print(f"input_summary {summary}")
 
 
+def _format_location(location: object) -> str:
+    if not isinstance(location, dict):
+        return "?"
+    topology = str(location.get("topology_type", "?"))
+    coord = location.get("coord")
+    if isinstance(coord, dict):
+        return f"{topology}:{coord.get('q', '?')},{coord.get('r', '?')}"
+    return f"{topology}:?"
+
+
+def _print_artifacts(simulation: Simulation) -> None:
+    print(f"artifacts.signals.limit={ARTIFACT_PRINT_SIGNAL_LIMIT}")
+    recent_signals = list(reversed(simulation.state.world.signals[-ARTIFACT_PRINT_SIGNAL_LIMIT:]))
+    if not recent_signals:
+        print("artifacts.signal none")
+    for record in recent_signals:
+        created_tick = record.get("created_tick", "?")
+        template_id = record.get("template_id", "?")
+        expires_tick = record.get("expires_tick")
+        expires_text = "-" if expires_tick is None else str(expires_tick)
+        print(
+            "artifacts.signal "
+            f"tick={created_tick} "
+            f"location={_format_location(record.get('location'))} "
+            f"template_id={template_id} "
+            f"expires_tick={expires_text}"
+        )
+
+    print(f"artifacts.tracks.limit={ARTIFACT_PRINT_TRACK_LIMIT}")
+    recent_tracks = list(reversed(simulation.state.world.tracks[-ARTIFACT_PRINT_TRACK_LIMIT:]))
+    if not recent_tracks:
+        print("artifacts.track none")
+    for record in recent_tracks:
+        created_tick = record.get("created_tick", "?")
+        template_id = record.get("template_id", "?")
+        expires_tick = record.get("expires_tick")
+        expires_text = "-" if expires_tick is None else str(expires_tick)
+        print(
+            "artifacts.track "
+            f"tick={created_tick} "
+            f"location={_format_location(record.get('location'))} "
+            f"template_id={template_id} "
+            f"expires_tick={expires_text}"
+        )
+
+    print(f"artifacts.outcomes.limit={ARTIFACT_PRINT_OUTCOME_LIMIT}")
+    outcomes = [
+        entry
+        for entry in simulation.get_event_trace()
+        if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
+    ]
+    recent_outcomes = list(reversed(outcomes[-ARTIFACT_PRINT_OUTCOME_LIMIT:]))
+    if not recent_outcomes:
+        print("artifacts.outcome none")
+    for entry in recent_outcomes:
+        params = entry.get("params")
+        params = params if isinstance(params, dict) else {}
+        tick = entry.get("tick", "?")
+        action_uid = params.get("action_uid", "?")
+        action_type = params.get("action_type", "?")
+        outcome = params.get("outcome", "?")
+        template_id = params.get("template_id")
+        template_text = "-" if template_id in (None, "") else str(template_id)
+        print(
+            "artifacts.outcome "
+            f"tick={tick} "
+            f"action_uid={action_uid} "
+            f"action_type={action_type} "
+            f"outcome={outcome} "
+            f"template_id={template_text}"
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -95,6 +178,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         end_hash = simulation_hash(simulation)
         print(f"end_hash={end_hash}")
+
+        if args.print_artifacts:
+            _print_artifacts(simulation)
 
         if args.dump_final_save:
             save_game_json(args.dump_final_save, simulation.state.world, simulation)

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hexcrawler.cli.replay_tool import main
+from hexcrawler.cli.replay_tool import _build_parser, main
 from hexcrawler.content.io import load_world_json, save_game_json
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation
 from hexcrawler.sim.world import HexCoord
@@ -16,6 +16,13 @@ def _build_save(path: Path) -> None:
     save_game_json(path, simulation.state.world, simulation)
 
 
+def test_replay_tool_parser_accepts_print_artifacts_flag() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["save.json", "--print-artifacts"])
+
+    assert args.print_artifacts is True
+
+
 def test_replay_tool_main_outputs_hashes(tmp_path: Path, capsys) -> None:
     save_path = tmp_path / "game_save.json"
     dumped_path = tmp_path / "replayed_save.json"
@@ -27,6 +34,7 @@ def test_replay_tool_main_outputs_hashes(tmp_path: Path, capsys) -> None:
             "--ticks",
             "2",
             "--print-input-summary",
+            "--print-artifacts",
             "--dump-final-save",
             str(dumped_path),
         ]
@@ -37,4 +45,7 @@ def test_replay_tool_main_outputs_hashes(tmp_path: Path, capsys) -> None:
     assert "start_hash=" in output
     assert "end_hash=" in output
     assert "integrity=OK" in output
+    assert "artifacts.signals.limit=10" in output
+    assert "artifacts.tracks.limit=10" in output
+    assert "artifacts.outcomes.limit=20" in output
     assert dumped_path.exists()
