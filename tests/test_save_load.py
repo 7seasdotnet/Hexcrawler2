@@ -200,6 +200,67 @@ def test_game_loader_rejects_malformed_world_state_signals_shape(tmp_path: Path)
         load_game_json(path)
 
 
+def test_game_save_load_round_trip_preserves_spawn_descriptors_exactly(tmp_path: Path) -> None:
+    simulation = _build_simulation(seed=212)
+    simulation.state.world.spawn_descriptors = [
+        {
+            "created_tick": 5,
+            "location": {"topology_type": "overworld_hex", "coord": {"q": 1, "r": 2}},
+            "template_id": "bandit_scouts",
+            "quantity": 2,
+            "expires_tick": None,
+            "source_event_id": "evt-src",
+            "action_uid": "evt-src:0",
+            "extra": {"note": "forward-compatible"},
+        }
+    ]
+    path = tmp_path / "game_save.json"
+
+    save_game_json(path, simulation.state.world, simulation)
+    _, loaded = load_game_json(path)
+
+    assert loaded.state.world.spawn_descriptors == simulation.state.world.spawn_descriptors
+
+
+def test_game_loader_rejects_malformed_world_state_spawn_descriptors_shape(tmp_path: Path) -> None:
+    simulation = _build_simulation(seed=313)
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["world_state"]["spawn_descriptors"] = {"not": "a list"}
+    payload["save_hash"] = save_hash(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="world_state.spawn_descriptors"):
+        load_game_json(path)
+
+
+def test_game_loader_rejects_invalid_spawn_descriptor_quantity_type(tmp_path: Path) -> None:
+    simulation = _build_simulation(seed=314)
+    simulation.state.world.spawn_descriptors = [
+        {
+            "created_tick": 3,
+            "location": {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+            "template_id": "bandit_scouts",
+            "quantity": 1,
+            "expires_tick": None,
+            "source_event_id": "evt",
+            "action_uid": "evt:0",
+        }
+    ]
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["world_state"]["spawn_descriptors"][0]["quantity"] = "many"
+    payload["save_hash"] = save_hash(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"spawn_descriptors\[0\]\.quantity"):
+        load_game_json(path)
+
+
 def test_game_loader_rejects_malformed_simulation_state_tick_type(tmp_path: Path) -> None:
     simulation = _build_simulation()
     path = tmp_path / "game_save.json"

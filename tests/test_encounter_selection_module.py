@@ -62,6 +62,29 @@ def test_encounter_table_schema_validation_example_and_invalid_payload() -> None
             }
         )
 
+    validate_encounter_table_payload(
+        {
+            "schema_version": 1,
+            "table_id": "spawn_ok",
+            "entries": [
+                {
+                    "entry_id": "bandit_spawn",
+                    "weight": 1,
+                    "payload": {
+                        "actions": [
+                            {
+                                "action_type": "spawn_intent",
+                                "template_id": "bandit_scouts",
+                                "quantity": 1,
+                                "params": {"source": "test"},
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+    )
+
 
 def test_selection_stub_emitted_once_and_passthrough_fields_stable() -> None:
     sim = _build_selection_sim(seed=17)

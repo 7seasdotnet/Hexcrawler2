@@ -1,8 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5A — Artifact Visibility & Inspection Refinement (layout/readability/save-load hardening) without simulation semantic changes.
-- **Next action:** Build canonical artifact-rich saves via viewer F5/F9 flow, then validate replay/inspection workflows against deterministic hashes.
+- **Current phase:** Phase 5B — Spawn Descriptor Records (data-only spawn intents, no entity instantiation).
+- **Next action:** Phase 5C planning: consume spawn descriptors in downstream deterministic systems while preserving replay/save idempotence boundaries.
+- **Phase status:** ✅ Phase 5B complete.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -16,7 +17,7 @@
   - Encounter-check eligibility gate (`EncounterCheckModule`) that emits structured `encounter_check` events on a fixed periodic schedule with explicit trigger semantics, evaluates deterministic eligibility, emits `encounter_roll` follow-on events only when eligible, and emits content-free `encounter_result_stub` events from each roll, and emits deterministic `encounter_resolve_request` follow-on seam events (+1 tick) for downstream resolution consumers.
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
-  - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`), records deterministic forensic outcomes, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
+  - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
@@ -31,7 +32,7 @@
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
   - Uses split layout regions (left world viewport + right fixed-width Encounter Debug panel) so world rendering and the player marker remain visible in the viewport.
-  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/outcomes with stable forensic identifiers and newest-first ordering.
+  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/spawns/outcomes with stable forensic identifiers and newest-first ordering.
   - Supports deterministic canonical session persistence in-viewer (`F5` save / `F9` load) using `save_game_json`/`load_game_json` contracts.
 - `src/hexcrawler/cli/replay_tool.py`
   - Headless replay forensics CLI operating on canonical game saves.
@@ -156,13 +157,12 @@
 ## Initial Supported Action Set (provisional)
 - `signal_intent`
 - `track_intent`
+- `spawn_intent`
 
 ## What Changed in This Commit
-- Expanded pygame viewer layout for Phase 5A: larger window, explicit left world viewport, right-docked fixed-width Encounter Debug panel, and viewport-centered world/entity transforms so the player marker is never drawn under the panel.
-- Improved inspection readability: added section-level scrolling/pagination for signals/tracks/outcomes while preserving newest-first ordering and stable forensic identifiers in every row.
-- Added robust viewer session persistence: `--load-save`/`--save-path` CLI args plus `F5` save and `F9` load keybinds using canonical deterministic save/load APIs, with clear log lines that include path + save/world/simulation hashes.
-- Added GUI-free regression coverage for argparse help/headless behavior and deterministic save/load round-trip parity (tick, input log, simulation hash, signals/tracks/event-trace artifacts).
-- Added/updated troubleshooting and canonical verification commands for SDL dummy/WSL/remote environments and artifact replay inspection.
+- Added Phase 5B deterministic spawn recording substrate: `world.spawn_descriptors` is now a serialized/hash-covered world container and `EncounterActionExecutionModule` now executes `spawn_intent` by appending data-only descriptors with action-UID idempotence (no entity spawning/AI/combat).
+- Extended visibility tooling: replay CLI `--print-artifacts` now prints recent spawn descriptors (newest-first, limit=10), and pygame Encounter Debug now includes a scrollable “Recent Spawns (N=10)” section with created tick/location/template/quantity/expiry/action UID.
+- Added coverage for spawn-intent execution/idempotence/replay summary stability, save/load spawn-descriptor round-trip + malformed-schema rejection, and content validation/examples including `spawn_intent` actions.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

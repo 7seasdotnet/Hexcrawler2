@@ -45,6 +45,7 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
 }
 ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
 ENCOUNTER_DEBUG_TRACK_LIMIT = 10
+ENCOUNTER_DEBUG_SPAWN_LIMIT = 10
 ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 
@@ -63,6 +64,7 @@ class ContextMenuState:
 class EncounterPanelScrollState:
     signals_offset: int = 0
     tracks_offset: int = 0
+    spawns_offset: int = 0
     outcomes_offset: int = 0
 
     def offset_for(self, section: str) -> int:
@@ -70,6 +72,8 @@ class EncounterPanelScrollState:
             return self.signals_offset
         if section == "tracks":
             return self.tracks_offset
+        if section == "spawns":
+            return self.spawns_offset
         return self.outcomes_offset
 
     def scroll(self, section: str, delta: int, total_count: int, page_size: int) -> None:
@@ -79,6 +83,8 @@ class EncounterPanelScrollState:
             self.signals_offset = next_offset
         elif section == "tracks":
             self.tracks_offset = next_offset
+        elif section == "spawns":
+            self.spawns_offset = next_offset
         else:
             self.outcomes_offset = next_offset
 
@@ -308,6 +314,7 @@ def _draw_encounter_debug_panel(
 
     recent_signals = list(reversed(sim.state.world.signals[-ENCOUNTER_DEBUG_SIGNAL_LIMIT:]))
     recent_tracks = list(reversed(sim.state.world.tracks[-ENCOUNTER_DEBUG_TRACK_LIMIT:]))
+    recent_spawns = list(reversed(sim.state.world.spawn_descriptors[-ENCOUNTER_DEBUG_SPAWN_LIMIT:]))
     filtered_trace = [
         entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
     ]
@@ -343,6 +350,17 @@ def _draw_encounter_debug_panel(
             f"outcome={params.get('outcome', '?')} "
             f"template={template_id if template_id not in (None, '') else '-'}"
         )
+    spawn_rows = [
+        (
+            f"  created={record.get('created_tick', '?')} "
+            f"location={_format_location(record.get('location'))} "
+            f"template={record.get('template_id', '?')} "
+            f"quantity={record.get('quantity', '?')} "
+            f"expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'} "
+            f"action_uid={record.get('action_uid', '?')}"
+        )
+        for record in recent_spawns
+    ]
 
     section_rects: dict[str, pygame.Rect] = {}
     section_counts: dict[str, int] = {}
@@ -373,6 +391,7 @@ def _draw_encounter_debug_panel(
     y += 4
     render_section("signals", "Recent Signals", signal_rows)
     render_section("tracks", "Recent Tracks", track_rows)
+    render_section("spawns", "Recent Spawns (N=10)", spawn_rows)
     render_section("outcomes", "Recent Action Outcomes", outcome_rows)
     return section_rects, section_counts
 

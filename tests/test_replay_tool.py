@@ -47,5 +47,6 @@ def test_replay_tool_main_outputs_hashes(tmp_path: Path, capsys) -> None:
     assert "integrity=OK" in output
     assert "artifacts.signals.limit=10" in output
     assert "artifacts.tracks.limit=10" in output
+    assert "artifacts.spawns.limit=10" in output
     assert "artifacts.outcomes.limit=20" in output
     assert dumped_path.exists()

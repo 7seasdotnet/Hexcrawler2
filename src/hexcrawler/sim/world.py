@@ -89,6 +89,7 @@ class WorldState:
     topology_params: dict[str, int] = field(default_factory=dict)
     signals: list[dict[str, Any]] = field(default_factory=list)
     tracks: list[dict[str, Any]] = field(default_factory=list)
+    spawn_descriptors: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def create_with_topology(
@@ -137,6 +138,8 @@ class WorldState:
                 (dict(record) for record in self.tracks),
                 key=lambda record: str(record.get("track_uid", "")),
             )
+        if self.spawn_descriptors:
+            payload["spawn_descriptors"] = [dict(record) for record in self.spawn_descriptors]
         return payload
 
     @classmethod
@@ -158,6 +161,11 @@ class WorldState:
         if not isinstance(raw_tracks, list):
             raise ValueError("tracks must be a list")
         world.tracks = [dict(row) for row in raw_tracks]
+
+        raw_spawn_descriptors = data.get("spawn_descriptors", [])
+        if not isinstance(raw_spawn_descriptors, list):
+            raise ValueError("spawn_descriptors must be a list")
+        world.spawn_descriptors = [dict(row) for row in raw_spawn_descriptors]
         return world
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:
@@ -175,3 +183,6 @@ class WorldState:
                 return False
         self.tracks.append(dict(record))
         return True
+
+    def append_spawn_descriptor(self, record: dict[str, Any]) -> None:
+        self.spawn_descriptors.append(dict(record))

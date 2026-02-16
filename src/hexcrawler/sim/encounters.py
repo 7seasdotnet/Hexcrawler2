@@ -175,7 +175,7 @@ class EncounterActionExecutionModule(RuleModule):
 
     name = "encounter_action_execution"
     _STATE_EXECUTED_ACTION_UIDS = "executed_action_uids"
-    _SUPPORTED_ACTION_TYPES = {"signal_intent", "track_intent"}
+    _SUPPORTED_ACTION_TYPES = {"signal_intent", "track_intent", "spawn_intent"}
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
@@ -217,9 +217,13 @@ class EncounterActionExecutionModule(RuleModule):
             params = action.get("params", {})
             if not isinstance(params, dict):
                 raise ValueError(f"encounter_action_execute actions[{action_index}].params must be an object")
+            quantity = int(action.get("quantity", params.get("quantity", 1)))
+            if quantity < 1:
+                raise ValueError(f"encounter_action_execute actions[{action_index}].quantity must be >= 1")
 
             outcome = "executed"
             mutation = "none"
+            location = self._location_from_execute_event(event)
             if action_uid in executed_action_uids:
                 outcome = "already_executed"
             elif action_type not in self._SUPPORTED_ACTION_TYPES:
@@ -230,7 +234,7 @@ class EncounterActionExecutionModule(RuleModule):
                     {
                         "signal_uid": action_uid,
                         "template_id": template_id,
-                        "location": self._location_from_execute_event(event),
+                        "location": location,
                         "created_tick": int(event.tick),
                         "params": copy.deepcopy(params),
                         "expires_tick": self._optional_expires_tick(params=params, created_tick=int(event.tick)),
@@ -243,13 +247,31 @@ class EncounterActionExecutionModule(RuleModule):
                     {
                         "track_uid": action_uid,
                         "template_id": template_id,
-                        "location": self._location_from_execute_event(event),
+                        "location": location,
                         "created_tick": int(event.tick),
                         "params": copy.deepcopy(params),
                         "expires_tick": self._optional_expires_tick(params=params, created_tick=int(event.tick)),
                     }
                 )
                 mutation = "track_created" if created else "track_existing"
+                executed_action_uids.add(action_uid)
+            elif action_type == "spawn_intent":
+                descriptor = {
+                    "created_tick": int(event.tick),
+                    "location": location,
+                    "template_id": template_id,
+                    "quantity": quantity,
+                    "expires_tick": self._optional_expires_tick(params=params, created_tick=int(event.tick)),
+                    "source_event_id": source_event_id,
+                    "action_uid": action_uid,
+                    "params": copy.deepcopy(params),
+                }
+                for key, value in action.items():
+                    if key in descriptor or key in {"action_type", "template_id", "quantity", "params"}:
+                        continue
+                    descriptor[key] = copy.deepcopy(value)
+                sim.state.world.append_spawn_descriptor(descriptor)
+                mutation = "spawn_descriptor_recorded"
                 executed_action_uids.add(action_uid)
 
             sim.schedule_event_at(
@@ -262,6 +284,8 @@ class EncounterActionExecutionModule(RuleModule):
                     "action_uid": action_uid,
                     "action_type": action_type,
                     "template_id": template_id,
+                    "location": location,
+                    "quantity": quantity,
                     "outcome": outcome,
                     "mutation": mutation,
                 },
