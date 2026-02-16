@@ -8,33 +8,40 @@ VALID_SITE_TYPES = {"none", "town", "dungeon"}
 VALID_TOPOLOGY_TYPES = {"custom", "hex_disk", "hex_rectangle"}
 
 
-def validate_world_payload(payload: dict[str, Any]) -> None:
-    if not isinstance(payload, dict):
-        raise ValueError("world payload must be an object")
+def _is_json_primitive(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float, str))
 
-    schema_version = payload.get("schema_version")
-    if not isinstance(schema_version, int):
-        raise ValueError("world payload must contain integer field: schema_version")
-    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise ValueError(f"unsupported schema_version: {schema_version}")
 
-    world_digest = payload.get("world_hash")
-    if not isinstance(world_digest, str) or not world_digest:
-        raise ValueError("world payload must contain string field: world_hash")
+def _validate_json_value(value: Any, *, field_name: str) -> None:
+    if _is_json_primitive(value):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_value(item, field_name=field_name)
+        return
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{field_name} keys must be strings")
+            _validate_json_value(nested_value, field_name=field_name)
+        return
+    raise ValueError(f"{field_name} must contain only canonical JSON primitives")
 
+
+def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None:
     topology_type = payload.get("topology_type")
     if not isinstance(topology_type, str):
-        raise ValueError("world payload must contain string field: topology_type")
+        raise ValueError(f"{field_prefix} must contain string field: topology_type")
     if topology_type not in VALID_TOPOLOGY_TYPES:
         raise ValueError(f"unsupported topology_type: {topology_type}")
 
     topology_params = payload.get("topology_params")
     if not isinstance(topology_params, dict):
-        raise ValueError("world payload must contain object field: topology_params")
+        raise ValueError(f"{field_prefix} must contain object field: topology_params")
 
     hexes = payload.get("hexes")
     if not isinstance(hexes, list):
-        raise ValueError("world payload must contain a list field: hexes")
+        raise ValueError(f"{field_prefix} must contain a list field: hexes")
 
     for index, row in enumerate(hexes):
         if not isinstance(row, dict):
@@ -60,6 +67,65 @@ def validate_world_payload(payload: dict[str, Any]) -> None:
         if not isinstance(record["metadata"], dict):
             raise ValueError(f"hex row {index} metadata must be object")
 
+    signals = payload.get("signals", [])
+    if not isinstance(signals, list):
+        raise ValueError(f"{field_prefix}.signals must be a list when present")
+    for index, signal in enumerate(signals):
+        if not isinstance(signal, dict):
+            raise ValueError(f"{field_prefix}.signals[{index}] must be an object")
+
+    tracks = payload.get("tracks", [])
+    if not isinstance(tracks, list):
+        raise ValueError(f"{field_prefix}.tracks must be a list when present")
+    for index, track in enumerate(tracks):
+        if not isinstance(track, dict):
+            raise ValueError(f"{field_prefix}.tracks[{index}] must be an object")
+
+
+def validate_world_payload(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("world payload must be an object")
+
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, int):
+        raise ValueError("world payload must contain integer field: schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(f"unsupported schema_version: {schema_version}")
+
+    world_digest = payload.get("world_hash")
+    if not isinstance(world_digest, str) or not world_digest:
+        raise ValueError("world payload must contain string field: world_hash")
+
+    _validate_world_shape(payload, field_prefix="world payload")
+
+
+def _validate_simulation_state(simulation_state: dict[str, Any]) -> None:
+    required_int_fields = {"schema_version", "seed", "master_seed", "tick", "next_event_counter"}
+    for field_name in required_int_fields:
+        value = simulation_state.get(field_name)
+        if not isinstance(value, int):
+            raise ValueError(f"simulation_state.{field_name} must be an integer")
+
+    entities = simulation_state.get("entities")
+    if not isinstance(entities, list):
+        raise ValueError("simulation_state.entities must be a list")
+
+    pending_events = simulation_state.get("pending_events")
+    if not isinstance(pending_events, list):
+        raise ValueError("simulation_state.pending_events must be a list")
+
+    rules_state = simulation_state.get("rules_state")
+    if not isinstance(rules_state, dict):
+        raise ValueError("simulation_state.rules_state must be an object")
+
+    event_trace = simulation_state.get("event_trace")
+    if not isinstance(event_trace, list):
+        raise ValueError("simulation_state.event_trace must be a list")
+
+    rng_state = simulation_state.get("rng_state")
+    if not isinstance(rng_state, dict):
+        raise ValueError("simulation_state.rng_state must be an object")
+
 
 def validate_save_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
@@ -78,10 +144,12 @@ def validate_save_payload(payload: dict[str, Any]) -> None:
     world_state = payload.get("world_state")
     if not isinstance(world_state, dict):
         raise ValueError("save payload must contain object field: world_state")
+    _validate_world_shape(world_state, field_prefix="world_state")
 
     simulation_state = payload.get("simulation_state")
     if not isinstance(simulation_state, dict):
         raise ValueError("save payload must contain object field: simulation_state")
+    _validate_simulation_state(simulation_state)
 
     input_log = payload.get("input_log")
     if not isinstance(input_log, list):
@@ -89,3 +157,8 @@ def validate_save_payload(payload: dict[str, Any]) -> None:
 
     if "metadata" in payload and not isinstance(payload["metadata"], dict):
         raise ValueError("save payload field metadata must be an object when present")
+
+    _validate_json_value(payload["world_state"], field_name="world_state")
+    _validate_json_value(payload["input_log"], field_name="input_log")
+    if "metadata" in payload:
+        _validate_json_value(payload["metadata"], field_name="metadata")

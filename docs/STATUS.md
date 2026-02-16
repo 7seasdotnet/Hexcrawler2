@@ -1,13 +1,14 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4K-lite Minimal Visibility Tooling — read-only tooling now surfaces existing Phase 4J artifacts (`signals`, `tracks`, `encounter_action_outcome`) during runtime and replay without changing simulation semantics.
-- **Next action:** Phase 4K proper planning/scope clarification (spawn-descriptor seam or action-set expansion), keeping 4K-lite visibility strictly read-only and preserving all 4J determinism contracts.
+- **Current phase:** Phase 4L — Substrate Corrections (same-tick event execution + medium-risk remediation) with deterministic event draining, command-log-safe viewer controllers, and deeper canonical save validation.
+- **Next action:** Phase 5A visibility + descriptor progression, only after preserving Phase 4L determinism/replay/save-load contracts and closing any remaining substrate tech debt.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
+  - Same-tick event execution now drains-until-empty for tick `T` (including events scheduled during `T`) with deterministic FIFO behavior and a hard deterministic guard for runaway self-rescheduling.
   - Deterministic bounded execution trace substrate (`SimulationState.event_trace`) for executed events only, serialized in canonical saves and included in `simulation_hash`.
   - Rule-module substrate (`RuleModule`, deterministic registration-order lifecycle hooks, named RNG stream access via `Simulation.rng_stream`).
   - Generic periodic scheduling substrate (`PeriodicScheduler`) backed by serialized event queue events (`periodic_tick`) with callback reattachment after load.
@@ -23,9 +24,10 @@
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
   - Encounter table content loader/validator (`content.encounters`) with strict schema checks, deterministic normalization, and default example table wiring.
 - `src/hexcrawler/cli/viewer.py`
-  - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`).
+  - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`) with controller actions routed through `SimCommand` append semantics (no direct simulation mutation).
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
+  - Viewer controller input paths now append `SimCommand`s at current simulation tick instead of mutating movement state directly.
   - Includes CLI parsing for viewer boundary configuration (`--map-path`, `--with-encounters`).
   - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields and now also lists recent world `signals`, world `tracks`, and `encounter_action_outcome` forensic events (newest-first, fixed truncation limits) when encounters are enabled; otherwise it shows `not enabled; run with --with-encounters`.
 - `src/hexcrawler/cli/replay_tool.py`
@@ -147,6 +149,6 @@
 - `track_intent`
 
 ## What Changed in This Commit
-- Extended the pygame encounter debug panel (read-only) to show newest-first truncated lists for recent `signals` (N=10), `tracks` (N=10), and `encounter_action_outcome` entries (N=20), with safe fallbacks for missing fields and explicit not-enabled messaging.
-- Added `--print-artifacts` to `hexcrawler.cli.replay_tool` to print concise deterministic summaries of recent signals/tracks/outcomes at replay end, without mutating simulation state.
-- Added replay-tool tests for new flag parsing/output while keeping existing viewer module-registration coverage unchanged and preserving deterministic test baselines.
+- Fixed high-severity event-queue stranding: `_execute_events_for_tick` now drains same-tick events until empty, preserving deterministic FIFO ordering for events queued before and during execution, and raises a deterministic runtime error if per-tick execution exceeds `MAX_EVENTS_PER_TICK`.
+- Remediated viewer/controller command-log bypass for common movement paths by routing ASCII `goto`, pygame WASD move vectors, and pygame move-target actions through `SimCommand` append semantics at the current tick.
+- Deepened canonical save validation to fail fast on malformed nested `world_state`/`simulation_state` shapes (including `signals`/`tracks` container types and required simulation-state key types), with regression tests for malformed payloads.

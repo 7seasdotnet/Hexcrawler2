@@ -184,3 +184,31 @@ def test_save_hash_matches_payload_parts(tmp_path: Path) -> None:
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["save_hash"] == save_hash(payload)
+
+
+def test_game_loader_rejects_malformed_world_state_signals_shape(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["world_state"]["signals"] = {"not": "a list"}
+    payload["save_hash"] = save_hash(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="world_state.signals"):
+        load_game_json(path)
+
+
+def test_game_loader_rejects_malformed_simulation_state_tick_type(tmp_path: Path) -> None:
+    simulation = _build_simulation()
+    path = tmp_path / "game_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["simulation_state"]["tick"] = "bad"
+    payload["save_hash"] = save_hash(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="simulation_state.tick"):
+        load_game_json(path)
