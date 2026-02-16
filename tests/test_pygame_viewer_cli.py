@@ -26,7 +26,7 @@ def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
     args = parser.parse_args([])
 
     assert args.with_encounters is False
-    assert args.map_path == "content/examples/basic_map.json"
+    assert args.map_path == "content/examples/viewer_map.json"
     assert args.save_path == "saves/session_save.json"
     assert args.load_save is None
 
