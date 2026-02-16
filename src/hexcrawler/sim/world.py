@@ -9,6 +9,7 @@ from hexcrawler.sim.rng import derive_stream_seed
 SITE_TYPES = {"none", "town", "dungeon"}
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
+DEFAULT_OVERWORLD_SPACE_ID = "overworld"
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -170,14 +171,63 @@ class RumorRecord:
 
 
 @dataclass
+class SpaceState:
+    space_id: str
+    topology_type: str
+    topology_params: dict[str, Any] = field(default_factory=dict)
+    hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        hex_rows = []
+        for coord in sorted(self.hexes):
+            hex_rows.append({"coord": coord.to_dict(), "record": self.hexes[coord].to_dict()})
+        return {
+            "space_id": self.space_id,
+            "topology_type": self.topology_type,
+            "topology_params": dict(self.topology_params),
+            "hexes": hex_rows,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SpaceState":
+        space = cls(
+            space_id=str(data["space_id"]),
+            topology_type=str(data.get("topology_type", "custom")),
+            topology_params=dict(data.get("topology_params", {})),
+        )
+        for row in data.get("hexes", []):
+            coord = HexCoord.from_dict(row["coord"])
+            record = HexRecord.from_dict(row["record"])
+            space.hexes[coord] = record
+        return space
+
+
+@dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
     topology_params: dict[str, int] = field(default_factory=dict)
+    spaces: dict[str, SpaceState] = field(default_factory=dict)
     signals: list[dict[str, Any]] = field(default_factory=list)
     tracks: list[dict[str, Any]] = field(default_factory=list)
     spawn_descriptors: list[dict[str, Any]] = field(default_factory=list)
     rumors: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.spaces:
+            overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
+            if overworld_space is None:
+                raise ValueError(f"spaces must include default '{DEFAULT_OVERWORLD_SPACE_ID}' space")
+            self.hexes = overworld_space.hexes
+            self.topology_type = overworld_space.topology_type
+            self.topology_params = dict(overworld_space.topology_params)
+            return
+        self.spaces[DEFAULT_OVERWORLD_SPACE_ID] = SpaceState(
+            space_id=DEFAULT_OVERWORLD_SPACE_ID,
+            topology_type=self.topology_type,
+            topology_params=dict(self.topology_params),
+            hexes=self.hexes,
+        )
 
     @classmethod
     def create_with_topology(
@@ -207,7 +257,7 @@ class WorldState:
     def get_hex_record(self, coord: HexCoord) -> HexRecord | None:
         return self.hexes.get(coord)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_legacy_dict(self) -> dict[str, Any]:
         hex_rows = []
         for coord in sorted(self.hexes):
             hex_rows.append({"coord": coord.to_dict(), "record": self.hexes[coord].to_dict()})
@@ -232,16 +282,70 @@ class WorldState:
             payload["rumors"] = [RumorRecord.from_dict(record).to_dict() for record in self.rumors]
         return payload
 
+    def to_dict(self) -> dict[str, Any]:
+        spaces_payload = [
+            self.spaces[space_id].to_dict()
+            for space_id in sorted(self.spaces)
+        ]
+        hex_rows = []
+        for coord in sorted(self.hexes):
+            hex_rows.append({"coord": coord.to_dict(), "record": self.hexes[coord].to_dict()})
+        payload = {
+            "topology_type": self.topology_type,
+            "topology_params": self.topology_params,
+            "hexes": hex_rows,
+            "spaces": spaces_payload,
+        }
+        if self.signals:
+            payload["signals"] = sorted(
+                (dict(record) for record in self.signals),
+                key=lambda record: str(record.get("signal_uid", "")),
+            )
+        if self.tracks:
+            payload["tracks"] = sorted(
+                (dict(record) for record in self.tracks),
+                key=lambda record: str(record.get("track_uid", "")),
+            )
+        if self.spawn_descriptors:
+            payload["spawn_descriptors"] = [dict(record) for record in self.spawn_descriptors]
+        if self.rumors:
+            payload["rumors"] = [RumorRecord.from_dict(record).to_dict() for record in self.rumors]
+        return payload
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorldState":
-        world = cls(
-            topology_type=str(data.get("topology_type", "custom")),
-            topology_params=dict(data.get("topology_params", {})),
-        )
-        for row in data.get("hexes", []):
-            coord = HexCoord.from_dict(row["coord"])
-            record = HexRecord.from_dict(row["record"])
-            world.set_hex_record(coord, record)
+        raw_spaces = data.get("spaces")
+        if raw_spaces is None:
+            world = cls(
+                topology_type=str(data.get("topology_type", "custom")),
+                topology_params=dict(data.get("topology_params", {})),
+            )
+            for row in data.get("hexes", []):
+                coord = HexCoord.from_dict(row["coord"])
+                record = HexRecord.from_dict(row["record"])
+                world.set_hex_record(coord, record)
+        else:
+            if not isinstance(raw_spaces, list):
+                raise ValueError("spaces must be a list")
+            spaces: dict[str, SpaceState] = {}
+            for entry in raw_spaces:
+                if not isinstance(entry, dict):
+                    raise ValueError("space entry must be an object")
+                space = SpaceState.from_dict(entry)
+                spaces[space.space_id] = space
+            world = cls(spaces=spaces)
+            legacy_hex_rows = data.get("hexes")
+            if legacy_hex_rows is not None:
+                legacy_world = cls(
+                    topology_type=str(data.get("topology_type", world.topology_type)),
+                    topology_params=dict(data.get("topology_params", world.topology_params)),
+                )
+                for row in legacy_hex_rows:
+                    coord = HexCoord.from_dict(row["coord"])
+                    record = HexRecord.from_dict(row["record"])
+                    legacy_world.set_hex_record(coord, record)
+                if legacy_world.to_legacy_dict() != world.to_legacy_dict():
+                    raise ValueError("legacy overworld fields disagree with spaces.overworld payload")
         raw_signals = data.get("signals", [])
         if not isinstance(raw_signals, list):
             raise ValueError("signals must be a list")

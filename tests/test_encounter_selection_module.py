@@ -24,7 +24,7 @@ def _resolve_request_params() -> dict[str, object]:
         "tick": 0,
         "context": "global",
         "trigger": "idle",
-        "location": {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+        "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
         "roll": 40,
         "category": "hostile",
     }
@@ -104,7 +104,7 @@ def test_selection_stub_emitted_once_and_passthrough_fields_stable() -> None:
     assert stub_params["tick"] == 0
     assert stub_params["context"] == "global"
     assert stub_params["trigger"] == "idle"
-    assert stub_params["location"] == {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}}
+    assert stub_params["location"] == {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}}
     assert stub_params["roll"] == 40
     assert stub_params["category"] == "hostile"
     assert stub_params["table_id"] == "basic_encounters"
@@ -138,7 +138,7 @@ def test_action_stub_emitted_once_per_selection_and_passthrough_fields_stable() 
     assert action_params["tick"] == 0
     assert action_params["context"] == "global"
     assert action_params["trigger"] == "idle"
-    assert action_params["location"] == {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}}
+    assert action_params["location"] == {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}}
     assert action_params["roll"] == 40
     assert action_params["category"] == "hostile"
     assert action_params["table_id"] == "basic_encounters"
@@ -286,5 +286,5 @@ def test_selection_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "7e223ad7a83c88f81c5aaf94cbcc93ad8d88a8abb8ef5691ad369cdb63a882f7"
+        == "deb3aa9e1305fe3ff15a2cf007c1d53734523f28fed68db58cb8e1a01710a904"
     )

@@ -9,7 +9,7 @@ from hexcrawler.sim.hash import simulation_hash
 def _spawn_descriptor(*, action_uid: str, quantity: int, q: int, r: int, template_id: str = "bandit_scouts") -> dict[str, object]:
     return {
         "created_tick": 0,
-        "location": {"topology_type": "overworld_hex", "coord": {"q": q, "r": r}},
+        "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": q, "r": r}},
         "template_id": template_id,
         "quantity": quantity,
         "expires_tick": None,

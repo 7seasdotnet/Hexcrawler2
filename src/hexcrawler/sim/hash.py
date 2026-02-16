@@ -39,6 +39,7 @@ def simulation_hash(simulation: Simulation) -> str:
         "entities": [
             {
                 "entity_id": entity.entity_id,
+                "space_id": entity.space_id,
                 "hex_coord": entity.hex_coord.to_dict(),
                 "position_x": round(entity.position_x, 8),
                 "position_y": round(entity.position_y, 8),

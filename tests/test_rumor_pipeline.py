@@ -19,7 +19,7 @@ def _enqueue_executed_action(sim: Simulation, *, source_event_id: str, q: int = 
         event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE,
         params={
             "source_event_id": source_event_id,
-            "location": {"topology_type": "overworld_hex", "coord": {"q": q, "r": r}},
+            "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": q, "r": r}},
             "actions": [{"action_type": "signal_intent", "template_id": "omens.crows", "params": {}}],
         },
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import HexCoord, WorldState
+from hexcrawler.sim.world import DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
 
 TICKS_PER_DAY = 240
 TARGET_REACHED_THRESHOLD = 0.05
@@ -143,6 +144,7 @@ class EntityState:
     target_position: tuple[float, float] | None = None
     template_id: str | None = None
     source_action_uid: str | None = None
+    space_id: str = DEFAULT_OVERWORLD_SPACE_ID
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -237,15 +239,19 @@ class Simulation:
         return copy.deepcopy(self.state.event_trace)
 
     def set_entity_destination(self, entity_id: str, destination: HexCoord) -> None:
+        entity = self.state.entities[entity_id]
+        if entity.space_id != DEFAULT_OVERWORLD_SPACE_ID:
+            return
         if self.state.world.get_hex_record(destination) is None:
             return
         destination_xy = axial_to_world_xy(destination)
         self.set_entity_target_position(entity_id, destination_xy[0], destination_xy[1])
 
     def set_entity_target_position(self, entity_id: str, x: float, y: float) -> None:
-        if not self._position_is_within_world(x, y):
+        entity = self.state.entities[entity_id]
+        if not self._position_is_within_world(x, y, space_id=entity.space_id):
             return
-        self.state.entities[entity_id].target_position = (x, y)
+        entity.target_position = (x, y)
 
     def set_entity_move_vector(self, entity_id: str, x: float, y: float) -> None:
         move_x, move_y = normalized_vector(x, y)
@@ -348,6 +354,7 @@ class Simulation:
             "entities": [
                 {
                     "entity_id": entity.entity_id,
+                    "space_id": entity.space_id,
                     "position_x": entity.position_x,
                     "position_y": entity.position_y,
                     "speed_per_tick": entity.speed_per_tick,
@@ -386,6 +393,7 @@ class Simulation:
         for row in payload.get("entities", []):
             entity = EntityState(
                 entity_id=str(row["entity_id"]),
+                space_id=str(row.get("space_id", DEFAULT_OVERWORLD_SPACE_ID)),
                 position_x=float(row["position_x"]),
                 position_y=float(row["position_y"]),
                 speed_per_tick=float(row.get("speed_per_tick", 0.15)),
@@ -452,6 +460,80 @@ class Simulation:
             )
         elif command.command_type == "stop":
             self.stop_entity(entity_id)
+        elif command.command_type == "transition_space":
+            to_location_payload = command.params.get("to_location")
+            if not isinstance(to_location_payload, dict):
+                return
+            to_location = LocationRef.from_dict(to_location_payload)
+            self._execute_transition_command(entity_id=entity_id, tick=command.tick, command=command, to_location=to_location)
+
+    def _execute_transition_command(
+        self,
+        *,
+        entity_id: str,
+        tick: int,
+        command: SimCommand,
+        to_location: LocationRef,
+    ) -> None:
+        entity = self.state.entities[entity_id]
+        from_location = LocationRef.from_dict(
+            {
+                "space_id": entity.space_id,
+                "topology_type": "overworld_hex",
+                "coord": entity.hex_coord.to_dict(),
+            }
+        )
+        transition_uid = self._transition_uid(entity_id=entity_id, tick=tick, command=command, to_location=to_location)
+
+        status = "applied"
+        if to_location.space_id not in self.state.world.spaces:
+            status = "rejected_unknown_space"
+        elif to_location.topology_type == "overworld_hex":
+            target_coord = HexCoord.from_dict(to_location.coord)
+            if self.state.world.get_hex_record(target_coord) is None:
+                status = "rejected_invalid_coord"
+            else:
+                next_x, next_y = axial_to_world_xy(target_coord)
+                entity.position_x = next_x
+                entity.position_y = next_y
+                entity.space_id = to_location.space_id
+                entity.target_position = None
+                entity.move_input_x = 0.0
+                entity.move_input_y = 0.0
+        else:
+            status = "rejected_unsupported_topology"
+
+        self._append_event_trace_entry(
+            {
+                "tick": tick,
+                "event_id": self._trace_event_id_as_int(f"space-transition:{transition_uid}"),
+                "event_type": "space_transition",
+                "params": {
+                    "entity_id": entity_id,
+                    "from_location": from_location.to_dict(),
+                    "to_location": to_location.to_dict(),
+                    "transition_uid": transition_uid,
+                    "status": status,
+                    "reason": command.params.get("reason"),
+                    "site_id": command.params.get("site_id"),
+                },
+                "module_hooks_called": False,
+            }
+        )
+
+    @staticmethod
+    def _transition_uid(*, entity_id: str, tick: int, command: SimCommand, to_location: LocationRef) -> str:
+        payload = {
+            "entity_id": entity_id,
+            "tick": tick,
+            "command_type": command.command_type,
+            "to_location": to_location.to_dict(),
+            "reason": command.params.get("reason"),
+            "site_id": command.params.get("site_id"),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        return f"transition-{digest[:16]}"
 
     def _execute_events_for_tick(self, tick: int) -> None:
         executed_count = 0
@@ -514,7 +596,7 @@ class Simulation:
         next_x = entity.position_x + move_x * step_size
         next_y = entity.position_y + move_y * step_size
 
-        if self._position_is_within_world(next_x, next_y):
+        if self._position_is_within_world(next_x, next_y, space_id=entity.space_id):
             entity.position_x = next_x
             entity.position_y = next_y
             next_hex = entity.hex_coord
@@ -532,7 +614,9 @@ class Simulation:
         elif target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
             entity.target_position = None
 
-    def _position_is_within_world(self, x: float, y: float) -> bool:
+    def _position_is_within_world(self, x: float, y: float, *, space_id: str = DEFAULT_OVERWORLD_SPACE_ID) -> bool:
+        if space_id != DEFAULT_OVERWORLD_SPACE_ID:
+            return False
         return self.state.world.get_hex_record(world_xy_to_axial(x, y)) is not None
 
     def _append_event_trace_entry(self, entry: dict[str, Any]) -> None:

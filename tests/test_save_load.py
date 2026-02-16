@@ -57,7 +57,7 @@ def test_loader_fails_when_world_hash_does_not_match(tmp_path: Path) -> None:
     payload["hexes"][0]["record"]["metadata"]["name"] = "Tampered"
     out_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="world_hash mismatch"):
+    with pytest.raises(ValueError, match="world_hash mismatch|legacy overworld fields disagree"):
         load_world_json(out_path)
 
 

@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5E — Rumor Pipeline (minimal, deterministic, idempotent).
-- **Next action:** Phase 5F planning: integrate rumor template/content tuning and track discovery UX while preserving deterministic save/load/replay contracts.
-- **Phase status:** ✅ Phase 5E complete.
+- **Current phase:** Phase 5F — World Spaces + Topology Transitions Substrate (structural only).
+- **Next action:** Phase 5G — interaction/targeting substrate, after 5F verification remains green across save/load/replay determinism checks.
+- **Phase status:** ✅ Phase 5F complete.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -22,7 +22,9 @@
   - Rumor pipeline seam (`RumorPipelineModule`) that deterministically creates `world.rumors` from executed `encounter_action_outcome` events, persists emitted-rumor ledger state in `rules_state["rumor_pipeline"]`, and runs serialized periodic propagation/expiration accounting (hop cap 4).
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
-  - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) for encounter-facing event contracts, currently bound to `overworld_hex` coordinates only.
+  - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
+  - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
+  - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
   - Encounter table content loader/validator (`content.encounters`) with strict schema checks, deterministic normalization, and default example table wiring.
@@ -163,6 +165,7 @@
 - `signal_intent`
 - `track_intent`
 - `spawn_intent`
+- `transition_space` (simulation command seam; structural space transition only)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -171,9 +174,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Implemented Phase 5E rumor artifacts: added canonical/hash-covered `world.rumors` records (`rumor_id`, location, source_action_uid, confidence `[0.0,1.0]`, hop, TTL, optional payload), schema validation, and deterministic save/load round-trip support.
-- Added `RumorPipelineModule` to generate rumors only from executed encounter outcomes, enforce idempotence with serialized ledger keys in `rules_state["rumor_pipeline"]`, and run deterministic periodic propagation/expiration accounting using serialized `PeriodicScheduler` events.
-- Fixed viewer UX: wrapped Encounter Debug lines to panel width, added “Recent Rumors (N=20)”, added deterministic in-hex marker slot decluttering, and switched viewer defaults to a larger example map (`content/examples/viewer_map.json`) to avoid the previous ~3-hex exploration trap.
+- Added Phase 5F structural world-spaces substrate: `WorldState.spaces` + `SpaceState` serialization, hash coverage, and legacy world payload migration into default `overworld` space while preserving `world.hexes` compatibility usage.
+- Extended location substrate and simulation payloads with `LocationRef.space_id` + `EntityState.space_id` defaults, then added strict deterministic `transition_space` command handling with forensic `space_transition` event-trace entries and deterministic rejection for unknown spaces.
+- Added/updated deterministic tests for world-space migration, save/load hash round-trips, transition semantics, and transition determinism; refreshed regression hash snapshots impacted by the structural payload extension.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
