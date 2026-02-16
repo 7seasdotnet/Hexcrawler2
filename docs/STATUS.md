@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4L — Substrate Corrections (same-tick event execution + medium-risk remediation) with deterministic event draining, command-log-safe viewer controllers, and deeper canonical save validation.
-- **Next action:** Phase 5A visibility + descriptor progression, only after preserving Phase 4L determinism/replay/save-load contracts and closing any remaining substrate tech debt.
+- **Current phase:** Phase 5A — Artifact Visibility & Inspection Refinement (layout/readability/save-load hardening) without simulation semantic changes.
+- **Next action:** Build canonical artifact-rich saves via viewer F5/F9 flow, then validate replay/inspection workflows against deterministic hashes.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -27,10 +27,12 @@
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`) with controller actions routed through `SimCommand` append semantics (no direct simulation mutation).
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
-  - Viewer controller input paths now append `SimCommand`s at current simulation tick instead of mutating movement state directly.
-  - Includes CLI parsing for viewer boundary configuration (`--map-path`, `--with-encounters`, `--headless`).
-  - Startup diagnostics now print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` now emit actionable stderr hints and non-zero exits.
-  - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields and now also lists recent world `signals`, world `tracks`, and `encounter_action_outcome` forensic events (newest-first, fixed truncation limits) when encounters are enabled; otherwise it shows `not enabled; run with --with-encounters`.
+  - Viewer controller input paths append `SimCommand`s at current simulation tick instead of mutating movement state directly.
+  - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
+  - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
+  - Uses split layout regions (left world viewport + right fixed-width Encounter Debug panel) so world rendering and the player marker remain visible in the viewport.
+  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/outcomes with stable forensic identifiers and newest-first ordering.
+  - Supports deterministic canonical session persistence in-viewer (`F5` save / `F9` load) using `save_game_json`/`load_game_json` contracts.
 - `src/hexcrawler/cli/replay_tool.py`
   - Headless replay forensics CLI operating on canonical game saves.
 - `src/hexcrawler/cli/new_save_from_map.py`
@@ -129,9 +131,13 @@
 
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
-- `python run_game.py [--map-path ...] [--with-encounters]`
+- `python run_game.py [--map-path ...] [--with-encounters] [--save-path ...] [--load-save ...]`
 - `python run_game.py --headless`
 - `HEXCRAWLER_HEADLESS=1 python run_game.py --with-encounters`
+- `python run_game.py --with-encounters --save-path saves/canonical_with_artifacts.json`
+  - Move briefly, press `F5`, then quit.
+- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
+- `PYTHONPATH=src pytest -q`
 - `set PYTHONPATH=src && pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
 - `PYTHONPATH=src pytest -q tests/test_rules_state.py`
@@ -152,6 +158,11 @@
 - `track_intent`
 
 ## What Changed in This Commit
-- Hardened pygame viewer startup diagnostics: startup banner now prints Python/pygame/platform + SDL env vars before initialization, and `pygame.init()`/`pygame.display.set_mode(...)` failures now report actionable stderr hints and return non-zero exit codes instead of silent exits.
-- Added explicit headless startup controls (`--headless` and `HEXCRAWLER_HEADLESS=1`) that force `SDL_VIDEODRIVER=dummy`, print a no-window warning, and exit cleanly for CI/testing workflows.
-- Added GUI-free regression tests for CLI help and headless startup paths so `main(["--help"])` prints argparse usage without initializing pygame and headless mode exits cleanly with diagnostic output.
+- Expanded pygame viewer layout for Phase 5A: larger window, explicit left world viewport, right-docked fixed-width Encounter Debug panel, and viewport-centered world/entity transforms so the player marker is never drawn under the panel.
+- Improved inspection readability: added section-level scrolling/pagination for signals/tracks/outcomes while preserving newest-first ordering and stable forensic identifiers in every row.
+- Added robust viewer session persistence: `--load-save`/`--save-path` CLI args plus `F5` save and `F9` load keybinds using canonical deterministic save/load APIs, with clear log lines that include path + save/world/simulation hashes.
+- Added GUI-free regression coverage for argparse help/headless behavior and deterministic save/load round-trip parity (tick, input log, simulation hash, signals/tracks/event-trace artifacts).
+- Added/updated troubleshooting and canonical verification commands for SDL dummy/WSL/remote environments and artifact replay inspection.
+
+## Troubleshooting
+- On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

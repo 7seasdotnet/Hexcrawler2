@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import json
 import math
 import os
 import platform
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
-from hexcrawler.content.io import load_world_json
+from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation, TICKS_PER_DAY
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
@@ -19,12 +21,16 @@ from hexcrawler.sim.encounters import (
     EncounterCheckModule,
     EncounterSelectionModule,
 )
+from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord
 
 HEX_SIZE = 28
 GRID_RADIUS = 8
-WINDOW_SIZE = (1024, 768)
+WINDOW_SIZE = (1440, 900)
+PANEL_WIDTH = 520
+VIEWPORT_MARGIN = 12
+PANEL_MARGIN = 12
 SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
 
@@ -40,6 +46,7 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
 ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
 ENCOUNTER_DEBUG_TRACK_LIMIT = 10
 ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
+ENCOUNTER_DEBUG_SECTION_ROWS = 6
 
 pygame: Any | None = None
 
@@ -50,6 +57,30 @@ class ContextMenuState:
     pixel_y: int
     world_x: float
     world_y: float
+
+
+@dataclass
+class EncounterPanelScrollState:
+    signals_offset: int = 0
+    tracks_offset: int = 0
+    outcomes_offset: int = 0
+
+    def offset_for(self, section: str) -> int:
+        if section == "signals":
+            return self.signals_offset
+        if section == "tracks":
+            return self.tracks_offset
+        return self.outcomes_offset
+
+    def scroll(self, section: str, delta: int, total_count: int, page_size: int) -> None:
+        max_offset = max(0, total_count - page_size)
+        next_offset = max(0, min(max_offset, self.offset_for(section) + delta))
+        if section == "signals":
+            self.signals_offset = next_offset
+        elif section == "tracks":
+            self.tracks_offset = next_offset
+        else:
+            self.outcomes_offset = next_offset
 
 
 @dataclass
@@ -151,7 +182,26 @@ def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
     return points
 
 
-def _draw_world(screen: pygame.Surface, sim: Simulation, center: tuple[float, float]) -> None:
+def _viewport_rect() -> pygame.Rect:
+    panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
+    width = panel_x - (VIEWPORT_MARGIN * 2)
+    return pygame.Rect(VIEWPORT_MARGIN, VIEWPORT_MARGIN, width, WINDOW_SIZE[1] - (VIEWPORT_MARGIN * 2))
+
+
+def _panel_rect() -> pygame.Rect:
+    panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
+    return pygame.Rect(panel_x, PANEL_MARGIN, PANEL_WIDTH, WINDOW_SIZE[1] - (PANEL_MARGIN * 2))
+
+
+def _draw_world(
+    screen: pygame.Surface,
+    sim: Simulation,
+    center: tuple[float, float],
+    *,
+    clip_rect: pygame.Rect,
+) -> None:
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
     for coord in _grid_coords(GRID_RADIUS):
         pixel = _axial_to_pixel(coord, center)
         points = _hex_points(pixel)
@@ -165,13 +215,24 @@ def _draw_world(screen: pygame.Surface, sim: Simulation, center: tuple[float, fl
         if record and record.site_type != "none":
             site_color = SITE_COLORS.get(record.site_type, (245, 245, 120))
             pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
+    screen.set_clip(old_clip)
 
 
-def _draw_entity(screen: pygame.Surface, world_x: float, world_y: float, center: tuple[float, float]) -> None:
+def _draw_entity(
+    screen: pygame.Surface,
+    world_x: float,
+    world_y: float,
+    center: tuple[float, float],
+    *,
+    clip_rect: pygame.Rect,
+) -> None:
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
     x = int(center[0] + world_x * HEX_SIZE)
     y = int(center[1] + world_y * HEX_SIZE)
     pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
     pygame.draw.circle(screen, (15, 15, 15), (x, y), 8, 1)
+    screen.set_clip(old_clip)
 
 
 def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -> None:
@@ -180,7 +241,7 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
         f"CURRENT HEX: ({entity.hex_coord.q}, {entity.hex_coord.r})",
         f"ticks: {sim.state.tick}",
         f"day: {sim.state.tick // TICKS_PER_DAY}",
-        "WASD move | RMB menu | ESC quit",
+        "WASD move | RMB menu | F5 save | F9 load | ESC quit",
     ]
     y = 12
     for line in lines:
@@ -189,15 +250,35 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
         y += 24
 
 
-def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -> None:
-    panel_rect = pygame.Rect(WINDOW_SIZE[0] - 588, 12, 576, WINDOW_SIZE[1] - 24)
+def _format_location(location: object) -> str:
+    if not isinstance(location, dict):
+        return "loc=?"
+    topology = str(location.get("topology_type", "?"))
+    coord = location.get("coord")
+    if isinstance(coord, dict):
+        q = coord.get("q")
+        r = coord.get("r")
+        return f"{topology}:{q},{r}"
+    return f"{topology}:?"
+
+
+def _draw_encounter_debug_panel(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    scroll_state: EncounterPanelScrollState,
+) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
+    panel_rect = _panel_rect()
     pygame.draw.rect(screen, (24, 26, 36), panel_rect)
     pygame.draw.rect(screen, (95, 98, 110), panel_rect, 1)
 
     y = panel_rect.y + 8
     header = font.render("Encounter Debug", True, (245, 245, 245))
     screen.blit(header, (panel_rect.x + 10, y))
-    y += 24
+    y += 18
+    hint = font.render("Mouse wheel/PgUp/PgDn scroll hovered section", True, (190, 192, 202))
+    screen.blit(hint, (panel_rect.x + 10, y))
+    y += 18
 
     module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
     if not module_present:
@@ -207,108 +288,106 @@ def _draw_encounter_debug_panel(screen: pygame.Surface, sim: Simulation, font: p
             (220, 180, 130),
         )
         screen.blit(message, (panel_rect.x + 10, y))
-        return
+        return {}, {}
 
     state = sim.get_rules_state(EncounterCheckModule.name)
-    last_check_tick = int(state.get("last_check_tick", -1))
-    checks_emitted = int(state.get("checks_emitted", 0))
-    eligible_count = int(state.get("eligible_count", 0))
-    ineligible_streak = int(state.get("ineligible_streak", 0))
-    cooldown_until_tick = int(state.get("cooldown_until_tick", -1))
-
-    cooldown_active = sim.state.tick < cooldown_until_tick
-    cooldown_ticks_remaining = max(0, cooldown_until_tick - sim.state.tick)
-
     kv_rows = [
-        ("last_check_tick", str(last_check_tick)),
-        ("checks_emitted", str(checks_emitted)),
-        ("eligible_count", str(eligible_count)),
-        ("cooldown_ticks_left", str(cooldown_ticks_remaining)),
-        ("ineligible_streak", str(ineligible_streak)),
+        ("last_check_tick", str(int(state.get("last_check_tick", -1)))),
+        ("checks_emitted", str(int(state.get("checks_emitted", 0)))),
+        ("eligible_count", str(int(state.get("eligible_count", 0)))),
+        (
+            "cooldown_ticks_left",
+            str(max(0, int(state.get("cooldown_until_tick", -1)) - sim.state.tick)),
+        ),
+        ("ineligible_streak", str(int(state.get("ineligible_streak", 0)))),
     ]
     for key, value in kv_rows:
         line = font.render(f"{key}: {value}", True, (224, 224, 224))
         screen.blit(line, (panel_rect.x + 10, y))
         y += 18
 
-    def render_line(text: str, color: tuple[int, int, int]) -> None:
-        nonlocal y
-        if y > panel_rect.bottom - 16:
-            return
-        screen.blit(font.render(text, True, color), (panel_rect.x + 10, y))
-        y += 16
-
-    def compact_location(location: object) -> str:
-        if not isinstance(location, dict):
-            return "loc=?"
-        topology = str(location.get("topology_type", "?"))
-        coord = location.get("coord")
-        if isinstance(coord, dict):
-            q = coord.get("q")
-            r = coord.get("r")
-            return f"{topology}:{q},{r}"
-        return f"{topology}:?"
-
-    y += 4
-    render_line("Recent Signals (N=10)", (245, 245, 245))
     recent_signals = list(reversed(sim.state.world.signals[-ENCOUNTER_DEBUG_SIGNAL_LIMIT:]))
-    if not recent_signals:
-        render_line("  none", (205, 205, 210))
-    for record in recent_signals:
-        created_tick = record.get("created_tick", "?")
-        template_id = record.get("template_id", "?")
-        expires_tick = record.get("expires_tick")
-        expires_text = "-" if expires_tick is None else str(expires_tick)
-        render_line(
-            f"  t={created_tick} {compact_location(record.get('location'))} tpl={template_id} exp={expires_text}",
-            (205, 205, 210),
-        )
-
-    render_line("Recent Tracks (N=10)", (245, 245, 245))
     recent_tracks = list(reversed(sim.state.world.tracks[-ENCOUNTER_DEBUG_TRACK_LIMIT:]))
-    if not recent_tracks:
-        render_line("  none", (205, 205, 210))
-    for record in recent_tracks:
-        created_tick = record.get("created_tick", "?")
-        template_id = record.get("template_id", "?")
-        expires_tick = record.get("expires_tick")
-        expires_text = "-" if expires_tick is None else str(expires_tick)
-        render_line(
-            f"  t={created_tick} {compact_location(record.get('location'))} tpl={template_id} exp={expires_text}",
-            (205, 205, 210),
-        )
-
-    render_line("Recent Action Outcomes (N=20)", (245, 245, 245))
     filtered_trace = [
         entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
     ]
-    outcomes = list(reversed(filtered_trace[-ENCOUNTER_DEBUG_OUTCOME_LIMIT:]))
-    if not outcomes:
-        render_line("  none", (205, 205, 210))
-    for entry in outcomes:
+    recent_outcomes = list(reversed(filtered_trace[-ENCOUNTER_DEBUG_OUTCOME_LIMIT:]))
+
+    signal_rows = [
+        (
+            f"  created={record.get('created_tick', '?')} "
+            f"template={record.get('template_id', '?')} "
+            f"location={_format_location(record.get('location'))} "
+            f"expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'}"
+        )
+        for record in recent_signals
+    ]
+    track_rows = [
+        (
+            f"  created={record.get('created_tick', '?')} "
+            f"template={record.get('template_id', '?')} "
+            f"location={_format_location(record.get('location'))} "
+            f"expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'}"
+        )
+        for record in recent_tracks
+    ]
+    outcome_rows = []
+    for entry in recent_outcomes:
         params = entry.get("params")
         params = params if isinstance(params, dict) else {}
-        tick = entry.get("tick", "?")
-        action_uid = params.get("action_uid", "?")
-        action_type = params.get("action_type", "?")
-        outcome = params.get("outcome", "?")
         template_id = params.get("template_id")
-        template_text = "-" if template_id in (None, "") else str(template_id)
-        render_line(
-            f"  t={tick} uid={action_uid} type={action_type} outcome={outcome} tpl={template_text}",
-            (205, 205, 210),
+        outcome_rows.append(
+            f"  tick={entry.get('tick', '?')} "
+            f"action_uid={params.get('action_uid', '?')} "
+            f"action_type={params.get('action_type', '?')} "
+            f"outcome={params.get('outcome', '?')} "
+            f"template={template_id if template_id not in (None, '') else '-'}"
         )
+
+    section_rects: dict[str, pygame.Rect] = {}
+    section_counts: dict[str, int] = {}
+
+    def render_section(section: str, title: str, rows: list[str]) -> None:
+        nonlocal y
+        total = len(rows)
+        section_counts[section] = total
+        offset = scroll_state.offset_for(section)
+        section_top = y
+        header_line = font.render(
+            f"{title} ({total}) [{offset + 1 if total else 0}-{min(total, offset + ENCOUNTER_DEBUG_SECTION_ROWS)}]",
+            True,
+            (245, 245, 245),
+        )
+        screen.blit(header_line, (panel_rect.x + 10, y))
+        y += 16
+        slice_rows = rows[offset : offset + ENCOUNTER_DEBUG_SECTION_ROWS]
+        if not slice_rows:
+            screen.blit(font.render("  none", True, (205, 205, 210)), (panel_rect.x + 10, y))
+            y += 16
+        for row in slice_rows:
+            screen.blit(font.render(row, True, (205, 205, 210)), (panel_rect.x + 10, y))
+            y += 16
+        section_rects[section] = pygame.Rect(panel_rect.x + 6, section_top, panel_rect.width - 12, y - section_top)
+        y += 6
+
+    y += 4
+    render_section("signals", "Recent Signals", signal_rows)
+    render_section("tracks", "Recent Tracks", track_rows)
+    render_section("outcomes", "Recent Action Outcomes", outcome_rows)
+    return section_rects, section_counts
 
 
 def _draw_context_menu(
     screen: pygame.Surface,
     font: pygame.font.Font,
     menu_state: ContextMenuState | None,
+    viewport_rect: pygame.Rect,
 ) -> pygame.Rect | None:
     if menu_state is None:
         return None
 
     menu_rect = pygame.Rect(menu_state.pixel_x, menu_state.pixel_y, 130, 34)
+    menu_rect.clamp_ip(viewport_rect)
     pygame.draw.rect(screen, (32, 34, 44), menu_rect)
     pygame.draw.rect(screen, (185, 185, 200), menu_rect, 1)
 
@@ -352,6 +431,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force SDL dummy video driver for CI/testing and exit without opening a real window.",
     )
+    parser.add_argument(
+        "--load-save",
+        help="Optional canonical save JSON path to load simulation state on startup.",
+    )
+    parser.add_argument(
+        "--save-path",
+        default="saves/session_save.json",
+        help="Canonical save JSON path used by F5 save and fallback F9 load.",
+    )
     return parser
 
 
@@ -384,20 +472,49 @@ def _ensure_pygame_imported() -> Any:
     return pygame
 
 
+def _register_encounter_modules(sim: Simulation) -> None:
+    if sim.get_rule_module(EncounterCheckModule.name) is not None:
+        return
+    sim.register_rule_module(EncounterCheckModule())
+    sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
+    sim.register_rule_module(EncounterActionModule())
+    sim.register_rule_module(EncounterActionExecutionModule())
+
+
 def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulation:
     world = load_world_json(map_path)
     sim = Simulation(world=world, seed=7)
     if with_encounters:
-        sim.register_rule_module(EncounterCheckModule())
-        sim.register_rule_module(
-            EncounterSelectionModule(
-                load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)
-            )
-        )
-        sim.register_rule_module(EncounterActionModule())
-        sim.register_rule_module(EncounterActionExecutionModule())
+        _register_encounter_modules(sim)
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     return sim
+
+
+def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulation:
+    _, sim = load_game_json(save_path)
+    should_enable_encounters = with_encounters or EncounterCheckModule.name in sim.state.rules_state
+    if should_enable_encounters:
+        _register_encounter_modules(sim)
+    print(
+        "[hexcrawler.viewer] loaded "
+        f"path={save_path} tick={sim.state.tick} "
+        f"input_log={len(sim.input_log)} "
+        f"world_hash={world_hash(sim.state.world)} "
+        f"simulation_hash={simulation_hash(sim)}"
+    )
+    return sim
+
+
+def _save_viewer_simulation(sim: Simulation, save_path: str) -> None:
+    save_game_json(save_path, sim.state.world, sim)
+    payload = json.loads(Path(save_path).read_text(encoding="utf-8"))
+    print(
+        "[hexcrawler.viewer] saved "
+        f"path={save_path} "
+        f"save_hash={payload.get('save_hash', '<missing>')} "
+        f"world_hash={world_hash(sim.state.world)} "
+        f"simulation_hash={simulation_hash(sim)}"
+    )
 
 
 def run_pygame_viewer(
@@ -405,6 +522,8 @@ def run_pygame_viewer(
     *,
     with_encounters: bool = False,
     headless: bool = False,
+    load_save: str | None = None,
+    save_path: str = "saves/session_save.json",
 ) -> int:
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
@@ -423,11 +542,20 @@ def run_pygame_viewer(
         )
         return 1
 
-    sim = _build_viewer_simulation(map_path, with_encounters=with_encounters)
+    try:
+        sim = _load_viewer_simulation(load_save, with_encounters=with_encounters) if load_save else _build_viewer_simulation(
+            map_path,
+            with_encounters=with_encounters,
+        )
+    except Exception as exc:
+        print(f"[hexcrawler.viewer] failed to initialize simulation: {exc}", file=sys.stderr)
+        pygame_module.quit()
+        return 1
+
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
 
     try:
-        pygame_module.display.set_caption("Hexcrawler Phase 1 Viewer")
+        pygame_module.display.set_caption("Hexcrawler Phase 5A Viewer")
         screen = pygame_module.display.set_mode(WINDOW_SIZE)
     except Exception as exc:
         print(
@@ -450,7 +578,13 @@ def run_pygame_viewer(
     font = pygame_module.font.SysFont("consolas", 22)
     debug_font = pygame_module.font.SysFont("consolas", 16)
 
-    center = (WINDOW_SIZE[0] / 2.0, WINDOW_SIZE[1] / 2.0)
+    viewport_rect = _viewport_rect()
+    world_center = (float(viewport_rect.centerx), float(viewport_rect.centery))
+    panel_scroll = EncounterPanelScrollState()
+    panel_section_rects: dict[str, pygame.Rect] = {}
+    panel_section_counts: dict[str, int] = {}
+    active_panel_section = "outcomes"
+
     accumulator = 0.0
     running = True
     context_menu: ContextMenuState | None = None
@@ -468,8 +602,47 @@ def run_pygame_viewer(
                 running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_ESCAPE:
                 running = False
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F5:
+                _save_viewer_simulation(sim, save_path)
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F9:
+                load_target = load_save if load_save else save_path
+                if load_target and Path(load_target).exists():
+                    try:
+                        sim = _load_viewer_simulation(load_target, with_encounters=with_encounters)
+                        controller.sim = sim
+                        previous_snapshot = extract_render_snapshot(sim)
+                        current_snapshot = previous_snapshot
+                        last_tick_time = pygame_module.time.get_ticks() / 1000.0
+                        context_menu = None
+                    except Exception as exc:
+                        print(f"[hexcrawler.viewer] load failed path={load_target}: {exc}", file=sys.stderr)
+                else:
+                    print(f"[hexcrawler.viewer] load skipped; file not found path={load_target}")
+            elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
+                delta = -1 if event.key == pygame_module.K_PAGEUP else 1
+                panel_scroll.scroll(
+                    active_panel_section,
+                    delta,
+                    panel_section_counts.get(active_panel_section, 0),
+                    ENCOUNTER_DEBUG_SECTION_ROWS,
+                )
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button in (4, 5):
+                if _panel_rect().collidepoint(event.pos):
+                    for section_name, section_rect in panel_section_rects.items():
+                        if section_rect.collidepoint(event.pos):
+                            active_panel_section = section_name
+                            panel_scroll.scroll(
+                                section_name,
+                                -1 if event.button == 4 else 1,
+                                panel_section_counts.get(section_name, 0),
+                                ENCOUNTER_DEBUG_SECTION_ROWS,
+                            )
+                            break
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
-                world_x, world_y = _pixel_to_world(event.pos[0], event.pos[1], center)
+                if not viewport_rect.collidepoint(event.pos):
+                    context_menu = None
+                    continue
+                world_x, world_y = _pixel_to_world(event.pos[0], event.pos[1], world_center)
                 target_hex = world_xy_to_axial(world_x, world_y)
                 if sim.state.world.get_hex_record(target_hex) is None:
                     context_menu = None
@@ -495,13 +668,14 @@ def run_pygame_viewer(
         alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
 
         screen.fill((17, 18, 25))
-        _draw_world(screen, sim, center)
+        _draw_world(screen, sim, world_center, clip_rect=viewport_rect)
+        pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
         interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, PLAYER_ID, alpha)
         if interpolated is not None:
-            _draw_entity(screen, interpolated[0], interpolated[1], center)
+            _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
         _draw_hud(screen, sim, font)
-        _draw_encounter_debug_panel(screen, sim, debug_font)
-        _draw_context_menu(screen, font, context_menu)
+        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll)
+        _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
 
     pygame_module.quit()
@@ -517,6 +691,8 @@ def main(argv: list[str] | None = None) -> None:
             map_path=args.map_path,
             with_encounters=args.with_encounters,
             headless=headless,
+            load_save=args.load_save,
+            save_path=args.save_path,
         )
     )
 

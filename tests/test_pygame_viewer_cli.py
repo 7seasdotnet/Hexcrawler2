@@ -1,12 +1,23 @@
+from pathlib import Path
+
 import pytest
 
-from hexcrawler.cli.pygame_viewer import PLAYER_ID, SimulationController, _build_parser, _build_viewer_simulation
+from hexcrawler.cli.pygame_viewer import (
+    PLAYER_ID,
+    SimulationController,
+    _build_parser,
+    _build_viewer_simulation,
+    _load_viewer_simulation,
+    _save_viewer_simulation,
+)
 from hexcrawler.sim.encounters import (
+    ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
     EncounterSelectionModule,
 )
+from hexcrawler.sim.hash import simulation_hash
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -15,13 +26,17 @@ def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
 
     assert args.with_encounters is False
     assert args.map_path == "content/examples/basic_map.json"
+    assert args.save_path == "saves/session_save.json"
+    assert args.load_save is None
 
 
 def test_viewer_parser_with_encounters_flag_can_be_enabled() -> None:
     parser = _build_parser()
-    args = parser.parse_args(["--with-encounters"])
+    args = parser.parse_args(["--with-encounters", "--save-path", "saves/dev.json", "--load-save", "saves/dev.json"])
 
     assert args.with_encounters is True
+    assert args.save_path == "saves/dev.json"
+    assert args.load_save == "saves/dev.json"
 
 
 def test_viewer_simulation_registers_encounter_modules_only_when_enabled() -> None:
@@ -77,3 +92,48 @@ def test_main_headless_mode_exits_cleanly_and_warns(capsys: pytest.CaptureFixtur
     captured = capsys.readouterr()
     assert result.value.code == 0
     assert "headless mode active" in captured.out
+
+
+def test_viewer_save_load_round_trip_preserves_tick_log_hash_and_artifacts(tmp_path: Path) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    sim.advance_ticks(160)
+    sim.state.world.upsert_signal(
+        {
+            "signal_uid": "sig-test",
+            "created_tick": sim.state.tick,
+            "template_id": "smoke_column",
+            "location": {"topology_type": "hex", "coord": {"q": 1, "r": 0}},
+            "expires_tick": sim.state.tick + 100,
+        }
+    )
+    sim.state.world.upsert_track(
+        {
+            "track_uid": "trk-test",
+            "created_tick": sim.state.tick,
+            "template_id": "wolf_tracks",
+            "location": {"topology_type": "hex", "coord": {"q": 1, "r": 1}},
+            "expires_tick": sim.state.tick + 100,
+        }
+    )
+    sim.schedule_event_at(
+        sim.state.tick,
+        ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
+        {
+            "action_uid": "outcome-test",
+            "action_type": "signal_intent",
+            "outcome": "applied",
+            "template_id": "smoke_column",
+        },
+    )
+    sim.advance_ticks(1)
+
+    save_path = tmp_path / "viewer_round_trip.json"
+    _save_viewer_simulation(sim, str(save_path))
+    loaded = _load_viewer_simulation(str(save_path), with_encounters=True)
+
+    assert loaded.state.tick == sim.state.tick
+    assert len(loaded.input_log) == len(sim.input_log)
+    assert simulation_hash(loaded) == simulation_hash(sim)
+    assert loaded.state.world.signals == sim.state.world.signals
+    assert loaded.state.world.tracks == sim.state.world.tracks
+    assert loaded.get_event_trace() == sim.get_event_trace()
