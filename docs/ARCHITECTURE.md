@@ -171,10 +171,20 @@ This document locks core engine contracts and invariants for the simulation subs
   - If `action_type` is unknown: no world mutation and outcome `ignored_unsupported`.
   - If `action_type` is supported: execute deterministic mutation and mark UID as executed.
 - **Initial Supported Action Set (provisional):** `signal_intent`, `track_intent`, `spawn_intent`.
-- **World Mutation Boundary:** Supported actions may only create deterministic data records in world containers (`world.signals`, `world.tracks`, `world.spawn_descriptors`) keyed by action UID semantics; no combat, entity spawning, AI, faction/ecology, or pathfinding side effects are allowed.
+- **World Mutation Boundary:** Supported actions may only create deterministic data records in world containers (`world.signals`, `world.tracks`, `world.spawn_descriptors`) keyed by action UID semantics; no combat/AI/faction/ecology/pathfinding side effects are allowed in this seam.
 - **Forensic Trace Contract:** For each processed action, schedule `encounter_action_outcome` with `action_uid` and deterministic outcome details.
 - **Determinism Contract:** Phase 4J introduces no new RNG streams and no RNG draws; save/load continuation and replay must keep identical hashes.
 - **Forward-Compatibility Note:** The initial supported action set is intentionally provisional and may be renamed/expanded in later phases under explicit contract updates.
+
+
+## 6M) Spawn Descriptor Materialization (Phase 5C)
+- **Purpose:** Deterministically instantiate minimal inert entities from `world.spawn_descriptors` while preserving replay/save-load idempotence guarantees.
+- **Execution Contract:** `SpawnMaterializationModule` runs on tick start and ensures that, for every descriptor record, exactly `quantity` entities exist. Existing entities are left unchanged.
+- **Entity ID Contract:** For descriptor action UID `A` and quantity index `i`, entity IDs are `spawn:{A}:{i}` (index range `[0, quantity-1]`). IDs are deterministic, collision-free under action UID uniqueness, and independent of RNG/stateful counters.
+- **Ordering Contract:** Materialization iterates descriptors in append order and per-descriptor indices in ascending order to keep deterministic creation order stable across platforms/replays.
+- **Idempotence Ledger Contract:** Materialized entity IDs are persisted in serialized/hash-covered rules state (`simulation_state.rules_state["spawn_materialization"].materialized_entity_ids`) for deterministic accounting/forensics only; correctness must still hold if entities already exist in state.
+- **Minimal Entity Contract:** Materialized entities store deterministic ID, position/hex from descriptor location, `template_id`, and `source_action_uid`; they default to `speed_per_tick=0.0` and have no autonomous behavior/combat stats in Phase 5C.
+- **Persistence/Hash Contract:** Materialized entities and ledger state are canonical-save serialized and included in simulation hash coverage; save/load and replay with same seed + input log must produce identical hashes and spawned entity IDs.
 
 ## 7) Serialization Contract (Elite)
 - **Contract:** Save -> load must round-trip to identical world hash.

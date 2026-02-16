@@ -15,6 +15,7 @@ ARTIFACT_PRINT_SIGNAL_LIMIT = 10
 ARTIFACT_PRINT_TRACK_LIMIT = 10
 ARTIFACT_PRINT_SPAWN_LIMIT = 10
 ARTIFACT_PRINT_OUTCOME_LIMIT = 20
+ARTIFACT_PRINT_ENTITY_LIMIT = 20
 
 
 def _non_negative_int(value: str) -> int:
@@ -145,6 +146,25 @@ def _print_artifacts(simulation: Simulation) -> None:
             f"quantity={quantity} "
             f"expires_tick={expires_text} "
             f"action_uid={action_uid}"
+        )
+
+
+    print(f"artifacts.entities.limit={ARTIFACT_PRINT_ENTITY_LIMIT}")
+    spawned_entities = [
+        entity
+        for entity in sorted(simulation.state.entities.values(), key=lambda current: current.entity_id)
+        if entity.entity_id.startswith("spawn:")
+    ]
+    recent_entities = list(reversed(spawned_entities[-ARTIFACT_PRINT_ENTITY_LIMIT:]))
+    if not recent_entities:
+        print("artifacts.entity none")
+    for entity in recent_entities:
+        print(
+            "artifacts.entity "
+            f"entity_id={entity.entity_id} "
+            f"template_id={entity.template_id if entity.template_id else '-'} "
+            f"location=overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r} "
+            f"source_action_uid={entity.source_action_uid if entity.source_action_uid else '-'}"
         )
 
     print(f"artifacts.outcomes.limit={ARTIFACT_PRINT_OUTCOME_LIMIT}")
