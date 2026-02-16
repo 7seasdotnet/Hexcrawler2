@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 4J Encounter Action Execution Substrate — encounter pipeline now schedules deterministic `encounter_action_execute` events from `encounter_action_stub` and executes a minimal idempotent world-mutation action set into serialized records (`signals`/`tracks`) with forensic outcomes.
-- **Next action:** Phase 4K spawn descriptor seam (non-AI inert descriptor planning) or explicit action-set expansion planning under the 4J determinism/idempotence contracts.
+- **Current phase:** Phase 4K-lite Minimal Visibility Tooling — read-only tooling now surfaces existing Phase 4J artifacts (`signals`, `tracks`, `encounter_action_outcome`) during runtime and replay without changing simulation semantics.
+- **Next action:** Phase 4K proper planning/scope clarification (spawn-descriptor seam or action-set expansion), keeping 4K-lite visibility strictly read-only and preserving all 4J determinism contracts.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -27,7 +27,7 @@
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
   - Includes CLI parsing for viewer boundary configuration (`--map-path`, `--with-encounters`).
-  - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields, shows cooldown summary values, and lists recent `encounter_check`/`encounter_roll` entries from the executed event trace only when the encounter module is enabled.
+  - Includes a read-only "Encounter Debug" panel that inspects `encounter_check` rules-state fields and now also lists recent world `signals`, world `tracks`, and `encounter_action_outcome` forensic events (newest-first, fixed truncation limits) when encounters are enabled; otherwise it shows `not enabled; run with --with-encounters`.
 - `src/hexcrawler/cli/replay_tool.py`
   - Headless replay forensics CLI operating on canonical game saves.
 - `src/hexcrawler/cli/new_save_from_map.py`
@@ -51,6 +51,7 @@
   - Encounter debug data appears only when run with `--with-encounters`; otherwise the panel shows an explicit enablement hint.
 - Run replay tool from canonical save:
   - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
+- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200 --print-artifacts`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## Progress
@@ -138,6 +139,7 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map --help`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
+- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200 --print-artifacts`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## Initial Supported Action Set (provisional)
@@ -145,6 +147,6 @@
 - `track_intent`
 
 ## What Changed in This Commit
-- Added Phase 4J `EncounterActionExecutionModule` plus serialized events `encounter_action_execute`/`encounter_action_outcome`, deterministic `action_uid` derivation, and a hash-covered idempotence ledger in `rules_state`.
-- Added deterministic world record containers (`world.signals`, `world.tracks`) with action-UID keyed inserts for supported actions and deterministic `ignored_unsupported` outcomes for unknown action types.
-- Expanded deterministic test coverage (scheduling, idempotence, unsupported actions, replay/save-load hash identity, and hash guard baseline) and wired encounter-enabled viewer simulation to register the execution module.
+- Extended the pygame encounter debug panel (read-only) to show newest-first truncated lists for recent `signals` (N=10), `tracks` (N=10), and `encounter_action_outcome` entries (N=20), with safe fallbacks for missing fields and explicit not-enabled messaging.
+- Added `--print-artifacts` to `hexcrawler.cli.replay_tool` to print concise deterministic summaries of recent signals/tracks/outcomes at replay end, without mutating simulation state.
+- Added replay-tool tests for new flag parsing/output while keeping existing viewer module-registration coverage unchanged and preserving deterministic test baselines.
