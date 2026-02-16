@@ -81,6 +81,39 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
         if not isinstance(track, dict):
             raise ValueError(f"{field_prefix}.tracks[{index}] must be an object")
 
+    spawn_descriptors = payload.get("spawn_descriptors", [])
+    if not isinstance(spawn_descriptors, list):
+        raise ValueError(f"{field_prefix}.spawn_descriptors must be a list when present")
+    for index, descriptor in enumerate(spawn_descriptors):
+        if not isinstance(descriptor, dict):
+            raise ValueError(f"{field_prefix}.spawn_descriptors[{index}] must be an object")
+        _validate_spawn_descriptor(
+            descriptor,
+            field_name=f"{field_prefix}.spawn_descriptors[{index}]",
+        )
+
+
+def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -> None:
+    required_int_fields = {"created_tick", "quantity"}
+    for key in required_int_fields:
+        value = descriptor.get(key)
+        if not isinstance(value, int):
+            raise ValueError(f"{field_name}.{key} must be an integer")
+
+    required_string_fields = {"template_id", "source_event_id", "action_uid"}
+    for key in required_string_fields:
+        value = descriptor.get(key)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{field_name}.{key} must be a non-empty string")
+
+    location = descriptor.get("location")
+    if not isinstance(location, dict):
+        raise ValueError(f"{field_name}.location must be an object")
+
+    expires_tick = descriptor.get("expires_tick")
+    if expires_tick is not None and not isinstance(expires_tick, int):
+        raise ValueError(f"{field_name}.expires_tick must be an integer when present")
+
 
 def validate_world_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):

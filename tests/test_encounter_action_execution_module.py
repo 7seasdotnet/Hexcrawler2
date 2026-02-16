@@ -96,6 +96,45 @@ def test_supported_actions_create_signal_and_track_records_with_stable_action_ui
     ]
 
 
+def test_spawn_intent_appends_descriptor_once_with_required_fields() -> None:
+    sim = _build_execution_sim(seed=141)
+    execute_params = {
+        "source_event_id": "evt-spawn-source",
+        "location": {"topology_type": "overworld_hex", "coord": {"q": 2, "r": -1}},
+        "actions": [
+            {
+                "action_type": "spawn_intent",
+                "template_id": "bandit_scouts",
+                "quantity": 2,
+                "params": {"ttl_ticks": 4, "note": "scouts"},
+                "extra_hint": "north_road",
+            }
+        ],
+    }
+    sim.schedule_event_at(tick=0, event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE, params=execute_params)
+
+    sim.advance_ticks(3)
+
+    assert sim.state.world.spawn_descriptors == [
+        {
+            "created_tick": 0,
+            "location": {"topology_type": "overworld_hex", "coord": {"q": 2, "r": -1}},
+            "template_id": "bandit_scouts",
+            "quantity": 2,
+            "expires_tick": 4,
+            "source_event_id": "evt-spawn-source",
+            "action_uid": "evt-spawn-source:0",
+            "params": {"ttl_ticks": 4, "note": "scouts"},
+            "extra_hint": "north_road",
+        }
+    ]
+
+    outcomes = [entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
+    assert outcomes[-1]["params"]["outcome"] == "executed"
+    assert outcomes[-1]["params"]["quantity"] == 2
+    assert outcomes[-1]["params"]["location"] == {"topology_type": "overworld_hex", "coord": {"q": 2, "r": -1}}
+
+
 def test_idempotence_repeated_execution_path_does_not_duplicate_world_records() -> None:
     sim = _build_execution_sim(seed=5)
     execute_params = {
@@ -109,6 +148,23 @@ def test_idempotence_repeated_execution_path_does_not_duplicate_world_records() 
     sim.advance_ticks(4)
 
     assert len(sim.state.world.signals) == 1
+    outcomes = [entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
+    assert [entry["params"]["outcome"] for entry in outcomes] == ["executed", "already_executed"]
+
+
+def test_spawn_idempotence_reexecuting_action_uid_does_not_duplicate_descriptors() -> None:
+    sim = _build_execution_sim(seed=88)
+    execute_params = {
+        "source_event_id": "evt-source",
+        "location": {"topology_type": "overworld_hex", "coord": {"q": 1, "r": -1}},
+        "actions": [{"action_type": "spawn_intent", "template_id": "bandit_scouts", "params": {}}],
+    }
+    sim.schedule_event_at(tick=0, event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE, params=execute_params)
+    sim.schedule_event_at(tick=1, event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE, params=execute_params)
+
+    sim.advance_ticks(4)
+
+    assert len(sim.state.world.spawn_descriptors) == 1
     outcomes = [entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
     assert [entry["params"]["outcome"] for entry in outcomes] == ["executed", "already_executed"]
 
@@ -201,6 +257,49 @@ def test_action_execution_replay_hash_identity() -> None:
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
 
 
+def test_spawn_execution_replay_hash_and_summary_identity() -> None:
+    sim_a = _build_execution_sim(seed=903)
+    sim_b = _build_execution_sim(seed=903)
+    execute_params = {
+        "source_event_id": "evt-source",
+        "location": {"topology_type": "overworld_hex", "coord": {"q": -2, "r": 1}},
+        "actions": [
+            {"action_type": "spawn_intent", "template_id": "bandit_scouts", "quantity": 1, "params": {}},
+            {"action_type": "spawn_intent", "template_id": "wolf_pack", "quantity": 3, "params": {"ttl_ticks": 2}},
+        ],
+    }
+
+    for sim in (sim_a, sim_b):
+        sim.schedule_event_at(tick=0, event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE, params=execute_params)
+        sim.advance_ticks(6)
+
+    summary_a = [
+        {
+            "created_tick": row["created_tick"],
+            "location": row["location"],
+            "template_id": row["template_id"],
+            "quantity": row["quantity"],
+            "expires_tick": row["expires_tick"],
+            "action_uid": row["action_uid"],
+        }
+        for row in sim_a.state.world.spawn_descriptors
+    ]
+    summary_b = [
+        {
+            "created_tick": row["created_tick"],
+            "location": row["location"],
+            "template_id": row["template_id"],
+            "quantity": row["quantity"],
+            "expires_tick": row["expires_tick"],
+            "action_uid": row["action_uid"],
+        }
+        for row in sim_b.state.world.spawn_descriptors
+    ]
+
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
+    assert summary_a == summary_b
+
+
 def test_action_execution_contract_regression_hash_is_stable() -> None:
     sim = _build_execution_sim(seed=17)
     sim.schedule_event_at(
@@ -219,4 +318,4 @@ def test_action_execution_contract_regression_hash_is_stable() -> None:
 
     sim.advance_ticks(8)
 
-    assert simulation_hash(sim) == "55895fd2c6ae1b209d6b7a480f7331f0cb2d908ac98e332fd3dd21666476f41e"
+    assert simulation_hash(sim) == "c2bf89d4b16ef05d98dbbf42bc80b274bc878b09daf738520e9720d07d19c5a8"

@@ -13,6 +13,7 @@ from hexcrawler.sim.hash import simulation_hash
 
 ARTIFACT_PRINT_SIGNAL_LIMIT = 10
 ARTIFACT_PRINT_TRACK_LIMIT = 10
+ARTIFACT_PRINT_SPAWN_LIMIT = 10
 ARTIFACT_PRINT_OUTCOME_LIMIT = 20
 
 
@@ -46,7 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--print-artifacts",
         action="store_true",
-        help="Print concise recent signal/track/action-outcome artifacts after replay",
+        help="Print concise recent signal/track/spawn/action-outcome artifacts after replay",
     )
     parser.add_argument(
         "--dump-final-save",
@@ -123,6 +124,27 @@ def _print_artifacts(simulation: Simulation) -> None:
             f"location={_format_location(record.get('location'))} "
             f"template_id={template_id} "
             f"expires_tick={expires_text}"
+        )
+
+    print(f"artifacts.spawns.limit={ARTIFACT_PRINT_SPAWN_LIMIT}")
+    recent_spawns = list(reversed(simulation.state.world.spawn_descriptors[-ARTIFACT_PRINT_SPAWN_LIMIT:]))
+    if not recent_spawns:
+        print("artifacts.spawn none")
+    for record in recent_spawns:
+        created_tick = record.get("created_tick", "?")
+        template_id = record.get("template_id", "?")
+        quantity = record.get("quantity", "?")
+        expires_tick = record.get("expires_tick")
+        expires_text = "-" if expires_tick is None else str(expires_tick)
+        action_uid = record.get("action_uid", "?")
+        print(
+            "artifacts.spawn "
+            f"tick={created_tick} "
+            f"location={_format_location(record.get('location'))} "
+            f"template_id={template_id} "
+            f"quantity={quantity} "
+            f"expires_tick={expires_text} "
+            f"action_uid={action_uid}"
         )
 
     print(f"artifacts.outcomes.limit={ARTIFACT_PRINT_OUTCOME_LIMIT}")

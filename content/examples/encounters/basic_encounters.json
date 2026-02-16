@@ -27,7 +27,17 @@
       "tags": ["neutral", "traveler"],
       "payload": {
         "template": "wayfarer_meeting",
-        "notes": "Descriptive only in 4H"
+        "notes": "Phase 5B spawn descriptor sample",
+        "actions": [
+          {
+            "action_type": "spawn_intent",
+            "template_id": "bandit_scouts",
+            "quantity": 1,
+            "params": {
+              "source": "encounter_selection_stub"
+            }
+          }
+        ]
       }
     }
   ]

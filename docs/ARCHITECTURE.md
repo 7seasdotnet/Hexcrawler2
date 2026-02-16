@@ -170,8 +170,8 @@ This document locks core engine contracts and invariants for the simulation subs
   - If `action_uid` already exists in the ledger: no world mutation and outcome `already_executed`.
   - If `action_type` is unknown: no world mutation and outcome `ignored_unsupported`.
   - If `action_type` is supported: execute deterministic mutation and mark UID as executed.
-- **Initial Supported Action Set (provisional):** `signal_intent`, `track_intent`.
-- **World Mutation Boundary:** Supported actions may only create deterministic data records in world containers (`world.signals`, `world.tracks`) keyed by `signal_uid`/`track_uid` using `action_uid`; no combat, spawning, AI, faction/ecology, or pathfinding side effects are allowed.
+- **Initial Supported Action Set (provisional):** `signal_intent`, `track_intent`, `spawn_intent`.
+- **World Mutation Boundary:** Supported actions may only create deterministic data records in world containers (`world.signals`, `world.tracks`, `world.spawn_descriptors`) keyed by action UID semantics; no combat, entity spawning, AI, faction/ecology, or pathfinding side effects are allowed.
 - **Forensic Trace Contract:** For each processed action, schedule `encounter_action_outcome` with `action_uid` and deterministic outcome details.
 - **Determinism Contract:** Phase 4J introduces no new RNG streams and no RNG draws; save/load continuation and replay must keep identical hashes.
 - **Forward-Compatibility Note:** The initial supported action set is intentionally provisional and may be renamed/expanded in later phases under explicit contract updates.
