@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5I — Sites & Entrances Substrate (structural only; no dungeon gameplay).
-- **Next action:** Phase 5J — Dungeon Grid Topology (structural).
-- **Phase status:** ✅ Phase 5I complete (deterministic world sites substrate + enter_site command seam + viewer site interactions landed).
+- **Current phase:** Phase 5J — Multi-Topology Space + Rendering (structural only).
+- **Next action:** Phase 5K — Exploration Action Economy (time-costed actions).
+- **Phase status:** ✅ Phase 5J complete (square-grid topology substrate + deterministic transition/save/replay + viewer rendering landed).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -164,9 +164,9 @@
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
-- `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/site_demo.json --seed 7 --force`
-- `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/site_demo.json --with-encounters`
-- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/site_demo.json --ticks 200 --print-artifacts`
+- `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
+- `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/space_topology_demo.json --with-encounters`
+- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/space_topology_demo.json --ticks 200 --print-artifacts`
 - `set PYTHONPATH=src && pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
 - `PYTHONPATH=src pytest -q tests/test_rules_state.py`
@@ -199,9 +199,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Added deterministic `world.sites` substrate (`SiteRecord`) with canonical save/hash coverage, legacy-load defaults, and location query helper support for read-only viewer and command seams.
-- Added deterministic `enter_site` command seam with structured outcomes (`applied`, `unknown_site`, `no_entrance`, `unknown_target_space`) and forensic `site_enter_outcome` entries; valid site entries route through the existing `transition_space` seam only.
-- Updated `content/examples/viewer_map.json` with one structural dungeon entrance site + matching predeclared target space, added viewer site marker/context-menu/debug surfaces, and added Phase 5I tests for save/load/hash stability + replay determinism + failure no-mutation behavior.
+- Generalized `WorldState.spaces`/`SpaceState` substrate for multi-topology cells with deterministic square-grid support (`topology_type="square_grid"`, bounded params, deterministic cell iteration/validation/default spawn).
+- Extended structural location + transition plumbing for square-grid spaces (validated `LocationRef` `{x,y}` coords, deterministic transition placement, deterministic movement/world-bound checks, save/load/replay hash stability).
+- Updated read-only pygame viewer and fixed example content to render/enter a non-overworld square-grid space, plus added Phase 5J tests covering round-trip/hash, location validation, deterministic transition, and enter-site determinism.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

@@ -41,6 +41,14 @@ def world_xy_to_axial(x: float, y: float) -> HexCoord:
     return HexCoord(q=int(rounded_x), r=int(rounded_z))
 
 
+def square_grid_cell_to_world_xy(x: int, y: int) -> tuple[float, float]:
+    return (float(x) + 0.5, float(y) + 0.5)
+
+
+def world_xy_to_square_grid_cell(x: float, y: float) -> dict[str, int]:
+    return {"x": int(math.floor(x)), "y": int(math.floor(y))}
+
+
 def normalized_vector(x: float, y: float) -> tuple[float, float]:
     length_sq = x * x + y * y
     if length_sq == 0.0:

@@ -91,7 +91,10 @@ def _format_location(location: object) -> str:
     topology = str(location.get("topology_type", "?"))
     coord = location.get("coord")
     if isinstance(coord, dict):
-        return f"{topology}:{coord.get('q', '?')},{coord.get('r', '?')}"
+        if "q" in coord and "r" in coord:
+            return f"{topology}:{coord.get('q', '?')},{coord.get('r', '?')}"
+        if "x" in coord and "y" in coord:
+            return f"{topology}:{coord.get('x', '?')},{coord.get('y', '?')}"
     return f"{topology}:?"
 
 

@@ -10,8 +10,14 @@ from typing import Any
 
 from hexcrawler.content.items import DEFAULT_ITEMS_PATH, load_items_json
 from hexcrawler.content.supplies import DEFAULT_SUPPLY_PROFILES_PATH, load_supply_profiles_json
-from hexcrawler.sim.location import LocationRef
-from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
+from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.movement import (
+    axial_to_world_xy,
+    normalized_vector,
+    square_grid_cell_to_world_xy,
+    world_xy_to_axial,
+    world_xy_to_square_grid_cell,
+)
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import ContainerState, DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
@@ -30,6 +36,7 @@ INVENTORY_LEDGER_MODULE = "inventory_ledger"
 INVENTORY_ALLOWED_REASONS = {"transfer", "drop", "pickup", "consume", "spawn"}
 DEFAULT_PLAYER_ENTITY_ID = "scout"
 DEFAULT_PLAYER_SUPPLY_PROFILE_ID = "player_default"
+HEX_TOPOLOGY_TYPES = {OVERWORLD_HEX_TOPOLOGY, "hex_disk", "hex_rectangle", "hex_axial", "custom"}
 
 
 
@@ -602,7 +609,7 @@ class Simulation:
 
         target_space = self.state.world.spaces[target_space_id]
         spawn = entrance.get("spawn") if isinstance(entrance.get("spawn"), dict) else None
-        target_coord = spawn if spawn is not None else {"q": 0, "r": 0}
+        target_coord = spawn if spawn is not None else target_space.default_spawn_coord()
 
         transition_command = SimCommand(
             tick=tick,
@@ -693,8 +700,13 @@ class Simulation:
         if command.entity_id is None or command.entity_id not in self.state.entities:
             return None
         entity = self.state.entities[command.entity_id]
-        coord = entity.hex_coord
-        return f"world_drop:{entity.space_id}:{coord.q}:{coord.r}"
+        location = self._entity_location_ref(entity)
+        if location.topology_type == OVERWORLD_HEX_TOPOLOGY:
+            q = int(location.coord["q"])
+            r = int(location.coord["r"])
+            return f"world_drop:{entity.space_id}:{q}:{r}"
+        coord_parts = ":".join(f"{key}={location.coord[key]}" for key in sorted(location.coord))
+        return f"world_drop:{entity.space_id}:{location.topology_type}:{coord_parts}"
 
     def _execute_inventory_intent(self, command: SimCommand, *, command_index: int) -> None:
         explicit_uid_raw = command.params.get("action_uid")
@@ -761,11 +773,7 @@ class Simulation:
                 location = None
                 if command.entity_id is not None and command.entity_id in self.state.entities:
                     entity = self.state.entities[command.entity_id]
-                    location = {
-                        "space_id": entity.space_id,
-                        "topology_type": "overworld_hex",
-                        "coord": entity.hex_coord.to_dict(),
-                    }
+                    location = self._entity_location_ref(entity).to_dict()
                 self.state.world.containers[dst_container_id] = ContainerState(
                     container_id=dst_container_id,
                     location=location,
@@ -828,32 +836,26 @@ class Simulation:
         to_location: LocationRef,
     ) -> None:
         entity = self.state.entities[entity_id]
-        from_location = LocationRef.from_dict(
-            {
-                "space_id": entity.space_id,
-                "topology_type": "overworld_hex",
-                "coord": entity.hex_coord.to_dict(),
-            }
-        )
+        from_location = self._entity_location_ref(entity)
         transition_uid = self._transition_uid(entity_id=entity_id, tick=tick, command=command, to_location=to_location)
 
         status = "applied"
-        if to_location.space_id not in self.state.world.spaces:
+        target_space = self.state.world.spaces.get(to_location.space_id)
+        if target_space is None:
             status = "rejected_unknown_space"
-        elif to_location.topology_type == "overworld_hex":
-            target_coord = HexCoord.from_dict(to_location.coord)
-            if self.state.world.get_hex_record(target_coord) is None:
+        else:
+            if not self._topology_compatible(space_topology=target_space.topology_type, location_topology=to_location.topology_type):
+                status = "rejected_topology_mismatch"
+            elif not target_space.is_valid_cell(to_location.coord):
                 status = "rejected_invalid_coord"
             else:
-                next_x, next_y = axial_to_world_xy(target_coord)
+                next_x, next_y = self._coord_to_world_xy(space=target_space, coord=to_location.coord)
                 entity.position_x = next_x
                 entity.position_y = next_y
                 entity.space_id = to_location.space_id
                 entity.target_position = None
                 entity.move_input_x = 0.0
                 entity.move_input_y = 0.0
-        else:
-            status = "rejected_unsupported_topology"
 
         self._append_event_trace_entry(
             {
@@ -918,7 +920,7 @@ class Simulation:
             self._event_execution_trace.append(event.event_id)
 
     def _advance_entity(self, entity: EntityState) -> None:
-        prior_hex = entity.hex_coord
+        prior_location = self._entity_location_ref(entity)
         move_x = entity.move_input_x
         move_y = entity.move_input_y
         target = entity.target_position
@@ -951,25 +953,59 @@ class Simulation:
         if self._position_is_within_world(next_x, next_y, space_id=entity.space_id):
             entity.position_x = next_x
             entity.position_y = next_y
-            next_hex = entity.hex_coord
-            if next_hex != prior_hex:
+            next_location = self._entity_location_ref(entity)
+            if next_location.coord != prior_location.coord or next_location.space_id != prior_location.space_id:
                 self.schedule_event_at(
                     tick=self.state.tick + 1,
                     event_type=TRAVEL_STEP_EVENT_TYPE,
                     params={
                         "tick": self.state.tick,
                         "entity_id": entity.entity_id,
-                        "location_from": LocationRef.from_overworld_hex(prior_hex).to_dict(),
-                        "location_to": LocationRef.from_overworld_hex(next_hex).to_dict(),
+                        "location_from": prior_location.to_dict(),
+                        "location_to": next_location.to_dict(),
                     },
                 )
         elif target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
             entity.target_position = None
 
     def _position_is_within_world(self, x: float, y: float, *, space_id: str = DEFAULT_OVERWORLD_SPACE_ID) -> bool:
-        if space_id != DEFAULT_OVERWORLD_SPACE_ID:
+        space = self.state.world.spaces.get(space_id)
+        if space is None:
             return False
-        return self.state.world.get_hex_record(world_xy_to_axial(x, y)) is not None
+        if space.topology_type in HEX_TOPOLOGY_TYPES:
+            return space.is_valid_cell(world_xy_to_axial(x, y).to_dict())
+        if space.topology_type == SQUARE_GRID_TOPOLOGY:
+            return space.is_valid_cell(world_xy_to_square_grid_cell(x, y))
+        return False
+
+    def _entity_location_ref(self, entity: EntityState) -> LocationRef:
+        space = self.state.world.spaces.get(entity.space_id)
+        if space is None:
+            return LocationRef.from_overworld_hex(entity.hex_coord)
+        if space.topology_type == SQUARE_GRID_TOPOLOGY:
+            return LocationRef(
+                space_id=entity.space_id,
+                topology_type=SQUARE_GRID_TOPOLOGY,
+                coord=world_xy_to_square_grid_cell(entity.position_x, entity.position_y),
+            )
+        return LocationRef(
+            space_id=entity.space_id,
+            topology_type=OVERWORLD_HEX_TOPOLOGY,
+            coord=entity.hex_coord.to_dict(),
+        )
+
+    @staticmethod
+    def _coord_to_world_xy(*, space: Any, coord: dict[str, Any]) -> tuple[float, float]:
+        if space.topology_type == SQUARE_GRID_TOPOLOGY:
+            return square_grid_cell_to_world_xy(int(coord["x"]), int(coord["y"]))
+        target_coord = HexCoord.from_dict(coord)
+        return axial_to_world_xy(target_coord)
+
+    @staticmethod
+    def _topology_compatible(*, space_topology: str, location_topology: str) -> bool:
+        if space_topology == location_topology:
+            return True
+        return space_topology in HEX_TOPOLOGY_TYPES and location_topology == OVERWORLD_HEX_TOPOLOGY
 
     def _append_event_trace_entry(self, entry: dict[str, Any]) -> None:
         if not isinstance(entry, dict):

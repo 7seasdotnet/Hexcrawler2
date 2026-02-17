@@ -5,7 +5,7 @@ from typing import Any
 SUPPORTED_SCHEMA_VERSIONS = {1}
 REQUIRED_HEX_RECORD_FIELDS = {"terrain_type", "site_type", "metadata"}
 VALID_SITE_TYPES = {"none", "town", "dungeon"}
-VALID_TOPOLOGY_TYPES = {"custom", "hex_disk", "hex_rectangle", "overworld_hex", "dungeon_grid"}
+VALID_TOPOLOGY_TYPES = {"custom", "hex_disk", "hex_rectangle", "overworld_hex", "dungeon_grid", "square_grid"}
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -44,6 +44,27 @@ def _validate_space_shape(space: dict[str, Any], *, field_name: str) -> None:
     topology_params = space.get("topology_params")
     if not isinstance(topology_params, dict):
         raise ValueError(f"{field_name}.topology_params must be an object")
+
+    if topology_type == "square_grid":
+        width = topology_params.get("width")
+        height = topology_params.get("height")
+        if not isinstance(width, int) or width <= 0:
+            raise ValueError(f"{field_name}.topology_params.width must be integer > 0")
+        if not isinstance(height, int) or height <= 0:
+            raise ValueError(f"{field_name}.topology_params.height must be integer > 0")
+        origin = topology_params.get("origin", {"x": 0, "y": 0})
+        if not isinstance(origin, dict):
+            raise ValueError(f"{field_name}.topology_params.origin must be an object when present")
+        if "x" in origin and not isinstance(origin["x"], int):
+            raise ValueError(f"{field_name}.topology_params.origin.x must be an integer")
+        if "y" in origin and not isinstance(origin["y"], int):
+            raise ValueError(f"{field_name}.topology_params.origin.y must be an integer")
+        hexes = space.get("hexes", [])
+        if not isinstance(hexes, list):
+            raise ValueError(f"{field_name}.hexes must be a list")
+        if hexes:
+            raise ValueError(f"{field_name}.hexes must be empty for square_grid spaces")
+        return
 
     hexes = space.get("hexes")
     if not isinstance(hexes, list):
