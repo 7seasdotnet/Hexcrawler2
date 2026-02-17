@@ -186,6 +186,13 @@ def _print_artifacts(simulation: Simulation) -> None:
             f"source_action_uid={entity.source_action_uid if entity.source_action_uid else '-'}"
         )
 
+    selection_entity_id = simulation.selected_entity_id(owner_entity_id="scout")
+    print(
+        "artifacts.selection "
+        f"owner_entity_id=scout "
+        f"selected_entity_id={selection_entity_id if selection_entity_id is not None else 'none'}"
+    )
+
     print(f"artifacts.outcomes.limit={ARTIFACT_PRINT_OUTCOME_LIMIT}")
     outcomes = [
         entry

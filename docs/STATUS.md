@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5F — World Spaces + Topology Transitions Substrate (structural only).
-- **Next action:** Phase 5G — interaction/targeting substrate, after 5F verification remains green across save/load/replay determinism checks.
-- **Phase status:** ✅ Phase 5F complete.
+- **Current phase:** Phase 5G — Interaction substrate + context actions.
+- **Next action:** Continue Phase 5G hardening (viewer context UX refinements/tests) or proceed to Phase 5H (space-transition usage / dungeon-entry UX).
+- **Phase status:** ✅ Phase 5G in progress (selection commands + context menu substrate landed).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -25,13 +25,14 @@
   - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
+  - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
   - Encounter table content loader/validator (`content.encounters`) with strict schema checks, deterministic normalization, and default example table wiring.
 - `src/hexcrawler/cli/viewer.py`
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`) with controller actions routed through `SimCommand` append semantics (no direct simulation mutation).
 - `src/hexcrawler/cli/pygame_viewer.py`
-  - Graphical viewer with vector WASD input, right-click move command, and viewer-only render interpolation between committed simulation ticks.
+  - Graphical viewer with vector WASD input, deterministic right-click context menus (entity/hex/background), and viewer-only render interpolation between committed simulation ticks.
   - Viewer controller input paths append `SimCommand`s at current simulation tick instead of mutating movement state directly.
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
@@ -174,9 +175,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Added Phase 5F structural world-spaces substrate: `WorldState.spaces` + `SpaceState` serialization, hash coverage, and legacy world payload migration into default `overworld` space while preserving `world.hexes` compatibility usage.
-- Extended location substrate and simulation payloads with `LocationRef.space_id` + `EntityState.space_id` defaults, then added strict deterministic `transition_space` command handling with forensic `space_transition` event-trace entries and deterministic rejection for unknown spaces.
-- Added/updated deterministic tests for world-space migration, save/load hash round-trips, transition semantics, and transition determinism; refreshed regression hash snapshots impacted by the structural payload extension.
+- Added deterministic selection command/state substrate (`set_selected_entity`, `clear_selected_entity`) with serialization + hash coverage and replay/save-load tests.
+- Replaced RMB single-action move with a deterministic context menu substrate (entity/hex/background actions), including session-only recent-save load entries and non-crashing load error surfacing in viewer status text.
+- Extended forensic/debug surfaces with selection output in replay artifacts and a Selection section in the pygame debug panel.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

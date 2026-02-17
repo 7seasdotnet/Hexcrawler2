@@ -53,6 +53,7 @@ def simulation_hash(simulation: Simulation) -> str:
                 ),
                 "template_id": entity.template_id,
                 "source_action_uid": entity.source_action_uid,
+                "selected_entity_id": entity.selected_entity_id,
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],
@@ -61,6 +62,7 @@ def simulation_hash(simulation: Simulation) -> str:
         "next_event_counter": simulation._next_event_counter,
         "pending_events": [event.to_dict() for event in simulation.pending_events()],
         "event_trace": simulation.get_event_trace(),
+        "selected_entity_id": simulation.state.selected_entity_id,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
