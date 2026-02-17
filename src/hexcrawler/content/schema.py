@@ -166,6 +166,52 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
                     f"{field_prefix}.containers[{container_id}].items[{item_id}] must be integer >= 0"
                 )
 
+    sites = payload.get("sites", {})
+    if not isinstance(sites, dict):
+        raise ValueError(f"{field_prefix}.sites must be an object when present")
+    for site_id in sorted(sites):
+        row = sites[site_id]
+        if not isinstance(row, dict):
+            raise ValueError(f"{field_prefix}.sites[{site_id}] must be an object")
+        explicit_id = row.get("site_id", site_id)
+        if explicit_id != site_id:
+            raise ValueError(f"{field_prefix}.sites[{site_id}] key/id mismatch")
+        _validate_site_record({**row, "site_id": site_id}, field_name=f"{field_prefix}.sites[{site_id}]")
+
+
+def _validate_site_record(record: dict[str, Any], *, field_name: str) -> None:
+    site_id = record.get("site_id")
+    if not isinstance(site_id, str) or not site_id:
+        raise ValueError(f"{field_name}.site_id must be a non-empty string")
+    site_type = record.get("site_type")
+    if not isinstance(site_type, str) or not site_type:
+        raise ValueError(f"{field_name}.site_type must be a non-empty string")
+    location = record.get("location")
+    if not isinstance(location, dict):
+        raise ValueError(f"{field_name}.location must be an object")
+    if not isinstance(location.get("space_id"), str) or not location.get("space_id"):
+        raise ValueError(f"{field_name}.location.space_id must be a non-empty string")
+    if not isinstance(location.get("coord"), dict):
+        raise ValueError(f"{field_name}.location.coord must be an object")
+
+    tags = record.get("tags", [])
+    if not isinstance(tags, list):
+        raise ValueError(f"{field_name}.tags must be a list")
+    for index, tag in enumerate(tags):
+        if not isinstance(tag, str):
+            raise ValueError(f"{field_name}.tags[{index}] must be a string")
+
+    entrance = record.get("entrance")
+    if entrance is not None:
+        if not isinstance(entrance, dict):
+            raise ValueError(f"{field_name}.entrance must be an object when present")
+        target_space_id = entrance.get("target_space_id")
+        if not isinstance(target_space_id, str) or not target_space_id:
+            raise ValueError(f"{field_name}.entrance.target_space_id must be a non-empty string")
+        spawn = entrance.get("spawn")
+        if spawn is not None and not isinstance(spawn, dict):
+            raise ValueError(f"{field_name}.entrance.spawn must be an object when present")
+
 
 def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -> None:
     required_int_fields = {"created_tick", "quantity"}

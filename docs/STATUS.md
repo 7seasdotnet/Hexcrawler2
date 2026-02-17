@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5H2 — Supplies + Consumption ticks (deterministic accounting; no towns/prices).
-- **Next action:** Phase 5I — settlement/site substrates (non-economic) for stockpile locations and logistics anchors, or Phase 5J dungeon exploration actions.
-- **Phase status:** ✅ Phase 5H2 complete (data-driven supply profiles + deterministic periodic consumption + forensic outcomes landed).
+- **Current phase:** Phase 5I — Sites & Entrances Substrate (structural only; no dungeon gameplay).
+- **Next action:** Phase 5J — Dungeon Grid Topology (structural).
+- **Phase status:** ✅ Phase 5I complete (deterministic world sites substrate + enter_site command seam + viewer site interactions landed).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -23,8 +23,10 @@
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
+  - World sites substrate (`WorldState.sites`) with deterministic canonical serialization/hash coverage, legacy load default (`{}`), and deterministic location query helper (`WorldState.get_sites_at_location(...)`).
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
+  - Deterministic `enter_site` command seam that validates site/entrance/target-space records, routes valid requests through the existing `transition_space` seam, and emits deterministic `site_enter_outcome` forensic events (`applied`, `unknown_site`, `no_entrance`, `unknown_target_space`).
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
   - Deterministic `inventory_intent` command seam (`transfer`/`drop`/`pickup`/`consume`/`spawn`) with single authoritative apply path, no-negative enforcement, deterministic `action_uid` (`tick:command_index`), and serialized idempotence ledger in `rules_state["inventory_ledger"].applied_action_uids`.
@@ -40,7 +42,7 @@
 - `src/hexcrawler/cli/viewer.py`
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`) with controller actions routed through `SimCommand` append semantics (no direct simulation mutation).
 - `src/hexcrawler/cli/pygame_viewer.py`
-  - Graphical viewer with vector WASD input, deterministic right-click context menus (entity/hex/background), and viewer-only render interpolation between committed simulation ticks.
+  - Graphical viewer with vector WASD input, deterministic right-click context menus (entity/hex/background + site inspect/enter actions), world-site markers, and viewer-only render interpolation between committed simulation ticks.
   - Viewer controller input paths append `SimCommand`s at current simulation tick instead of mutating movement state directly.
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
@@ -162,6 +164,9 @@
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/site_demo.json --seed 7 --force`
+- `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/site_demo.json --with-encounters`
+- `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/site_demo.json --ticks 200 --print-artifacts`
 - `set PYTHONPATH=src && pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
 - `PYTHONPATH=src pytest -q tests/test_rules_state.py`
@@ -185,6 +190,7 @@
 - `spawn_intent`
 - `transition_space` (simulation command seam; structural space transition only)
 - `inventory_intent` (simulation command seam; stackable inventory delta substrate)
+- `enter_site` (simulation command seam; structural site entrance transition router)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -193,9 +199,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Added data-driven supply profile content (`content/supplies/supply_profiles.json`) plus strict deterministic loader/validator (`hexcrawler.content.supplies`) and added `water` to default stackable items for the baseline player profile.
-- Added Phase 5H2 deterministic supply accounting: player default supply profile assignment, periodic consumption scheduling via `PeriodicScheduler`, authoritative inventory consumption through existing `inventory_intent` apply path, idempotent consumption ledger, and deterministic `supply_outcome` forensic events + warning stubs.
-- Extended read-only visibility surfaces: pygame debug panel now shows key supplies + recent supply outcomes, and replay tool `--print-artifacts` now prints supply outcome artifacts; added deterministic tests for content validation, scheduling, no-negative behavior, insufficient outcomes, determinism, and save/load stability.
+- Added deterministic `world.sites` substrate (`SiteRecord`) with canonical save/hash coverage, legacy-load defaults, and location query helper support for read-only viewer and command seams.
+- Added deterministic `enter_site` command seam with structured outcomes (`applied`, `unknown_site`, `no_entrance`, `unknown_target_space`) and forensic `site_enter_outcome` entries; valid site entries route through the existing `transition_space` seam only.
+- Updated `content/examples/viewer_map.json` with one structural dungeon entrance site + matching predeclared target space, added viewer site marker/context-menu/debug surfaces, and added Phase 5I tests for save/load/hash stability + replay determinism + failure no-mutation behavior.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
