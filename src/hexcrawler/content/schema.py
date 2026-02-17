@@ -255,6 +255,11 @@ def _validate_simulation_state(simulation_state: dict[str, Any]) -> None:
             raise ValueError(
                 f"simulation_state.entities[{index}].inventory_container_id must be a non-empty string when present"
             )
+        supply_profile_id = entity.get("supply_profile_id")
+        if supply_profile_id is not None and (not isinstance(supply_profile_id, str) or not supply_profile_id):
+            raise ValueError(
+                f"simulation_state.entities[{index}].supply_profile_id must be a non-empty string when present"
+            )
 
     pending_events = simulation_state.get("pending_events")
     if not isinstance(pending_events, list):

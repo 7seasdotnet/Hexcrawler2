@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "profile_id": "player_default",
+      "consumes": [
+        {"item_id": "rations", "quantity": 1, "interval_ticks": 120},
+        {"item_id": "torch", "quantity": 1, "interval_ticks": 80},
+        {"item_id": "water", "quantity": 1, "interval_ticks": 60}
+      ]
+    }
+  ]
+}

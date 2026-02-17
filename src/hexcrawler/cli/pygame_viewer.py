@@ -25,6 +25,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord
 
@@ -52,6 +53,7 @@ ENCOUNTER_DEBUG_SPAWN_LIMIT = 10
 ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
 ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
+SUPPLY_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
@@ -513,6 +515,26 @@ def _draw_encounter_debug_panel(
             y += 16
     y += 6
 
+    supply_entity_id = selected_entity_id if selected_entity_id in sim.state.entities else PLAYER_ID
+    supply_rows = ["Supplies:"]
+    if supply_entity_id in sim.state.entities:
+        supply_entity = sim.state.entities[supply_entity_id]
+        container_id = supply_entity.inventory_container_id
+        supply_rows.append(f"  entity_id={supply_entity_id}")
+        if container_id is None or container_id not in sim.state.world.containers:
+            supply_rows.append("  inventory_container=missing")
+        else:
+            items = sim.state.world.containers[container_id].items
+            supply_rows.append(f"  rations={int(items.get('rations', 0))}")
+            supply_rows.append(f"  water={int(items.get('water', 0))}")
+            supply_rows.append(f"  torch={int(items.get('torch', 0))}")
+    else:
+        supply_rows.append("  entity_id=none")
+    for row in supply_rows:
+        screen.blit(font.render(row, True, (210, 210, 180)), (panel_rect.x + 10, y))
+        y += 16
+    y += 6
+
     module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
     if not module_present:
         message = font.render(
@@ -521,9 +543,9 @@ def _draw_encounter_debug_panel(
             (220, 180, 130),
         )
         screen.blit(message, (panel_rect.x + 10, y))
-        return {}, {}
+        y += 20
 
-    state = sim.get_rules_state(EncounterCheckModule.name)
+    state = sim.get_rules_state(EncounterCheckModule.name) if module_present else {}
     kv_rows = [
         ("last_check_tick", str(int(state.get("last_check_tick", -1)))),
         ("checks_emitted", str(int(state.get("checks_emitted", 0)))),
@@ -649,8 +671,22 @@ def _draw_encounter_debug_panel(
     render_section("tracks", "Recent Tracks", track_rows)
     render_section("spawns", "Recent Spawns (N=10)", spawn_rows)
     render_section("entities", "Spawned Entities (N=20)", entity_rows)
+    supply_outcomes = [
+        entry for entry in sim.get_event_trace() if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE
+    ]
+    supply_rows_recent = []
+    for entry in reversed(supply_outcomes[-SUPPLY_DEBUG_OUTCOME_LIMIT:]):
+        params = entry.get("params")
+        params = params if isinstance(params, dict) else {}
+        supply_rows_recent.append(
+            f"  tick={entry.get('tick', '?')} entity={params.get('entity_id', '?')} "
+            f"item={params.get('item_id', '?')} qty={params.get('quantity', '?')} "
+            f"remaining={params.get('remaining_quantity', '-')} outcome={params.get('outcome', '?')}"
+        )
+
     render_section("rumors", "Recent Rumors (N=20)", rumor_rows)
     render_section("outcomes", "Recent Action Outcomes", outcome_rows)
+    render_section("supplies", "Recent Supply Outcomes (N=20)", supply_rows_recent)
     return section_rects, section_counts
 
 
@@ -783,6 +819,13 @@ def _ensure_pygame_imported() -> Any:
     return pygame
 
 
+
+
+def _register_supply_module(sim: Simulation) -> None:
+    if sim.get_rule_module(SupplyConsumptionModule.name) is not None:
+        return
+    sim.register_rule_module(SupplyConsumptionModule())
+
 def _register_encounter_modules(sim: Simulation) -> None:
     if sim.get_rule_module(EncounterCheckModule.name) is not None:
         return
@@ -800,6 +843,7 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
     if with_encounters:
         _register_encounter_modules(sim)
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
+    _register_supply_module(sim)
     return sim
 
 
@@ -808,6 +852,8 @@ def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulat
     should_enable_encounters = with_encounters or EncounterCheckModule.name in sim.state.rules_state
     if should_enable_encounters:
         _register_encounter_modules(sim)
+    if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
+        _register_supply_module(sim)
     print(
         "[hexcrawler.viewer] loaded "
         f"path={save_path} tick={sim.state.tick} "
