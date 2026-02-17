@@ -10,6 +10,7 @@ SITE_TYPES = {"none", "town", "dungeon"}
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
 DEFAULT_OVERWORLD_SPACE_ID = "overworld"
+SQUARE_GRID_TOPOLOGY = "square_grid"
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -176,6 +177,66 @@ class SpaceState:
     topology_type: str
     topology_params: dict[str, Any] = field(default_factory=dict)
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.topology_type == SQUARE_GRID_TOPOLOGY:
+            self.topology_params = self._normalized_square_topology_params(self.topology_params)
+
+    @staticmethod
+    def _normalized_square_topology_params(topology_params: dict[str, Any]) -> dict[str, Any]:
+        width = int(topology_params.get("width", 0))
+        height = int(topology_params.get("height", 0))
+        if width <= 0 or height <= 0:
+            raise ValueError("square_grid topology requires width > 0 and height > 0")
+        origin = topology_params.get("origin", {"x": 0, "y": 0})
+        if not isinstance(origin, dict):
+            raise ValueError("square_grid origin must be an object")
+        origin_x = int(origin.get("x", 0))
+        origin_y = int(origin.get("y", 0))
+        return {
+            "width": width,
+            "height": height,
+            "origin": {"x": origin_x, "y": origin_y},
+        }
+
+    def is_valid_cell(self, coord: dict[str, Any]) -> bool:
+        if self.topology_type == SQUARE_GRID_TOPOLOGY:
+            try:
+                x = int(coord["x"])
+                y = int(coord["y"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            params = self._normalized_square_topology_params(self.topology_params)
+            origin = params["origin"]
+            return (
+                origin["x"] <= x < origin["x"] + params["width"]
+                and origin["y"] <= y < origin["y"] + params["height"]
+            )
+        try:
+            return HexCoord.from_dict(coord) in self.hexes
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def iter_cells(self) -> list[dict[str, int]]:
+        if self.topology_type == SQUARE_GRID_TOPOLOGY:
+            params = self._normalized_square_topology_params(self.topology_params)
+            origin = params["origin"]
+            return [
+                {"x": x, "y": y}
+                for y in range(origin["y"], origin["y"] + params["height"])
+                for x in range(origin["x"], origin["x"] + params["width"])
+            ]
+        return [coord.to_dict() for coord in sorted(self.hexes)]
+
+    def default_spawn_coord(self) -> dict[str, int]:
+        spawn = self.topology_params.get("spawn") if isinstance(self.topology_params, dict) else None
+        if isinstance(spawn, dict) and self.is_valid_cell(spawn):
+            return dict(spawn)
+        if self.topology_type == SQUARE_GRID_TOPOLOGY:
+            params = self._normalized_square_topology_params(self.topology_params)
+            origin = params["origin"]
+            return {"x": origin["x"], "y": origin["y"]}
+        return {"q": 0, "r": 0}
 
     def to_dict(self) -> dict[str, Any]:
         hex_rows = []

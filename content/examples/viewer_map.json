@@ -1408,8 +1408,8 @@
       "description": "A weathered stone stair descends beneath cracked flagstones.",
       "entrance": {
         "spawn": {
-          "q": 0,
-          "r": 0
+          "x": 1,
+          "y": 1
         },
         "target_space_id": "dungeon_demo"
       },
@@ -1433,24 +1433,21 @@
   },
   "spaces": [
     {
-      "hexes": [
-        {
-          "coord": {
-            "q": 0,
-            "r": 0
-          },
-          "record": {
-            "metadata": {
-              "name": "Greybridge"
-            },
-            "site_type": "town",
-            "terrain_type": "plains"
-          }
-        }
-      ],
+      "hexes": [],
       "space_id": "dungeon_demo",
-      "topology_params": {},
-      "topology_type": "overworld_hex"
+      "topology_params": {
+        "height": 4,
+        "origin": {
+          "x": 0,
+          "y": 0
+        },
+        "spawn": {
+          "x": 1,
+          "y": 1
+        },
+        "width": 6
+      },
+      "topology_type": "square_grid"
     },
     {
       "hexes": [
@@ -2867,5 +2864,5 @@
     "radius": 6
   },
   "topology_type": "hex_disk",
-  "world_hash": "591cfcf891689aa6a92f89516700839e982d0620ea92664c44acf171ad429138"
+  "world_hash": "47791612b1137670b08ddc32d259725609e43ed9d16ad3ed6215dfd2968c8002"
 }

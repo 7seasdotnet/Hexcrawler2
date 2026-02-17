@@ -26,6 +26,7 @@ from hexcrawler.sim.encounters import (
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
+from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.world import HexCoord
 
@@ -387,8 +388,29 @@ def _draw_world(
     *,
     clip_rect: pygame.Rect,
 ) -> None:
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
+    if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
+        for coord in active_space.iter_cells():
+            world_x = float(coord["x"]) + 0.5
+            world_y = float(coord["y"]) + 0.5
+            pixel_x = center[0] + world_x * HEX_SIZE
+            pixel_y = center[1] + world_y * HEX_SIZE
+            rect = pygame.Rect(int(pixel_x - HEX_SIZE / 2), int(pixel_y - HEX_SIZE / 2), HEX_SIZE, HEX_SIZE)
+            pygame.draw.rect(screen, (58, 58, 64), rect)
+            pygame.draw.rect(screen, (35, 35, 40), rect, 1)
+
+            location = {"space_id": active_space.space_id, "coord": coord}
+            sites = sim.state.world.get_sites_at_location(location)
+            if sites:
+                site_color = SITE_COLORS.get(sites[0].site_type, (245, 245, 120))
+                pygame.draw.circle(screen, site_color, (int(pixel_x), int(pixel_y)), 6)
+                pygame.draw.circle(screen, (15, 15, 15), (int(pixel_x), int(pixel_y)), 6, 1)
+        screen.set_clip(old_clip)
+        return
+
     for coord in _grid_coords(GRID_RADIUS):
         pixel = _axial_to_pixel(coord, center)
         points = _hex_points(pixel)
@@ -409,7 +431,8 @@ def _draw_world(
             site_color = SITE_COLORS.get(record.site_type, (245, 245, 120))
             pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
 
-    _draw_world_markers(screen, sim, center)
+    if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
+        _draw_world_markers(screen, sim, center)
     screen.set_clip(old_clip)
 
 
@@ -451,8 +474,12 @@ def _draw_spawned_entity(
 
 def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, status_message: str | None) -> None:
     entity = sim.state.entities[PLAYER_ID]
+    location = f"overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r}"
+    active_space = sim.state.world.spaces.get(entity.space_id)
+    if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
+        location = f"square_grid:{math.floor(entity.position_x)},{math.floor(entity.position_y)}"
     lines = [
-        f"CURRENT HEX: ({entity.hex_coord.q}, {entity.hex_coord.r})",
+        f"CURRENT LOCATION: {location}",
         f"ticks: {sim.state.tick}",
         f"day: {sim.state.tick // TICKS_PER_DAY}",
         "WASD move | RMB menu | F5 save | F9 load | ESC quit",
@@ -472,11 +499,20 @@ def _format_location(location: object) -> str:
     topology = str(location.get("topology_type", "?"))
     coord = location.get("coord")
     if isinstance(coord, dict):
-        q = coord.get("q")
-        r = coord.get("r")
-        return f"{topology}:{q},{r}"
+        if "q" in coord and "r" in coord:
+            return f"{topology}:{coord.get('q')},{coord.get('r')}"
+        if "x" in coord and "y" in coord:
+            return f"{topology}:{coord.get('x')},{coord.get('y')}"
     return f"{topology}:?"
 
+
+
+
+def _entity_location_text(sim: Simulation, entity: EntityState) -> str:
+    space = sim.state.world.spaces.get(entity.space_id)
+    if space is not None and space.topology_type == SQUARE_GRID_TOPOLOGY:
+        return f"square_grid:{math.floor(entity.position_x)},{math.floor(entity.position_y)}"
+    return f"overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r}"
 
 def _draw_encounter_debug_panel(
     screen: pygame.Surface,
@@ -504,7 +540,7 @@ def _draw_encounter_debug_panel(
     if selected_entity_id is not None and selected_entity_id in sim.state.entities:
         selected_entity = sim.state.entities[selected_entity_id]
         selection_rows.append(f"  space_id={selected_entity.space_id}")
-        selection_rows.append(f"  location=overworld_hex:{selected_entity.hex_coord.q},{selected_entity.hex_coord.r}")
+        selection_rows.append(f"  location={_entity_location_text(sim, selected_entity)}")
         inventory_container_id = selected_entity.inventory_container_id
         selection_rows.append(
             f"  inventory_container_id={inventory_container_id if inventory_container_id is not None else '-'}"
@@ -649,7 +685,7 @@ def _draw_encounter_debug_panel(
         (
             f"  entity_id={entity.entity_id} "
             f"template={entity.template_id if entity.template_id else '-'} "
-            f"location=overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r} "
+            f"location={_entity_location_text(sim, entity)} "
             f"action_uid={entity.source_action_uid if entity.source_action_uid else '-'}"
         )
         for entity in reversed(spawned_entities[-ENCOUNTER_DEBUG_ENTITY_LIMIT:])
