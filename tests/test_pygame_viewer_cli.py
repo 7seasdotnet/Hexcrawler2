@@ -7,7 +7,10 @@ from hexcrawler.cli.pygame_viewer import (
     SimulationController,
     _build_parser,
     _build_viewer_simulation,
+    MarkerRecord,
     _find_entity_at_pixel,
+    _find_world_marker_at_pixel,
+    _slot_markers_for_hex,
     _load_viewer_simulation,
     _save_viewer_simulation,
 )
@@ -21,7 +24,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash
-from hexcrawler.sim.world import HexCoord
+from hexcrawler.sim.world import HexCoord, SiteRecord
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -174,3 +177,49 @@ def test_find_entity_at_pixel_uses_deterministic_tie_break() -> None:
     hit = _find_entity_at_pixel(sim, (0, 0), (0.0, 0.0), radius_px=20.0)
 
     assert hit == "alpha"
+
+
+def test_slot_markers_for_hex_assigns_deterministic_positions_in_input_order() -> None:
+    markers = [
+        MarkerRecord(priority=0, marker_id="site:a", marker_kind="site", color=(1, 1, 1), radius=4, label="a"),
+        MarkerRecord(priority=0, marker_id="site:b", marker_kind="site", color=(1, 1, 1), radius=4, label="b"),
+        MarkerRecord(priority=0, marker_id="site:c", marker_kind="site", color=(1, 1, 1), radius=4, label="c"),
+    ]
+
+    placements, overflow = _slot_markers_for_hex(100.0, 100.0, markers)
+
+    assert overflow == 0
+    assert [placement.marker.marker_id for placement in placements] == ["site:a", "site:b", "site:c"]
+    assert [(placement.x, placement.y) for placement in placements] == [(100, 90), (109, 95), (109, 105)]
+
+
+def test_slot_markers_for_hex_clamps_and_reports_overflow() -> None:
+    markers = [
+        MarkerRecord(priority=0, marker_id=f"site:{index:02d}", marker_kind="site", color=(1, 1, 1), radius=4, label=str(index))
+        for index in range(20)
+    ]
+
+    placements, overflow = _slot_markers_for_hex(0.0, 0.0, markers)
+
+    assert len(placements) == 12
+    assert overflow == 8
+    assert placements[-1].marker.marker_id == "site:11"
+
+
+def test_find_world_marker_at_pixel_uses_offset_slot_positions() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.state.world.sites["site-alpha"] = SiteRecord(
+        site_id="site-alpha",
+        site_type="town",
+        location={"space_id": "overworld", "coord": {"q": 0, "r": 0}},
+    )
+    sim.state.world.sites["site-beta"] = SiteRecord(
+        site_id="site-beta",
+        site_type="town",
+        location={"space_id": "overworld", "coord": {"q": 0, "r": 0}},
+    )
+
+    marker = _find_world_marker_at_pixel(sim, (109, 95), (100.0, 100.0), radius_px=5.0)
+
+    assert marker is not None
+    assert marker.marker_id == "site:site-beta"

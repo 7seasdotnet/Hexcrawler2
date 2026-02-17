@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5J2 — Minimal UI Readability Pass (viewer-only, no gameplay changes).
+- **Current phase:** Phase 5J2b — Viewer Marker Slot Offsets + Visible Labels (viewer-only hotfix, no gameplay changes).
 - **Next action:** Phase 5K — Exploration Action Economy (time-costed actions).
-- **Phase status:** ✅ Phase 5J2 complete (viewer readability updates only: marker identification, single-section debug panel, scroll, and context header).
+- **Phase status:** ✅ Phase 5J2b complete (restored in-cell marker slot rendering + matching hit-test; visible per-marker labels and compact legend).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -202,9 +202,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Implemented a read-only pygame viewer readability pass: marker labels for sites/spawns/signals/tracks, section tabs with one active panel section, wheel scrolling, and capped newest-first section rows.
-- Added compact context header (`space_id`, coordinates by topology, tick/day) without changing simulation behavior, event semantics, RNG usage, command contracts, or save/hash formats.
-- Added pure unit tests for label truncation, newest-first capped section selection, and scroll offset clamping to keep UI helpers deterministic and non-brittle.
+- Restored deterministic in-cell marker slotting for sites, spawned entities, spawn descriptors, signals, and tracks via shared viewer-only marker collection/slot helpers with deterministic overflow `+N` summaries.
+- Updated viewer hit-testing/context-menu selection to resolve specific markers using the same offset slot positions used during rendering, keeping inspect/select behavior aligned with what is drawn.
+- Improved label readability (per-marker labels with outline) and added a compact on-panel legend (`Site=S Spawn=E Desc=D Signal=G Track=T`) plus deterministic unit tests for slot ordering, clamp/overflow, and offset hit-testing.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

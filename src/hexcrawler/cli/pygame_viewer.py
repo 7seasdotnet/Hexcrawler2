@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.metadata
 import json
 import math
@@ -64,19 +63,18 @@ CONTEXT_MENU_WIDTH = 260
 CONTEXT_MENU_ROW_HEIGHT = 28
 
 MARKER_SLOT_OFFSETS: tuple[tuple[int, int], ...] = (
-    (0, 0),
-    (8, 0),
-    (4, 7),
-    (-4, 7),
-    (-8, 0),
-    (-4, -7),
-    (4, -7),
-    (12, 0),
-    (6, 11),
-    (-6, 11),
-    (-12, 0),
-    (-6, -11),
-    (6, -11),
+    (0, -10),
+    (9, -5),
+    (9, 5),
+    (0, 10),
+    (-9, 5),
+    (-9, -5),
+    (0, -16),
+    (14, -8),
+    (14, 8),
+    (0, 16),
+    (-14, 8),
+    (-14, -8),
 )
 
 pygame: Any | None = None
@@ -195,6 +193,23 @@ class RenderEntitySnapshot:
 RenderSnapshot = dict[str, RenderEntitySnapshot]
 
 
+@dataclass(frozen=True)
+class MarkerRecord:
+    priority: int
+    marker_id: str
+    marker_kind: str
+    color: tuple[int, int, int]
+    radius: int
+    label: str
+
+
+@dataclass(frozen=True)
+class MarkerPlacement:
+    marker: MarkerRecord
+    x: int
+    y: int
+
+
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -265,11 +280,6 @@ def _panel_rect() -> pygame.Rect:
     return pygame.Rect(panel_x, PANEL_MARGIN, PANEL_WIDTH, WINDOW_SIZE[1] - (PANEL_MARGIN * 2))
 
 
-
-
-def _stable_index(key: str, width: int) -> int:
-    digest = hashlib.sha256(key.encode("utf-8")).digest()
-    return int.from_bytes(digest[:4], byteorder="big") % width
 
 
 def _wrap_text_to_pixel_width(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
@@ -347,93 +357,135 @@ def _section_entries(rows: list[str], *, entry_limit: int = PANEL_SECTION_ENTRY_
     return list(reversed(rows[-entry_limit:]))
 
 
+def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]]:
+    markers_by_hex: dict[HexCoord, list[MarkerRecord]] = {}
+
+    def add_marker(hex_coord: HexCoord | None, marker: MarkerRecord) -> None:
+        if hex_coord is None:
+            return
+        markers_by_hex.setdefault(hex_coord, []).append(marker)
+
+    for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
+        add_marker(
+            _coord_from_location(site.location),
+            MarkerRecord(
+                priority=0,
+                marker_id=f"site:{site.site_id}",
+                marker_kind="site",
+                color=SITE_COLORS.get(site.site_type, (245, 245, 120)),
+                radius=6,
+                label=_truncate_label(site.name if site.name else site.site_id, max_length=12),
+            ),
+        )
+
+    for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+        if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
+            continue
+        label = entity.template_id if entity.template_id else _short_stable_id(entity.entity_id)
+        add_marker(
+            entity.hex_coord,
+            MarkerRecord(
+                priority=1,
+                marker_id=f"entity:{entity.entity_id}",
+                marker_kind="entity",
+                color=(140, 225, 255),
+                radius=5,
+                label=_truncate_label(label),
+            ),
+        )
+
+    for index, record in enumerate(sim.state.world.spawn_descriptors):
+        action_uid = str(record.get("action_uid", "?"))
+        add_marker(
+            _coord_from_location(record.get("location")),
+            MarkerRecord(
+                priority=2,
+                marker_id=f"spawn_desc:{action_uid}:{index}",
+                marker_kind="spawn_desc",
+                color=(96, 198, 255),
+                radius=4,
+                label="spawn",
+            ),
+        )
+
+    for record in sim.state.world.signals:
+        add_marker(
+            _coord_from_location(record.get("location")),
+            MarkerRecord(
+                priority=3,
+                marker_id=f"signal:{record.get('signal_uid', '')}",
+                marker_kind="signal",
+                color=(255, 202, 96),
+                radius=4,
+                label=_truncate_label(str(record.get("template_id", "sig")) if record.get("template_id") else "sig"),
+            ),
+        )
+
+    for record in sim.state.world.tracks:
+        add_marker(
+            _coord_from_location(record.get("location")),
+            MarkerRecord(
+                priority=4,
+                marker_id=f"track:{record.get('track_uid', '')}",
+                marker_kind="track",
+                color=(205, 183, 255),
+                radius=3,
+                label=_truncate_label(str(record.get("template_id", "trk")) if record.get("template_id") else "trk"),
+            ),
+        )
+
+    for hex_coord, markers in markers_by_hex.items():
+        markers.sort(key=lambda row: (row.priority, row.marker_id))
+    return markers_by_hex
+
+
+def _slot_markers_for_hex(
+    center_x: float,
+    center_y: float,
+    markers: list[MarkerRecord],
+) -> tuple[list[MarkerPlacement], int]:
+    placements = [
+        MarkerPlacement(
+            marker=marker,
+            x=int(center_x + MARKER_SLOT_OFFSETS[index][0]),
+            y=int(center_y + MARKER_SLOT_OFFSETS[index][1]),
+        )
+        for index, marker in enumerate(markers[: len(MARKER_SLOT_OFFSETS)])
+    ]
+    return placements, max(0, len(markers) - len(placements))
+
+
+def _world_marker_placements(sim: Simulation, center: tuple[float, float]) -> list[MarkerPlacement]:
+    placements: list[MarkerPlacement] = []
+    markers_by_hex = _collect_world_markers(sim)
+    for hex_coord in sorted(markers_by_hex):
+        center_x, center_y = _axial_to_pixel(hex_coord, center)
+        slotted, _ = _slot_markers_for_hex(center_x, center_y, markers_by_hex[hex_coord])
+        placements.extend(slotted)
+    return placements
+
+
 def _draw_world_markers(
     screen: pygame.Surface,
     sim: Simulation,
     center: tuple[float, float],
     font: pygame.font.Font,
 ) -> None:
-    markers_by_hex: dict[HexCoord, list[tuple[int, str, tuple[int, int, int], int, str]]] = {}
-
-    def add_marker(
-        hex_coord: HexCoord | None,
-        marker_id: str,
-        color: tuple[int, int, int],
-        radius: int,
-        label: str,
-        priority: int,
-    ) -> None:
-        if hex_coord is None:
-            return
-        markers_by_hex.setdefault(hex_coord, []).append((priority, marker_id, color, radius, label))
-
-    for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
-        add_marker(
-            _coord_from_location(site.location),
-            f"site:{site.site_id}",
-            SITE_COLORS.get(site.site_type, (245, 245, 120)),
-            6,
-            _truncate_label(site.name if site.name else site.site_id, max_length=12),
-            0,
-        )
-
-    for record in sim.state.world.signals:
-        marker_id = f"signal:{record.get('signal_uid', '')}"
-        add_marker(
-            _coord_from_location(record.get("location")),
-            marker_id,
-            (255, 202, 96),
-            4,
-            _truncate_label(str(record.get("template_id", "sig")) if record.get("template_id") else "sig"),
-            3,
-        )
-
-    for record in sim.state.world.tracks:
-        marker_id = f"track:{record.get('track_uid', '')}"
-        add_marker(
-            _coord_from_location(record.get("location")),
-            marker_id,
-            (205, 183, 255),
-            3,
-            _truncate_label(str(record.get("template_id", "trk")) if record.get("template_id") else "trk"),
-            3,
-        )
-
-    for index, record in enumerate(sim.state.world.spawn_descriptors):
-        action_uid = str(record.get("action_uid", "?"))
-        marker_id = f"spawn_desc:{action_uid}:{index}"
-        add_marker(_coord_from_location(record.get("location")), marker_id, (96, 198, 255), 4, "spawn", 2)
-
-    for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
-        if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
-            continue
-        label = entity.template_id if entity.template_id else _short_stable_id(entity.entity_id)
-        add_marker(entity.hex_coord, f"entity:{entity.entity_id}", (140, 225, 255), 5, _truncate_label(label), 1)
-
+    markers_by_hex = _collect_world_markers(sim)
     for hex_coord in sorted(markers_by_hex):
         center_x, center_y = _axial_to_pixel(hex_coord, center)
-        markers = sorted(markers_by_hex[hex_coord], key=lambda row: (row[0], row[1]))
-        used_slots: set[int] = set()
-        label_marker: tuple[int, int, str] | None = None
-        for _, marker_id, color, radius, label in markers:
-            preferred = _stable_index(marker_id, len(MARKER_SLOT_OFFSETS))
-            slot_index = preferred
-            for offset in range(len(MARKER_SLOT_OFFSETS)):
-                candidate = (preferred + offset) % len(MARKER_SLOT_OFFSETS)
-                if candidate not in used_slots:
-                    slot_index = candidate
-                    break
-            used_slots.add(slot_index)
-            offset_x, offset_y = MARKER_SLOT_OFFSETS[slot_index]
-            x = int(center_x + offset_x)
-            y = int(center_y + offset_y)
-            pygame.draw.circle(screen, color, (x, y), radius)
-            pygame.draw.circle(screen, (14, 24, 30), (x, y), radius, 1)
-            if label_marker is None:
-                label_marker = (x, y, label)
-        if label_marker is not None:
-            label_surface = font.render(label_marker[2], True, (235, 238, 245))
-            screen.blit(label_surface, (label_marker[0] + 8, label_marker[1] - 8))
+        placements, overflow_count = _slot_markers_for_hex(center_x, center_y, markers_by_hex[hex_coord])
+        for placement in placements:
+            pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
+            pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
+            label_surface = font.render(placement.marker.label, True, (248, 250, 255))
+            outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
+            screen.blit(label_surface, (placement.x + 8, placement.y - 8))
+        if overflow_count > 0:
+            summary_surface = font.render(f"+{overflow_count}", True, (255, 245, 200))
+            screen.blit(summary_surface, (int(center_x) + 8, int(center_y) + 8))
 
 def _draw_world(
     screen: pygame.Surface,
@@ -475,16 +527,6 @@ def _draw_world(
         terrain_color = TERRAIN_COLORS.get(terrain_type, (90, 90, 96))
         pygame.draw.polygon(screen, terrain_color, points)
         pygame.draw.polygon(screen, (35, 35, 40), points, 1)
-
-        location = {"space_id": "overworld", "coord": coord.to_dict()}
-        sites = sim.state.world.get_sites_at_location(location)
-        if sites:
-            site_color = SITE_COLORS.get(sites[0].site_type, (245, 245, 120))
-            pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
-            pygame.draw.circle(screen, (15, 15, 15), (int(pixel[0]), int(pixel[1])), 6, 1)
-        elif record and record.site_type != "none":
-            site_color = SITE_COLORS.get(record.site_type, (245, 245, 120))
-            pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
 
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
         _draw_world_markers(screen, sim, center, marker_font)
@@ -663,7 +705,7 @@ def _draw_encounter_debug_panel(
     section_counts = {section: len(rows) for section, rows in rows_by_section.items()}
 
     y = panel_rect.y + 8
-    title = font.render("Encounter Debug", True, (245, 245, 245))
+    title = font.render("Encounter Debug | Site=S Spawn=E Desc=D Signal=G Track=T", True, (245, 245, 245))
     screen.blit(title, (panel_rect.x + 10, y))
     y += 18
 
@@ -762,6 +804,29 @@ def _find_entity_at_pixel(
         return None
     candidates.sort(key=lambda row: (row[0], row[1]))
     return candidates[0][1]
+
+
+
+
+def _find_world_marker_at_pixel(
+    sim: Simulation,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    *,
+    radius_px: float = 10.0,
+) -> MarkerRecord | None:
+    candidates: list[tuple[float, str, MarkerRecord]] = []
+    for placement in _world_marker_placements(sim, center):
+        dx = pixel_pos[0] - placement.x
+        dy = pixel_pos[1] - placement.y
+        distance_sq = (dx * dx) + (dy * dy)
+        hit_radius = max(radius_px, float(placement.marker.radius + 2))
+        if distance_sq <= hit_radius * hit_radius:
+            candidates.append((distance_sq, placement.marker.marker_id, placement.marker))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    return candidates[0][2]
 
 
 def _current_input_vector() -> tuple[float, float]:
@@ -993,11 +1058,20 @@ def run_pygame_viewer(
     def build_context_menu(event_pos: tuple[int, int]) -> ContextMenuState | None:
         items: list[ContextMenuItem] = []
         if viewport_rect.collidepoint(event_pos):
-            entity_id = _find_entity_at_pixel(sim, event_pos, world_center)
-            if entity_id is not None:
-                items.append(ContextMenuItem(label="Select", action="select", payload=entity_id))
-                if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
-                    items.append(ContextMenuItem(label="Deselect", action="clear_selection"))
+            marker = _find_world_marker_at_pixel(sim, event_pos, world_center)
+            if marker is not None:
+                items.append(ContextMenuItem(label=f"Marker: {marker.marker_kind} {marker.label}", action="noop"))
+                if marker.marker_kind == "entity":
+                    entity_id = marker.marker_id.split(":", 1)[1]
+                    items.append(ContextMenuItem(label="Select", action="select", payload=entity_id))
+                    if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
+                        items.append(ContextMenuItem(label="Deselect", action="clear_selection"))
+                elif marker.marker_kind == "site":
+                    site_id = marker.marker_id.split(":", 1)[1]
+                    site = sim.state.world.sites.get(site_id)
+                    if site is not None and site.entrance is not None:
+                        site_label = site.name if site.name else site.site_id
+                        items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
             else:
                 world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center)
