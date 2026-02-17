@@ -7,9 +7,11 @@ from hexcrawler.cli.pygame_viewer import (
     SimulationController,
     _build_parser,
     _build_viewer_simulation,
+    _find_entity_at_pixel,
     _load_viewer_simulation,
     _save_viewer_simulation,
 )
+from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
@@ -19,6 +21,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash
+from hexcrawler.sim.world import HexCoord
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -73,6 +76,20 @@ def test_simulation_controller_appends_move_vector_command() -> None:
     assert sim.input_log[-1].entity_id == PLAYER_ID
     assert sim.input_log[-1].params == {"x": 1.0, "y": -1.0}
 
+
+
+
+def test_simulation_controller_appends_selection_commands() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    controller.set_selected_entity(PLAYER_ID)
+    controller.clear_selected_entity()
+
+    assert sim.input_log[-2].command_type == "set_selected_entity"
+    assert sim.input_log[-2].params == {"selected_entity_id": PLAYER_ID}
+    assert sim.input_log[-1].command_type == "clear_selected_entity"
+    assert sim.input_log[-1].params == {}
 
 def test_main_help_prints_usage_without_starting_viewer(capsys: pytest.CaptureFixture[str]) -> None:
     from hexcrawler.cli.pygame_viewer import main
@@ -140,3 +157,13 @@ def test_viewer_save_load_round_trip_preserves_tick_log_hash_and_artifacts(tmp_p
     assert loaded.state.world.signals == sim.state.world.signals
     assert loaded.state.world.tracks == sim.state.world.tracks
     assert loaded.get_event_trace() == sim.get_event_trace()
+
+
+def test_find_entity_at_pixel_uses_deterministic_tie_break() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.add_entity(EntityState.from_hex(entity_id="alpha", hex_coord=HexCoord(0, 0)))
+    sim.add_entity(EntityState.from_hex(entity_id="beta", hex_coord=HexCoord(0, 0)))
+
+    hit = _find_entity_at_pixel(sim, (0, 0), (0.0, 0.0), radius_px=20.0)
+
+    assert hit == "alpha"

@@ -53,6 +53,9 @@ ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
 ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
+RECENT_SAVES_LIMIT = 8
+CONTEXT_MENU_WIDTH = 260
+CONTEXT_MENU_ROW_HEIGHT = 28
 
 MARKER_SLOT_OFFSETS: tuple[tuple[int, int], ...] = (
     (0, 0),
@@ -73,12 +76,18 @@ MARKER_SLOT_OFFSETS: tuple[tuple[int, int], ...] = (
 pygame: Any | None = None
 
 
+@dataclass(frozen=True)
+class ContextMenuItem:
+    label: str
+    action: str
+    payload: str | None = None
+
+
 @dataclass
 class ContextMenuState:
     pixel_x: int
     pixel_y: int
-    world_x: float
-    world_y: float
+    items: tuple[ContextMenuItem, ...]
 
 
 @dataclass
@@ -144,6 +153,26 @@ class SimulationController:
                 entity_id=self.entity_id,
                 command_type="set_target_position",
                 params={"x": x, "y": y},
+            )
+        )
+
+    def set_selected_entity(self, selected_entity_id: str) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="set_selected_entity",
+                params={"selected_entity_id": selected_entity_id},
+            )
+        )
+
+    def clear_selected_entity(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="clear_selected_entity",
+                params={},
             )
         )
 
@@ -400,7 +429,7 @@ def _draw_spawned_entity(
     screen.set_clip(old_clip)
 
 
-def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -> None:
+def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, status_message: str | None) -> None:
     entity = sim.state.entities[PLAYER_ID]
     lines = [
         f"CURRENT HEX: ({entity.hex_coord.q}, {entity.hex_coord.r})",
@@ -408,6 +437,8 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font) -
         f"day: {sim.state.tick // TICKS_PER_DAY}",
         "WASD move | RMB menu | F5 save | F9 load | ESC quit",
     ]
+    if status_message:
+        lines.append(f"status: {status_message}")
     y = 12
     for line in lines:
         surface = font.render(line, True, (240, 240, 240))
@@ -444,6 +475,25 @@ def _draw_encounter_debug_panel(
     hint = font.render("Mouse wheel/PgUp/PgDn scroll hovered section", True, (190, 192, 202))
     screen.blit(hint, (panel_rect.x + 10, y))
     y += 18
+
+    selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+    selection_rows = [
+        "Selection:",
+        f"  selected_entity_id={selected_entity_id if selected_entity_id is not None else 'none'}",
+    ]
+    if selected_entity_id is not None and selected_entity_id in sim.state.entities:
+        selected_entity = sim.state.entities[selected_entity_id]
+        selection_rows.append(f"  space_id={selected_entity.space_id}")
+        selection_rows.append(f"  location=overworld_hex:{selected_entity.hex_coord.q},{selected_entity.hex_coord.r}")
+    else:
+        selection_rows.append("  space_id=-")
+        selection_rows.append("  location=-")
+    for row in selection_rows:
+        wrapped = _wrap_text_to_pixel_width(row, font, panel_rect.width - 24)
+        for wrapped_row in wrapped:
+            screen.blit(font.render(wrapped_row, True, (210, 226, 210)), (panel_rect.x + 10, y))
+            y += 16
+    y += 6
 
     module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
     if not module_present:
@@ -586,6 +636,13 @@ def _draw_encounter_debug_panel(
     return section_rects, section_counts
 
 
+def _context_menu_rect(menu_state: ContextMenuState, viewport_rect: pygame.Rect) -> pygame.Rect:
+    height = max(1, len(menu_state.items)) * CONTEXT_MENU_ROW_HEIGHT
+    menu_rect = pygame.Rect(menu_state.pixel_x, menu_state.pixel_y, CONTEXT_MENU_WIDTH, height)
+    menu_rect.clamp_ip(viewport_rect)
+    return menu_rect
+
+
 def _draw_context_menu(
     screen: pygame.Surface,
     font: pygame.font.Font,
@@ -595,14 +652,41 @@ def _draw_context_menu(
     if menu_state is None:
         return None
 
-    menu_rect = pygame.Rect(menu_state.pixel_x, menu_state.pixel_y, 130, 34)
-    menu_rect.clamp_ip(viewport_rect)
+    menu_rect = _context_menu_rect(menu_state, viewport_rect)
     pygame.draw.rect(screen, (32, 34, 44), menu_rect)
     pygame.draw.rect(screen, (185, 185, 200), menu_rect, 1)
 
-    label = font.render("Move Here", True, (245, 245, 245))
-    screen.blit(label, (menu_rect.x + 10, menu_rect.y + 6))
+    for index, item in enumerate(menu_state.items):
+        row_rect = pygame.Rect(menu_rect.x, menu_rect.y + (index * CONTEXT_MENU_ROW_HEIGHT), menu_rect.width, CONTEXT_MENU_ROW_HEIGHT)
+        pygame.draw.line(screen, (64, 68, 84), (row_rect.x, row_rect.bottom), (row_rect.right, row_rect.bottom), 1)
+        label = font.render(item.label, True, (245, 245, 245))
+        screen.blit(label, (row_rect.x + 10, row_rect.y + 5))
     return menu_rect
+
+
+def _world_to_pixel(world_x: float, world_y: float, center: tuple[float, float]) -> tuple[float, float]:
+    return (center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE)
+
+
+def _find_entity_at_pixel(
+    sim: Simulation,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    *,
+    radius_px: float = 10.0,
+) -> str | None:
+    candidates: list[tuple[float, str]] = []
+    for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+        px, py = _world_to_pixel(entity.position_x, entity.position_y, center)
+        dx = pixel_pos[0] - px
+        dy = pixel_pos[1] - py
+        distance_sq = (dx * dx) + (dy * dy)
+        if distance_sq <= radius_px * radius_px:
+            candidates.append((distance_sq, entity.entity_id))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    return candidates[0][1]
 
 
 def _current_input_vector() -> tuple[float, float]:
@@ -766,7 +850,7 @@ def run_pygame_viewer(
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
 
     try:
-        pygame_module.display.set_caption("Hexcrawler Phase 5A Viewer")
+        pygame_module.display.set_caption("Hexcrawler Phase 5G Viewer")
         screen = pygame_module.display.set_mode(WINDOW_SIZE)
     except Exception as exc:
         print(
@@ -784,6 +868,60 @@ def run_pygame_viewer(
         controller.tick_once()
         pygame_module.quit()
         return 0
+
+    def push_recent_save(path_value: str | None) -> None:
+        if not path_value:
+            return
+        normalized = str(Path(path_value))
+        if normalized in recent_saves:
+            recent_saves.remove(normalized)
+        recent_saves.insert(0, normalized)
+        del recent_saves[RECENT_SAVES_LIMIT:]
+
+    def load_simulation_from_path(path_value: str) -> bool:
+        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message
+        try:
+            sim = _load_viewer_simulation(path_value, with_encounters=with_encounters)
+            controller.sim = sim
+            previous_snapshot = extract_render_snapshot(sim)
+            current_snapshot = previous_snapshot
+            last_tick_time = pygame_module.time.get_ticks() / 1000.0
+            context_menu = None
+            push_recent_save(path_value)
+            status_message = f"loaded {path_value}"
+            return True
+        except Exception as exc:
+            status_message = f"load failed: {exc}"
+            print(f"[hexcrawler.viewer] load failed path={path_value}: {exc}", file=sys.stderr)
+            return False
+
+    def build_recent_save_items() -> list[ContextMenuItem]:
+        if not recent_saves:
+            return [ContextMenuItem(label="Load recent save... (none)", action="noop")]
+        return [
+            ContextMenuItem(label=f"Load recent: {Path(path_value).name}", action="load_recent", payload=path_value)
+            for path_value in recent_saves
+        ]
+
+    def build_context_menu(event_pos: tuple[int, int]) -> ContextMenuState | None:
+        items: list[ContextMenuItem] = []
+        if viewport_rect.collidepoint(event_pos):
+            entity_id = _find_entity_at_pixel(sim, event_pos, world_center)
+            if entity_id is not None:
+                items.append(ContextMenuItem(label="Select", action="select", payload=entity_id))
+                if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
+                    items.append(ContextMenuItem(label="Deselect", action="clear_selection"))
+                items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+            else:
+                world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center)
+                target_hex = world_xy_to_axial(world_x, world_y)
+                if sim.state.world.get_hex_record(target_hex) is not None:
+                    items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
+                    items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+        items.extend(build_recent_save_items())
+        if not items:
+            return None
+        return ContextMenuState(pixel_x=event_pos[0], pixel_y=event_pos[1], items=tuple(items))
 
     clock = pygame_module.time.Clock()
     font = pygame_module.font.SysFont("consolas", 22)
@@ -803,6 +941,10 @@ def run_pygame_viewer(
     current_snapshot = previous_snapshot
     tick_duration_seconds = SIM_TICK_SECONDS
     last_tick_time = pygame_module.time.get_ticks() / 1000.0
+    recent_saves: list[str] = []
+    push_recent_save(save_path)
+    push_recent_save(load_save)
+    status_message: str | None = None
 
     while running:
         dt = clock.tick(60) / 1000.0
@@ -815,19 +957,14 @@ def run_pygame_viewer(
                 running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F5:
                 _save_viewer_simulation(sim, save_path)
+                push_recent_save(save_path)
+                status_message = f"saved {save_path}"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F9:
                 load_target = load_save if load_save else save_path
                 if load_target and Path(load_target).exists():
-                    try:
-                        sim = _load_viewer_simulation(load_target, with_encounters=with_encounters)
-                        controller.sim = sim
-                        previous_snapshot = extract_render_snapshot(sim)
-                        current_snapshot = previous_snapshot
-                        last_tick_time = pygame_module.time.get_ticks() / 1000.0
-                        context_menu = None
-                    except Exception as exc:
-                        print(f"[hexcrawler.viewer] load failed path={load_target}: {exc}", file=sys.stderr)
+                    load_simulation_from_path(load_target)
                 else:
+                    status_message = f"load failed: file not found ({load_target})"
                     print(f"[hexcrawler.viewer] load skipped; file not found path={load_target}")
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
@@ -850,19 +987,22 @@ def run_pygame_viewer(
                             )
                             break
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
-                if not viewport_rect.collidepoint(event.pos):
-                    context_menu = None
-                    continue
-                world_x, world_y = _pixel_to_world(event.pos[0], event.pos[1], world_center)
-                target_hex = world_xy_to_axial(world_x, world_y)
-                if sim.state.world.get_hex_record(target_hex) is None:
-                    context_menu = None
-                else:
-                    context_menu = ContextMenuState(event.pos[0], event.pos[1], world_x, world_y)
+                context_menu = build_context_menu(event.pos)
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
-                menu_rect = pygame_module.Rect(context_menu.pixel_x, context_menu.pixel_y, 130, 34)
+                menu_rect = _context_menu_rect(context_menu, viewport_rect)
                 if menu_rect.collidepoint(event.pos):
-                    controller.set_target_world(context_menu.world_x, context_menu.world_y)
+                    row_index = (event.pos[1] - menu_rect.y) // CONTEXT_MENU_ROW_HEIGHT
+                    if 0 <= row_index < len(context_menu.items):
+                        item = context_menu.items[row_index]
+                        if item.action == "move_here" and item.payload is not None:
+                            x_str, y_str = item.payload.split(",", 1)
+                            controller.set_target_world(float(x_str), float(y_str))
+                        elif item.action == "select" and item.payload is not None:
+                            controller.set_selected_entity(item.payload)
+                        elif item.action == "clear_selection":
+                            controller.clear_selected_entity()
+                        elif item.action == "load_recent" and item.payload is not None:
+                            load_simulation_from_path(item.payload)
                 context_menu = None
 
         move_x, move_y = _current_input_vector()
@@ -881,10 +1021,15 @@ def run_pygame_viewer(
         screen.fill((17, 18, 25))
         _draw_world(screen, sim, world_center, clip_rect=viewport_rect)
         pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
-        interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, PLAYER_ID, alpha)
-        if interpolated is not None:
-            _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
-        _draw_hud(screen, sim, font)
+        for entity_id in sorted(sim.state.entities):
+            interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
+            if interpolated is None:
+                continue
+            if entity_id == PLAYER_ID:
+                _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
+            else:
+                _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
+        _draw_hud(screen, sim, font, status_message)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll)
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()

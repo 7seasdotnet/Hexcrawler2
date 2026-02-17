@@ -145,6 +145,7 @@ class EntityState:
     template_id: str | None = None
     source_action_uid: str | None = None
     space_id: str = DEFAULT_OVERWORLD_SPACE_ID
+    selected_entity_id: str | None = None
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -166,6 +167,7 @@ class SimulationState:
     entities: dict[str, EntityState] = field(default_factory=dict)
     rules_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     event_trace: list[dict[str, Any]] = field(default_factory=list)
+    selected_entity_id: str | None = None
 
     @property
     def day(self) -> int:
@@ -265,6 +267,21 @@ class Simulation:
         entity.move_input_y = 0.0
         entity.target_position = None
 
+    def set_selected_entity(self, selected_entity_id: str | None, *, owner_entity_id: str | None = None) -> None:
+        normalized = None if selected_entity_id is None else str(selected_entity_id)
+        if owner_entity_id is not None and owner_entity_id in self.state.entities:
+            self.state.entities[owner_entity_id].selected_entity_id = normalized
+            return
+        self.state.selected_entity_id = normalized
+
+    def clear_selected_entity(self, *, owner_entity_id: str | None = None) -> None:
+        self.set_selected_entity(None, owner_entity_id=owner_entity_id)
+
+    def selected_entity_id(self, *, owner_entity_id: str | None = None) -> str | None:
+        if owner_entity_id is not None and owner_entity_id in self.state.entities:
+            return self.state.entities[owner_entity_id].selected_entity_id
+        return self.state.selected_entity_id
+
     def advance_ticks(self, ticks: int) -> None:
         for _ in range(ticks):
             self._tick_once()
@@ -363,12 +380,14 @@ class Simulation:
                     "target_position": list(entity.target_position) if entity.target_position else None,
                     "template_id": entity.template_id,
                     "source_action_uid": entity.source_action_uid,
+                    "selected_entity_id": entity.selected_entity_id,
                 }
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
             "input_log": [command.to_dict() for command in self.input_log],
             "pending_events": [event.to_dict() for event in self.pending_events()],
             "event_trace": copy.deepcopy(self.state.event_trace),
+            "selected_entity_id": self.state.selected_entity_id,
         }
 
     @classmethod
@@ -404,8 +423,14 @@ class Simulation:
                 source_action_uid=(
                     str(row["source_action_uid"]) if row.get("source_action_uid") is not None else None
                 ),
+                selected_entity_id=(
+                    str(row["selected_entity_id"]) if row.get("selected_entity_id") is not None else None
+                ),
             )
             sim.add_entity(entity)
+
+        if payload.get("selected_entity_id") is not None:
+            sim.state.selected_entity_id = str(payload["selected_entity_id"])
 
         for row in payload.get("input_log", []):
             sim.append_command(SimCommand.from_dict(row))
@@ -442,6 +467,16 @@ class Simulation:
             self._execute_command(command)
 
     def _execute_command(self, command: SimCommand) -> None:
+        if command.command_type == "set_selected_entity":
+            selected_entity_id = command.params.get("selected_entity_id")
+            if selected_entity_id is not None and selected_entity_id not in self.state.entities:
+                return
+            self.set_selected_entity(selected_entity_id, owner_entity_id=command.entity_id)
+            return
+        if command.command_type == "clear_selected_entity":
+            self.clear_selected_entity(owner_entity_id=command.entity_id)
+            return
+
         entity_id = command.entity_id
         if entity_id is None or entity_id not in self.state.entities:
             return

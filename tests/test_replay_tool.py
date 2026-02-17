@@ -50,4 +50,5 @@ def test_replay_tool_main_outputs_hashes(tmp_path: Path, capsys) -> None:
     assert "artifacts.spawns.limit=10" in output
     assert "artifacts.entities.limit=20" in output
     assert "artifacts.outcomes.limit=20" in output
+    assert "artifacts.selection owner_entity_id=scout selected_entity_id=none" in output
     assert dumped_path.exists()
