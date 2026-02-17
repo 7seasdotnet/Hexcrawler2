@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5G — Interaction substrate + context actions.
-- **Next action:** Continue Phase 5G hardening (viewer context UX refinements/tests) or proceed to Phase 5H (space-transition usage / dungeon-entry UX).
-- **Phase status:** ✅ Phase 5G in progress (selection commands + context menu substrate landed).
+- **Current phase:** Phase 5H1 — Inventory + Containers + Ledger (stackables only).
+- **Next action:** Phase 5H2 — inventory consumption/time-cost ticks (deterministic accounting) before broader site/settlement stockpile integration.
+- **Phase status:** ✅ Phase 5H1 complete (stackable inventory substrate + container persistence + idempotent ledger landed).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -26,9 +26,13 @@
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
+  - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
+  - Deterministic `inventory_intent` command seam (`transfer`/`drop`/`pickup`/`consume`/`spawn`) with single authoritative apply path, no-negative enforcement, deterministic `action_uid` (`tick:command_index`), and serialized idempotence ledger in `rules_state["inventory_ledger"].applied_action_uids`.
+  - Deterministic forensic `inventory_outcome` event-trace entries for every intent (`applied`, `already_applied`, `insufficient_quantity`, `unknown_item`, `unknown_container`, `invalid_quantity`, `unsupported_reason`).
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
   - Encounter table content loader/validator (`content.encounters`) with strict schema checks, deterministic normalization, and default example table wiring.
+  - Item registry loader/validator (`content.items`) with strict schema validation, stackable-only enforcement for this phase, deterministic item ordering, and default path constant `DEFAULT_ITEMS_PATH = "content/items/items.json"`.
 - `src/hexcrawler/cli/viewer.py`
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`) with controller actions routed through `SimCommand` append semantics (no direct simulation mutation).
 - `src/hexcrawler/cli/pygame_viewer.py`
@@ -167,6 +171,7 @@
 - `track_intent`
 - `spawn_intent`
 - `transition_space` (simulation command seam; structural space transition only)
+- `inventory_intent` (simulation command seam; stackable inventory delta substrate)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -175,9 +180,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Added deterministic selection command/state substrate (`set_selected_entity`, `clear_selected_entity`) with serialization + hash coverage and replay/save-load tests.
-- Replaced RMB single-action move with a deterministic context menu substrate (entity/hex/background actions), including session-only recent-save load entries and non-crashing load error surfacing in viewer status text.
-- Extended forensic/debug surfaces with selection output in replay artifacts and a Selection section in the pygame debug panel.
+- Added Phase 5H1 stackable inventory substrate: strict item registry content loading, `world.containers` persistence, and per-entity deterministic inventory container linkage with load validation.
+- Added deterministic `inventory_intent` execution path with hash-covered idempotence ledger (`rules_state["inventory_ledger"]`) and forensic `inventory_outcome` event-trace outcomes.
+- Added inventory-focused tests (save/load, determinism, idempotence, no-negatives, transfer conservation, drop/pickup flow, validation failures) and read-only selected-entity inventory inspection in the pygame debug panel.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

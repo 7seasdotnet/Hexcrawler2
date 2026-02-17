@@ -8,11 +8,12 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from hexcrawler.content.items import DEFAULT_ITEMS_PATH, load_items_json
 from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
+from hexcrawler.sim.world import ContainerState, DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
 
 TICKS_PER_DAY = 240
 TARGET_REACHED_THRESHOLD = 0.05
@@ -22,6 +23,10 @@ RNG_SIM_STREAM_NAME = "rng_sim"
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 MAX_EVENT_TRACE = 256
 MAX_EVENTS_PER_TICK = 10_000
+INVENTORY_OUTCOME_EVENT_TYPE = "inventory_outcome"
+INVENTORY_LEDGER_MODULE = "inventory_ledger"
+INVENTORY_ALLOWED_REASONS = {"transfer", "drop", "pickup", "consume", "spawn"}
+
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -146,6 +151,7 @@ class EntityState:
     source_action_uid: str | None = None
     space_id: str = DEFAULT_OVERWORLD_SPACE_ID
     selected_entity_id: str | None = None
+    inventory_container_id: str | None = None
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -197,6 +203,18 @@ class Simulation:
         self._event_execution_trace: list[str] = []
 
     def add_entity(self, entity: EntityState) -> None:
+        if entity.inventory_container_id is None:
+            entity.inventory_container_id = f"inventory:{entity.entity_id}"
+            if entity.inventory_container_id not in self.state.world.containers:
+                self.state.world.containers[entity.inventory_container_id] = ContainerState(
+                    container_id=entity.inventory_container_id,
+                    owner_entity_id=entity.entity_id,
+                    items={},
+                )
+        elif entity.inventory_container_id not in self.state.world.containers:
+            raise ValueError(
+                f"entity '{entity.entity_id}' references missing inventory container '{entity.inventory_container_id}'"
+            )
         self.state.entities[entity.entity_id] = entity
 
     def append_command(self, command: SimCommand | dict[str, Any]) -> None:
@@ -381,6 +399,7 @@ class Simulation:
                     "template_id": entity.template_id,
                     "source_action_uid": entity.source_action_uid,
                     "selected_entity_id": entity.selected_entity_id,
+                    "inventory_container_id": entity.inventory_container_id,
                 }
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
@@ -426,6 +445,9 @@ class Simulation:
                 selected_entity_id=(
                     str(row["selected_entity_id"]) if row.get("selected_entity_id") is not None else None
                 ),
+                inventory_container_id=(
+                    str(row["inventory_container_id"]) if row.get("inventory_container_id") is not None else None
+                ),
             )
             sim.add_entity(entity)
 
@@ -463,10 +485,10 @@ class Simulation:
         self.state.tick += 1
 
     def _apply_commands_for_tick(self, tick: int) -> None:
-        for command in self._pending_commands.get(tick, []):
-            self._execute_command(command)
+        for command_index, command in enumerate(self._pending_commands.get(tick, [])):
+            self._execute_command(command, command_index=command_index)
 
-    def _execute_command(self, command: SimCommand) -> None:
+    def _execute_command(self, command: SimCommand, *, command_index: int) -> None:
         if command.command_type == "set_selected_entity":
             selected_entity_id = command.params.get("selected_entity_id")
             if selected_entity_id is not None and selected_entity_id not in self.state.entities:
@@ -475,6 +497,9 @@ class Simulation:
             return
         if command.command_type == "clear_selected_entity":
             self.clear_selected_entity(owner_entity_id=command.entity_id)
+            return
+        if command.command_type == "inventory_intent":
+            self._execute_inventory_intent(command, command_index=command_index)
             return
 
         entity_id = command.entity_id
@@ -501,6 +526,189 @@ class Simulation:
                 return
             to_location = LocationRef.from_dict(to_location_payload)
             self._execute_transition_command(entity_id=entity_id, tick=command.tick, command=command, to_location=to_location)
+
+    def _inventory_action_uid(self, *, tick: int, command_index: int) -> str:
+        return f"{tick}:{command_index}"
+
+    def _inventory_registry_item_ids(self) -> set[str]:
+        return set(load_items_json(DEFAULT_ITEMS_PATH).by_id().keys())
+
+    def _inventory_ledger_state(self) -> dict[str, Any]:
+        state = self.get_rules_state(INVENTORY_LEDGER_MODULE)
+        applied = state.get("applied_action_uids", [])
+        if not isinstance(applied, list):
+            raise ValueError("inventory_ledger.applied_action_uids must be a list")
+        normalized = sorted({str(uid) for uid in applied})
+        state["applied_action_uids"] = normalized
+        return state
+
+    def _set_inventory_ledger_state(self, state: dict[str, Any]) -> None:
+        applied = state.get("applied_action_uids", [])
+        state["applied_action_uids"] = sorted({str(uid) for uid in applied})
+        self.set_rules_state(INVENTORY_LEDGER_MODULE, state)
+
+    def _append_inventory_outcome(
+        self,
+        *,
+        tick: int,
+        action_uid: str,
+        outcome: str,
+        details: dict[str, Any],
+    ) -> None:
+        self._append_event_trace_entry(
+            {
+                "tick": tick,
+                "event_id": self._trace_event_id_as_int(f"inventory:{action_uid}:{outcome}"),
+                "event_type": INVENTORY_OUTCOME_EVENT_TYPE,
+                "params": {
+                    "tick": tick,
+                    "action_uid": action_uid,
+                    "outcome": outcome,
+                    "details": details,
+                },
+                "module_hooks_called": False,
+            }
+        )
+
+    def _apply_inventory_delta(self, *, container_id: str, item_id: str, delta: int) -> bool:
+        container = self.state.world.containers[container_id]
+        before = int(container.items.get(item_id, 0))
+        after = before + delta
+        if after < 0:
+            return False
+        if after == 0:
+            container.items.pop(item_id, None)
+        else:
+            container.items[item_id] = after
+        return True
+
+    def _resolve_drop_container_id(self, *, command: SimCommand) -> str | None:
+        if command.entity_id is None or command.entity_id not in self.state.entities:
+            return None
+        entity = self.state.entities[command.entity_id]
+        coord = entity.hex_coord
+        return f"world_drop:{entity.space_id}:{coord.q}:{coord.r}"
+
+    def _execute_inventory_intent(self, command: SimCommand, *, command_index: int) -> None:
+        action_uid = self._inventory_action_uid(tick=command.tick, command_index=command_index)
+        ledger_state = self._inventory_ledger_state()
+        applied_action_uids = set(ledger_state.get("applied_action_uids", []))
+
+        reason = str(command.params.get("reason", ""))
+        item_id = str(command.params.get("item_id", ""))
+        quantity_raw = command.params.get("quantity")
+        src_container_id = command.params.get("src_container_id")
+        dst_container_id = command.params.get("dst_container_id")
+
+        details: dict[str, Any] = {
+            "reason": reason,
+            "item_id": item_id,
+            "src_container_id": src_container_id,
+            "dst_container_id": dst_container_id,
+            "quantity": quantity_raw,
+        }
+
+        if action_uid in applied_action_uids:
+            self._append_inventory_outcome(
+                tick=command.tick,
+                action_uid=action_uid,
+                outcome="already_applied",
+                details=details,
+            )
+            return
+
+        if reason not in INVENTORY_ALLOWED_REASONS:
+            self._append_inventory_outcome(
+                tick=command.tick,
+                action_uid=action_uid,
+                outcome="unsupported_reason",
+                details=details,
+            )
+            return
+
+        if not isinstance(quantity_raw, int) or quantity_raw <= 0:
+            self._append_inventory_outcome(
+                tick=command.tick,
+                action_uid=action_uid,
+                outcome="invalid_quantity",
+                details=details,
+            )
+            return
+        quantity = int(quantity_raw)
+
+        if item_id not in self._inventory_registry_item_ids():
+            self._append_inventory_outcome(
+                tick=command.tick,
+                action_uid=action_uid,
+                outcome="unknown_item",
+                details=details,
+            )
+            return
+
+        if reason == "drop" and dst_container_id is None:
+            dst_container_id = self._resolve_drop_container_id(command=command)
+            details["dst_container_id"] = dst_container_id
+            if dst_container_id is not None and dst_container_id not in self.state.world.containers:
+                location = None
+                if command.entity_id is not None and command.entity_id in self.state.entities:
+                    entity = self.state.entities[command.entity_id]
+                    location = {
+                        "space_id": entity.space_id,
+                        "topology_type": "overworld_hex",
+                        "coord": entity.hex_coord.to_dict(),
+                    }
+                self.state.world.containers[dst_container_id] = ContainerState(
+                    container_id=dst_container_id,
+                    location=location,
+                    items={},
+                )
+
+        container_ids_to_check = []
+        if reason in {"transfer", "drop", "pickup", "consume"}:
+            container_ids_to_check.append(src_container_id)
+        if reason in {"transfer", "drop", "pickup", "spawn"}:
+            container_ids_to_check.append(dst_container_id)
+        for container_id in container_ids_to_check:
+            if container_id is None or container_id not in self.state.world.containers:
+                self._append_inventory_outcome(
+                    tick=command.tick,
+                    action_uid=action_uid,
+                    outcome="unknown_container",
+                    details=details,
+                )
+                return
+
+        if reason in {"transfer", "drop", "pickup", "consume"}:
+            if not self._apply_inventory_delta(
+                container_id=str(src_container_id),
+                item_id=item_id,
+                delta=-quantity,
+            ):
+                self._append_inventory_outcome(
+                    tick=command.tick,
+                    action_uid=action_uid,
+                    outcome="insufficient_quantity",
+                    details=details,
+                )
+                return
+
+        if reason in {"transfer", "drop", "pickup", "spawn"}:
+            self._apply_inventory_delta(
+                container_id=str(dst_container_id),
+                item_id=item_id,
+                delta=quantity,
+            )
+
+        applied_action_uids.add(action_uid)
+        ledger_state["applied_action_uids"] = sorted(applied_action_uids)
+        self._set_inventory_ledger_state(ledger_state)
+
+        self._append_inventory_outcome(
+            tick=command.tick,
+            action_uid=action_uid,
+            outcome="applied",
+            details=details,
+        )
 
     def _execute_transition_command(
         self,

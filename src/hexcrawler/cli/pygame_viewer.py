@@ -53,6 +53,7 @@ ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
 ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
+INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
 CONTEXT_MENU_ROW_HEIGHT = 28
@@ -485,6 +486,23 @@ def _draw_encounter_debug_panel(
         selected_entity = sim.state.entities[selected_entity_id]
         selection_rows.append(f"  space_id={selected_entity.space_id}")
         selection_rows.append(f"  location=overworld_hex:{selected_entity.hex_coord.q},{selected_entity.hex_coord.r}")
+        inventory_container_id = selected_entity.inventory_container_id
+        selection_rows.append(
+            f"  inventory_container_id={inventory_container_id if inventory_container_id is not None else '-'}"
+        )
+        if inventory_container_id is not None and inventory_container_id in sim.state.world.containers:
+            container = sim.state.world.containers[inventory_container_id]
+            selection_rows.append("  inventory_items:")
+            items = [
+                f"    {item_id}={container.items[item_id]}"
+                for item_id in sorted(container.items)
+            ]
+            if not items:
+                selection_rows.append("    (empty)")
+            else:
+                selection_rows.extend(items[:INVENTORY_DEBUG_LINES])
+                if len(items) > INVENTORY_DEBUG_LINES:
+                    selection_rows.append(f"    ... +{len(items) - INVENTORY_DEBUG_LINES} more")
     else:
         selection_rows.append("  space_id=-")
         selection_rows.append("  location=-")
