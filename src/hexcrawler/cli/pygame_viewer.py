@@ -8,7 +8,7 @@ import math
 import os
 import platform
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +57,7 @@ ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 SUPPLY_DEBUG_OUTCOME_LIMIT = 20
 SITE_ENTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
+PANEL_SECTION_ENTRY_LIMIT = 30
 INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
@@ -81,6 +82,24 @@ MARKER_SLOT_OFFSETS: tuple[tuple[int, int], ...] = (
 pygame: Any | None = None
 
 
+PANEL_SECTION_ORDER: tuple[str, ...] = (
+    "encounters",
+    "outcomes",
+    "rumors",
+    "supplies",
+    "sites",
+    "entities",
+)
+
+PANEL_SECTION_TITLES: dict[str, str] = {
+    "encounters": "Encounters",
+    "outcomes": "Outcomes",
+    "rumors": "Rumors",
+    "supplies": "Supplies",
+    "sites": "Sites",
+    "entities": "Entities",
+}
+
 @dataclass(frozen=True)
 class ContextMenuItem:
     label: str
@@ -97,41 +116,13 @@ class ContextMenuState:
 
 @dataclass
 class EncounterPanelScrollState:
-    signals_offset: int = 0
-    tracks_offset: int = 0
-    spawns_offset: int = 0
-    outcomes_offset: int = 0
-    entities_offset: int = 0
-    rumors_offset: int = 0
+    offsets: dict[str, int] = field(default_factory=lambda: {section: 0 for section in PANEL_SECTION_ORDER})
 
     def offset_for(self, section: str) -> int:
-        if section == "signals":
-            return self.signals_offset
-        if section == "tracks":
-            return self.tracks_offset
-        if section == "spawns":
-            return self.spawns_offset
-        if section == "entities":
-            return self.entities_offset
-        if section == "rumors":
-            return self.rumors_offset
-        return self.outcomes_offset
+        return self.offsets.get(section, 0)
 
     def scroll(self, section: str, delta: int, total_count: int, page_size: int) -> None:
-        max_offset = max(0, total_count - page_size)
-        next_offset = max(0, min(max_offset, self.offset_for(section) + delta))
-        if section == "signals":
-            self.signals_offset = next_offset
-        elif section == "tracks":
-            self.tracks_offset = next_offset
-        elif section == "spawns":
-            self.spawns_offset = next_offset
-        elif section == "entities":
-            self.entities_offset = next_offset
-        elif section == "rumors":
-            self.rumors_offset = next_offset
-        else:
-            self.outcomes_offset = next_offset
+        self.offsets[section] = _clamp_scroll_offset(self.offset_for(section), delta, total_count, page_size)
 
 
 @dataclass
@@ -332,41 +323,99 @@ def _coord_from_location(location: object) -> HexCoord | None:
         return None
 
 
+def _truncate_label(text: str, max_length: int = 10) -> str:
+    normalized = text.strip()
+    if not normalized:
+        return "?"
+    if len(normalized) <= max_length:
+        return normalized
+    if max_length <= 1:
+        return normalized[:max_length]
+    return f"{normalized[: max_length - 1]}…"
+
+
+def _short_stable_id(value: str, max_length: int = 10) -> str:
+    return _truncate_label(value.split(":")[-1], max_length=max_length)
+
+
+def _clamp_scroll_offset(current: int, delta: int, total_count: int, page_size: int) -> int:
+    max_offset = max(0, total_count - page_size)
+    return max(0, min(max_offset, current + delta))
+
+
+def _section_entries(rows: list[str], *, entry_limit: int = PANEL_SECTION_ENTRY_LIMIT) -> list[str]:
+    return list(reversed(rows[-entry_limit:]))
+
+
 def _draw_world_markers(
     screen: pygame.Surface,
     sim: Simulation,
     center: tuple[float, float],
+    font: pygame.font.Font,
 ) -> None:
-    markers_by_hex: dict[HexCoord, list[tuple[str, tuple[int, int, int], int]]] = {}
+    markers_by_hex: dict[HexCoord, list[tuple[int, str, tuple[int, int, int], int, str]]] = {}
 
-    def add_marker(hex_coord: HexCoord | None, marker_id: str, color: tuple[int, int, int], radius: int) -> None:
+    def add_marker(
+        hex_coord: HexCoord | None,
+        marker_id: str,
+        color: tuple[int, int, int],
+        radius: int,
+        label: str,
+        priority: int,
+    ) -> None:
         if hex_coord is None:
             return
-        markers_by_hex.setdefault(hex_coord, []).append((marker_id, color, radius))
+        markers_by_hex.setdefault(hex_coord, []).append((priority, marker_id, color, radius, label))
+
+    for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
+        add_marker(
+            _coord_from_location(site.location),
+            f"site:{site.site_id}",
+            SITE_COLORS.get(site.site_type, (245, 245, 120)),
+            6,
+            _truncate_label(site.name if site.name else site.site_id, max_length=12),
+            0,
+        )
 
     for record in sim.state.world.signals:
         marker_id = f"signal:{record.get('signal_uid', '')}"
-        add_marker(_coord_from_location(record.get("location")), marker_id, (255, 202, 96), 4)
+        add_marker(
+            _coord_from_location(record.get("location")),
+            marker_id,
+            (255, 202, 96),
+            4,
+            _truncate_label(str(record.get("template_id", "sig")) if record.get("template_id") else "sig"),
+            3,
+        )
 
     for record in sim.state.world.tracks:
         marker_id = f"track:{record.get('track_uid', '')}"
-        add_marker(_coord_from_location(record.get("location")), marker_id, (205, 183, 255), 3)
+        add_marker(
+            _coord_from_location(record.get("location")),
+            marker_id,
+            (205, 183, 255),
+            3,
+            _truncate_label(str(record.get("template_id", "trk")) if record.get("template_id") else "trk"),
+            3,
+        )
 
     for index, record in enumerate(sim.state.world.spawn_descriptors):
         action_uid = str(record.get("action_uid", "?"))
         marker_id = f"spawn_desc:{action_uid}:{index}"
-        add_marker(_coord_from_location(record.get("location")), marker_id, (96, 198, 255), 4)
+        add_marker(_coord_from_location(record.get("location")), marker_id, (96, 198, 255), 4, "spawn", 2)
 
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
         if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
             continue
-        add_marker(entity.hex_coord, f"entity:{entity.entity_id}", (140, 225, 255), 5)
+        label = entity.template_id if entity.template_id else _short_stable_id(entity.entity_id)
+        add_marker(entity.hex_coord, f"entity:{entity.entity_id}", (140, 225, 255), 5, _truncate_label(label), 1)
 
     for hex_coord in sorted(markers_by_hex):
         center_x, center_y = _axial_to_pixel(hex_coord, center)
-        markers = sorted(markers_by_hex[hex_coord], key=lambda row: row[0])
+        markers = sorted(markers_by_hex[hex_coord], key=lambda row: (row[0], row[1]))
         used_slots: set[int] = set()
-        for marker_id, color, radius in markers:
+        label_marker: tuple[int, int, str] | None = None
+        for _, marker_id, color, radius, label in markers:
             preferred = _stable_index(marker_id, len(MARKER_SLOT_OFFSETS))
             slot_index = preferred
             for offset in range(len(MARKER_SLOT_OFFSETS)):
@@ -380,11 +429,17 @@ def _draw_world_markers(
             y = int(center_y + offset_y)
             pygame.draw.circle(screen, color, (x, y), radius)
             pygame.draw.circle(screen, (14, 24, 30), (x, y), radius, 1)
+            if label_marker is None:
+                label_marker = (x, y, label)
+        if label_marker is not None:
+            label_surface = font.render(label_marker[2], True, (235, 238, 245))
+            screen.blit(label_surface, (label_marker[0] + 8, label_marker[1] - 8))
 
 def _draw_world(
     screen: pygame.Surface,
     sim: Simulation,
     center: tuple[float, float],
+    marker_font: pygame.font.Font,
     *,
     clip_rect: pygame.Rect,
 ) -> None:
@@ -432,7 +487,7 @@ def _draw_world(
             pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
 
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
-        _draw_world_markers(screen, sim, center)
+        _draw_world_markers(screen, sim, center, marker_font)
     screen.set_clip(old_clip)
 
 
@@ -474,14 +529,14 @@ def _draw_spawned_entity(
 
 def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, status_message: str | None) -> None:
     entity = sim.state.entities[PLAYER_ID]
-    location = f"overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r}"
     active_space = sim.state.world.spaces.get(entity.space_id)
     if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
-        location = f"square_grid:{math.floor(entity.position_x)},{math.floor(entity.position_y)}"
+        coord_text = f"x={math.floor(entity.position_x)},y={math.floor(entity.position_y)}"
+    else:
+        coord_text = f"q={entity.hex_coord.q},r={entity.hex_coord.r}"
+    context_line = f"space={entity.space_id} | {coord_text} | tick={sim.state.tick} | day={sim.state.tick // TICKS_PER_DAY}"
     lines = [
-        f"CURRENT LOCATION: {location}",
-        f"ticks: {sim.state.tick}",
-        f"day: {sim.state.tick // TICKS_PER_DAY}",
+        context_line,
         "WASD move | RMB menu | F5 save | F9 load | ESC quit",
     ]
     if status_message:
@@ -519,249 +574,140 @@ def _draw_encounter_debug_panel(
     sim: Simulation,
     font: pygame.font.Font,
     scroll_state: EncounterPanelScrollState,
+    active_section: str,
 ) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
     panel_rect = _panel_rect()
     pygame.draw.rect(screen, (24, 26, 36), panel_rect)
     pygame.draw.rect(screen, (95, 98, 110), panel_rect, 1)
 
-    y = panel_rect.y + 8
-    header = font.render("Encounter Debug", True, (245, 245, 245))
-    screen.blit(header, (panel_rect.x + 10, y))
-    y += 18
-    hint = font.render("Mouse wheel/PgUp/PgDn scroll hovered section", True, (190, 192, 202))
-    screen.blit(hint, (panel_rect.x + 10, y))
-    y += 18
-
     selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
-    selection_rows = [
-        "Selection:",
-        f"  selected_entity_id={selected_entity_id if selected_entity_id is not None else 'none'}",
-    ]
-    if selected_entity_id is not None and selected_entity_id in sim.state.entities:
-        selected_entity = sim.state.entities[selected_entity_id]
-        selection_rows.append(f"  space_id={selected_entity.space_id}")
-        selection_rows.append(f"  location={_entity_location_text(sim, selected_entity)}")
-        inventory_container_id = selected_entity.inventory_container_id
-        selection_rows.append(
-            f"  inventory_container_id={inventory_container_id if inventory_container_id is not None else '-'}"
-        )
-        if inventory_container_id is not None and inventory_container_id in sim.state.world.containers:
-            container = sim.state.world.containers[inventory_container_id]
-            selection_rows.append("  inventory_items:")
-            items = [
-                f"    {item_id}={container.items[item_id]}"
-                for item_id in sorted(container.items)
-            ]
-            if not items:
-                selection_rows.append("    (empty)")
-            else:
-                selection_rows.extend(items[:INVENTORY_DEBUG_LINES])
-                if len(items) > INVENTORY_DEBUG_LINES:
-                    selection_rows.append(f"    ... +{len(items) - INVENTORY_DEBUG_LINES} more")
-    else:
-        selection_rows.append("  space_id=-")
-        selection_rows.append("  location=-")
-    for row in selection_rows:
-        wrapped = _wrap_text_to_pixel_width(row, font, panel_rect.width - 24)
-        for wrapped_row in wrapped:
-            screen.blit(font.render(wrapped_row, True, (210, 226, 210)), (panel_rect.x + 10, y))
-            y += 16
-    y += 6
-
-    supply_entity_id = selected_entity_id if selected_entity_id in sim.state.entities else PLAYER_ID
-    supply_rows = ["Supplies:"]
-    if supply_entity_id in sim.state.entities:
-        supply_entity = sim.state.entities[supply_entity_id]
-        container_id = supply_entity.inventory_container_id
-        supply_rows.append(f"  entity_id={supply_entity_id}")
-        if container_id is None or container_id not in sim.state.world.containers:
-            supply_rows.append("  inventory_container=missing")
-        else:
-            items = sim.state.world.containers[container_id].items
-            supply_rows.append(f"  rations={int(items.get('rations', 0))}")
-            supply_rows.append(f"  water={int(items.get('water', 0))}")
-            supply_rows.append(f"  torch={int(items.get('torch', 0))}")
-    else:
-        supply_rows.append("  entity_id=none")
-    for row in supply_rows:
-        screen.blit(font.render(row, True, (210, 210, 180)), (panel_rect.x + 10, y))
-        y += 16
-    y += 6
-
-    module_present = sim.get_rule_module(EncounterCheckModule.name) is not None
-    if not module_present:
-        message = font.render(
-            "Encounter debug not enabled; run with --with-encounters",
-            True,
-            (220, 180, 130),
-        )
-        screen.blit(message, (panel_rect.x + 10, y))
-        y += 20
-
-    state = sim.get_rules_state(EncounterCheckModule.name) if module_present else {}
-    kv_rows = [
-        ("last_check_tick", str(int(state.get("last_check_tick", -1)))),
-        ("checks_emitted", str(int(state.get("checks_emitted", 0)))),
-        ("eligible_count", str(int(state.get("eligible_count", 0)))),
-        (
-            "cooldown_ticks_left",
-            str(max(0, int(state.get("cooldown_until_tick", -1)) - sim.state.tick)),
-        ),
-        ("ineligible_streak", str(int(state.get("ineligible_streak", 0)))),
-    ]
-    for key, value in kv_rows:
-        line = font.render(f"{key}: {value}", True, (224, 224, 224))
-        screen.blit(line, (panel_rect.x + 10, y))
-        y += 18
-
-    recent_signals = list(reversed(sim.state.world.signals[-ENCOUNTER_DEBUG_SIGNAL_LIMIT:]))
-    recent_tracks = list(reversed(sim.state.world.tracks[-ENCOUNTER_DEBUG_TRACK_LIMIT:]))
-    recent_spawns = list(reversed(sim.state.world.spawn_descriptors[-ENCOUNTER_DEBUG_SPAWN_LIMIT:]))
-    recent_rumors = list(reversed(sim.state.world.rumors[-ENCOUNTER_DEBUG_RUMOR_LIMIT:]))
     spawned_entities = [
         entity for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id)
         if entity.entity_id != PLAYER_ID and entity.entity_id.startswith("spawn:")
     ]
-    filtered_trace = [
-        entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
-    ]
-    recent_outcomes = list(reversed(filtered_trace[-ENCOUNTER_DEBUG_OUTCOME_LIMIT:]))
+    recent_signals = _section_entries([
+        (
+            f"tick={record.get('created_tick', '?')} template={record.get('template_id', '?')} "
+            f"loc={_format_location(record.get('location'))} expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'}"
+        )
+        for record in sim.state.world.signals
+    ])
+    recent_tracks = _section_entries([
+        (
+            f"tick={record.get('created_tick', '?')} template={record.get('template_id', '?')} "
+            f"loc={_format_location(record.get('location'))} expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'}"
+        )
+        for record in sim.state.world.tracks
+    ])
+    recent_spawns = _section_entries([
+        (
+            f"tick={record.get('created_tick', '?')} template={record.get('template_id', '?')} "
+            f"qty={record.get('quantity', '?')} loc={_format_location(record.get('location'))}"
+        )
+        for record in sim.state.world.spawn_descriptors
+    ])
+    encounter_rows = recent_signals + recent_tracks + recent_spawns
 
-    signal_rows = [
+    filtered_trace = [entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
+    outcome_rows = _section_entries([
         (
-            f"  created={record.get('created_tick', '?')} "
-            f"template={record.get('template_id', '?')} "
-            f"location={_format_location(record.get('location'))} "
-            f"expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'}"
+            f"tick={entry.get('tick', '?')} action_uid={params.get('action_uid', '?')} action={params.get('action_type', '?')} "
+            f"outcome={params.get('outcome', '?')} template={params.get('template_id', '-') or '-'}"
         )
-        for record in recent_signals
-    ]
-    track_rows = [
+        for entry in filtered_trace
+        for params in [entry.get("params") if isinstance(entry.get("params"), dict) else {}]
+    ])
+    rumor_rows = _section_entries([
         (
-            f"  created={record.get('created_tick', '?')} "
-            f"template={record.get('template_id', '?')} "
-            f"location={_format_location(record.get('location'))} "
-            f"expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'}"
+            f"rumor_id={record.get('rumor_id', '?')} hop={record.get('hop', '?')} confidence={record.get('confidence', '?')} "
+            f"loc={_format_location(record.get('location'))} template={record.get('template_id', '?')}"
         )
-        for record in recent_tracks
-    ]
-    outcome_rows = []
-    for entry in recent_outcomes:
-        params = entry.get("params")
-        params = params if isinstance(params, dict) else {}
-        template_id = params.get("template_id")
-        outcome_rows.append(
-            f"  tick={entry.get('tick', '?')} "
-            f"action_uid={params.get('action_uid', '?')} "
-            f"action_type={params.get('action_type', '?')} "
-            f"outcome={params.get('outcome', '?')} "
-            f"template={template_id if template_id not in (None, '') else '-'}"
-        )
-    spawn_rows = [
+        for record in sim.state.world.rumors
+    ])
+    supply_outcomes = [entry for entry in sim.get_event_trace() if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE]
+    supply_rows = _section_entries([
         (
-            f"  created={record.get('created_tick', '?')} "
-            f"location={_format_location(record.get('location'))} "
-            f"template={record.get('template_id', '?')} "
-            f"quantity={record.get('quantity', '?')} "
-            f"expires={record.get('expires_tick', '-') if record.get('expires_tick') is not None else '-'} "
-            f"action_uid={record.get('action_uid', '?')}"
+            f"tick={entry.get('tick', '?')} entity={params.get('entity_id', '?')} item={params.get('item_id', '?')} "
+            f"qty={params.get('quantity', '?')} remaining={params.get('remaining_quantity', '-')} outcome={params.get('outcome', '?')}"
         )
-        for record in recent_spawns
-    ]
+        for entry in supply_outcomes
+        for params in [entry.get("params") if isinstance(entry.get("params"), dict) else {}]
+    ])
+    site_rows: list[str] = []
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is not None:
+        coord = {"x": math.floor(player.position_x), "y": math.floor(player.position_y)}
+        if sim.state.world.spaces.get(player.space_id) is None or sim.state.world.spaces[player.space_id].topology_type == OVERWORLD_HEX_TOPOLOGY:
+            coord = player.hex_coord.to_dict()
+        for site in sim.state.world.get_sites_at_location({"space_id": player.space_id, "coord": coord}):
+            site_rows.append(f"site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}")
+    site_rows = _section_entries(site_rows)
+    entity_rows = _section_entries([
+        (
+            f"entity_id={entity.entity_id} template={entity.template_id if entity.template_id else '-'} "
+            f"loc={_entity_location_text(sim, entity)} action_uid={entity.source_action_uid if entity.source_action_uid else '-'}"
+        )
+        for entity in spawned_entities
+    ])
 
-
-    rumor_rows = [
-        (
-            f"  rumor_id={record.get('rumor_id', '?')} "
-            f"hop={record.get('hop', '?')} "
-            f"confidence={record.get('confidence', '?')} "
-            f"location={_format_location(record.get('location'))} "
-            f"template={record.get('template_id', '?')}"
-        )
-        for record in recent_rumors
-    ]
-
-    entity_rows = [
-        (
-            f"  entity_id={entity.entity_id} "
-            f"template={entity.template_id if entity.template_id else '-'} "
-            f"location={_entity_location_text(sim, entity)} "
-            f"action_uid={entity.source_action_uid if entity.source_action_uid else '-'}"
-        )
-        for entity in reversed(spawned_entities[-ENCOUNTER_DEBUG_ENTITY_LIMIT:])
-    ]
+    rows_by_section = {
+        "encounters": encounter_rows,
+        "outcomes": outcome_rows,
+        "rumors": rumor_rows,
+        "supplies": supply_rows,
+        "sites": site_rows,
+        "entities": entity_rows,
+    }
 
     section_rects: dict[str, pygame.Rect] = {}
-    section_counts: dict[str, int] = {}
+    section_counts = {section: len(rows) for section, rows in rows_by_section.items()}
 
-    def render_section(section: str, title: str, rows: list[str]) -> None:
-        nonlocal y
-        total = len(rows)
-        section_counts[section] = total
-        offset = scroll_state.offset_for(section)
-        section_top = y
-        header_line = font.render(
-            f"{title} ({total}) [{offset + 1 if total else 0}-{min(total, offset + ENCOUNTER_DEBUG_SECTION_ROWS)}]",
-            True,
-            (245, 245, 245),
-        )
-        screen.blit(header_line, (panel_rect.x + 10, y))
-        y += 16
-        slice_rows = rows[offset : offset + ENCOUNTER_DEBUG_SECTION_ROWS]
-        if not slice_rows:
-            screen.blit(font.render("  none", True, (205, 205, 210)), (panel_rect.x + 10, y))
+    y = panel_rect.y + 8
+    title = font.render("Encounter Debug", True, (245, 245, 245))
+    screen.blit(title, (panel_rect.x + 10, y))
+    y += 18
+
+    tab_x = panel_rect.x + 10
+    for section in PANEL_SECTION_ORDER:
+        tab_label = PANEL_SECTION_TITLES[section]
+        color = (70, 100, 160) if section == active_section else (50, 54, 70)
+        tab_surface = font.render(tab_label, True, (235, 235, 240))
+        tab_rect = pygame.Rect(tab_x, y, tab_surface.get_width() + 12, 20)
+        pygame.draw.rect(screen, color, tab_rect)
+        pygame.draw.rect(screen, (110, 115, 135), tab_rect, 1)
+        screen.blit(tab_surface, (tab_rect.x + 6, tab_rect.y + 2))
+        section_rects[section] = tab_rect
+        tab_x += tab_rect.width + 6
+    y += 26
+
+    section_rows = rows_by_section.get(active_section, [])
+    offset = scroll_state.offset_for(active_section)
+    visible_rows = section_rows[offset : offset + ENCOUNTER_DEBUG_SECTION_ROWS]
+    header_line = font.render(
+        f"{PANEL_SECTION_TITLES.get(active_section, active_section)} ({len(section_rows)}) [{offset + 1 if section_rows else 0}-{min(len(section_rows), offset + ENCOUNTER_DEBUG_SECTION_ROWS)}]",
+        True,
+        (245, 245, 245),
+    )
+    screen.blit(header_line, (panel_rect.x + 10, y))
+    y += 18
+    row_area_top = y
+    row_area_bottom = panel_rect.bottom - 10
+    if not visible_rows:
+        screen.blit(font.render("  none", True, (205, 205, 210)), (panel_rect.x + 10, y))
+    for row in visible_rows:
+        wrapped = _wrap_text_to_pixel_width(f"  {row}", font, panel_rect.width - 24)
+        for wrapped_row in wrapped:
+            if y > row_area_bottom:
+                break
+            screen.blit(font.render(wrapped_row, True, (205, 205, 210)), (panel_rect.x + 10, y))
             y += 16
-        for row in slice_rows:
-            wrapped = _wrap_text_to_pixel_width(row, font, panel_rect.width - 24)
-            for wrapped_row in wrapped:
-                screen.blit(font.render(wrapped_row, True, (205, 205, 210)), (panel_rect.x + 10, y))
-                y += 16
-        section_rects[section] = pygame.Rect(panel_rect.x + 6, section_top, panel_rect.width - 12, y - section_top)
-        y += 6
+        if y > row_area_bottom:
+            break
+    section_rects["rows"] = pygame.Rect(panel_rect.x + 6, row_area_top, panel_rect.width - 12, max(1, row_area_bottom - row_area_top))
 
-    y += 4
-    render_section("signals", "Recent Signals", signal_rows)
-    render_section("tracks", "Recent Tracks", track_rows)
-    render_section("spawns", "Recent Spawns (N=10)", spawn_rows)
-    render_section("entities", "Spawned Entities (N=20)", entity_rows)
-    supply_outcomes = [
-        entry for entry in sim.get_event_trace() if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE
-    ]
-    supply_rows_recent = []
-    for entry in reversed(supply_outcomes[-SUPPLY_DEBUG_OUTCOME_LIMIT:]):
-        params = entry.get("params")
-        params = params if isinstance(params, dict) else {}
-        supply_rows_recent.append(
-            f"  tick={entry.get('tick', '?')} entity={params.get('entity_id', '?')} "
-            f"item={params.get('item_id', '?')} qty={params.get('quantity', '?')} "
-            f"remaining={params.get('remaining_quantity', '-')} outcome={params.get('outcome', '?')}"
-        )
-
-    player = sim.state.entities.get(PLAYER_ID)
-    current_hex_sites: list[str] = []
-    if player is not None:
-        for site in sim.state.world.get_sites_at_location({"space_id": player.space_id, "coord": player.hex_coord.to_dict()}):
-            current_hex_sites.append(
-                f"  site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}"
-            )
-
-    site_enter_rows = []
-    site_enter_outcomes = [
-        entry for entry in sim.get_event_trace() if entry.get("event_type") == "site_enter_outcome"
-    ]
-    for entry in reversed(site_enter_outcomes[-SITE_ENTER_DEBUG_OUTCOME_LIMIT:]):
-        params = entry.get("params")
-        params = params if isinstance(params, dict) else {}
-        site_enter_rows.append(
-            f"  tick={entry.get('tick', '?')} site={params.get('site_id', '?')} "
-            f"target={params.get('target_space_id', '-')} outcome={params.get('outcome', '?')}"
-        )
-
-    render_section("rumors", "Recent Rumors (N=20)", rumor_rows)
-    render_section("outcomes", "Recent Action Outcomes", outcome_rows)
-    render_section("supplies", "Recent Supply Outcomes (N=20)", supply_rows_recent)
-    render_section("sites", "Sites (at current hex)", current_hex_sites)
-    render_section("site_outcomes", "Recent Site Enter Outcomes (N=20)", site_enter_rows)
+    if selected_entity_id is not None:
+        selected_surface = font.render(f"selected={selected_entity_id}", True, (185, 215, 185))
+        screen.blit(selected_surface, (panel_rect.x + 10, panel_rect.bottom - 24))
     return section_rects, section_counts
 
 
@@ -1075,13 +1021,14 @@ def run_pygame_viewer(
     clock = pygame_module.time.Clock()
     font = pygame_module.font.SysFont("consolas", 22)
     debug_font = pygame_module.font.SysFont("consolas", 16)
+    marker_font = pygame_module.font.SysFont("consolas", 13)
 
     viewport_rect = _viewport_rect()
     world_center = (float(viewport_rect.centerx), float(viewport_rect.centery))
     panel_scroll = EncounterPanelScrollState()
     panel_section_rects: dict[str, pygame.Rect] = {}
     panel_section_counts: dict[str, int] = {}
-    active_panel_section = "outcomes"
+    active_panel_section = "encounters"
 
     accumulator = 0.0
     running = True
@@ -1125,16 +1072,26 @@ def run_pygame_viewer(
                 )
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button in (4, 5):
                 if _panel_rect().collidepoint(event.pos):
-                    for section_name, section_rect in panel_section_rects.items():
-                        if section_rect.collidepoint(event.pos):
-                            active_panel_section = section_name
-                            panel_scroll.scroll(
-                                section_name,
-                                -1 if event.button == 4 else 1,
-                                panel_section_counts.get(section_name, 0),
-                                ENCOUNTER_DEBUG_SECTION_ROWS,
-                            )
-                            break
+                    delta = -1 if event.button == 4 else 1
+                    if panel_section_rects.get("rows") is not None and panel_section_rects["rows"].collidepoint(event.pos):
+                        panel_scroll.scroll(
+                            active_panel_section,
+                            delta,
+                            panel_section_counts.get(active_panel_section, 0),
+                            ENCOUNTER_DEBUG_SECTION_ROWS,
+                        )
+                    else:
+                        for section_name in PANEL_SECTION_ORDER:
+                            section_rect = panel_section_rects.get(section_name)
+                            if section_rect is not None and section_rect.collidepoint(event.pos):
+                                active_panel_section = section_name
+                                break
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and _panel_rect().collidepoint(event.pos):
+                for section_name in PANEL_SECTION_ORDER:
+                    section_rect = panel_section_rects.get(section_name)
+                    if section_rect is not None and section_rect.collidepoint(event.pos):
+                        active_panel_section = section_name
+                        break
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
                 context_menu = build_context_menu(event.pos)
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
@@ -1170,7 +1127,7 @@ def run_pygame_viewer(
         alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
 
         screen.fill((17, 18, 25))
-        _draw_world(screen, sim, world_center, clip_rect=viewport_rect)
+        _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect)
         pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
         for entity_id in sorted(sim.state.entities):
             interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
@@ -1181,7 +1138,7 @@ def run_pygame_viewer(
             else:
                 _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
         _draw_hud(screen, sim, font, status_message)
-        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll)
+        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll, active_panel_section)
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
 

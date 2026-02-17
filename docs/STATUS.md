@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5J — Multi-Topology Space + Rendering (structural only).
+- **Current phase:** Phase 5J2 — Minimal UI Readability Pass (viewer-only, no gameplay changes).
 - **Next action:** Phase 5K — Exploration Action Economy (time-costed actions).
-- **Phase status:** ✅ Phase 5J complete (square-grid topology substrate + deterministic transition/save/replay + viewer rendering landed).
+- **Phase status:** ✅ Phase 5J2 complete (viewer readability updates only: marker identification, single-section debug panel, scroll, and context header).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -165,6 +165,9 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
+- `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/ui_demo.json --seed 7 --force`
+- `python run_game.py --load-save saves/ui_demo.json --with-encounters`
+- `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/ui_demo.json --with-encounters`
 - `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/space_topology_demo.json --with-encounters`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/space_topology_demo.json --ticks 200 --print-artifacts`
 - `set PYTHONPATH=src && pytest -q`
@@ -199,9 +202,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Generalized `WorldState.spaces`/`SpaceState` substrate for multi-topology cells with deterministic square-grid support (`topology_type="square_grid"`, bounded params, deterministic cell iteration/validation/default spawn).
-- Extended structural location + transition plumbing for square-grid spaces (validated `LocationRef` `{x,y}` coords, deterministic transition placement, deterministic movement/world-bound checks, save/load/replay hash stability).
-- Updated read-only pygame viewer and fixed example content to render/enter a non-overworld square-grid space, plus added Phase 5J tests covering round-trip/hash, location validation, deterministic transition, and enter-site determinism.
+- Implemented a read-only pygame viewer readability pass: marker labels for sites/spawns/signals/tracks, section tabs with one active panel section, wheel scrolling, and capped newest-first section rows.
+- Added compact context header (`space_id`, coordinates by topology, tick/day) without changing simulation behavior, event semantics, RNG usage, command contracts, or save/hash formats.
+- Added pure unit tests for label truncation, newest-first capped section selection, and scroll offset clamping to keep UI helpers deterministic and non-brittle.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
