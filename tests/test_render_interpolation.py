@@ -4,6 +4,9 @@ from hexcrawler.cli.pygame_viewer import (
     extract_render_snapshot,
     interpolate_entity_position,
     lerp,
+    _clamp_scroll_offset,
+    _section_entries,
+    _truncate_label,
 )
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import EntityState, Simulation
@@ -42,3 +45,24 @@ def test_interpolate_entity_position_missing_entity_cases() -> None:
     assert interpolate_entity_position({}, curr_snapshot, "runner", 0.5) == (1.0, 1.0)
     assert interpolate_entity_position(prev_snapshot, {}, "runner", 0.5) == (0.0, 0.0)
     assert interpolate_entity_position({}, {}, "runner", 0.5) is None
+
+
+def test_truncate_label_is_deterministic_and_bounded() -> None:
+    assert _truncate_label("  watchtower  ", max_length=8) == "watchto…"
+    assert _truncate_label("sig", max_length=8) == "sig"
+    assert _truncate_label("", max_length=8) == "?"
+
+
+def test_section_entries_newest_first_with_cap() -> None:
+    rows = [f"row-{idx}" for idx in range(40)]
+    selected = _section_entries(rows)
+
+    assert len(selected) == 30
+    assert selected[0] == "row-39"
+    assert selected[-1] == "row-10"
+
+
+def test_clamp_scroll_offset_clamps_to_page_bounds() -> None:
+    assert _clamp_scroll_offset(current=0, delta=-1, total_count=8, page_size=6) == 0
+    assert _clamp_scroll_offset(current=0, delta=1, total_count=8, page_size=6) == 1
+    assert _clamp_scroll_offset(current=1, delta=10, total_count=8, page_size=6) == 2
