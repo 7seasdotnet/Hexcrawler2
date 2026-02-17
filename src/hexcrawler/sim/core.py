@@ -25,6 +25,7 @@ RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 MAX_EVENT_TRACE = 256
 MAX_EVENTS_PER_TICK = 10_000
 INVENTORY_OUTCOME_EVENT_TYPE = "inventory_outcome"
+SITE_ENTER_OUTCOME_EVENT_TYPE = "site_enter_outcome"
 INVENTORY_LEDGER_MODULE = "inventory_ledger"
 INVENTORY_ALLOWED_REASONS = {"transfer", "drop", "pickup", "consume", "spawn"}
 DEFAULT_PLAYER_ENTITY_ID = "scout"
@@ -536,6 +537,100 @@ class Simulation:
                 return
             to_location = LocationRef.from_dict(to_location_payload)
             self._execute_transition_command(entity_id=entity_id, tick=command.tick, command=command, to_location=to_location)
+        elif command.command_type == "enter_site":
+            self._execute_enter_site_command(entity_id=entity_id, tick=command.tick, command=command)
+
+    def _append_site_enter_outcome(
+        self,
+        *,
+        tick: int,
+        entity_id: str,
+        site_id: str,
+        outcome: str,
+        target_space_id: str | None,
+    ) -> None:
+        self._append_event_trace_entry(
+            {
+                "tick": tick,
+                "event_id": self._trace_event_id_as_int(f"site-enter:{tick}:{entity_id}:{site_id}:{outcome}"),
+                "event_type": SITE_ENTER_OUTCOME_EVENT_TYPE,
+                "params": {
+                    "tick": tick,
+                    "entity_id": entity_id,
+                    "site_id": site_id,
+                    "target_space_id": target_space_id,
+                    "outcome": outcome,
+                },
+                "module_hooks_called": False,
+            }
+        )
+
+    def _execute_enter_site_command(self, *, entity_id: str, tick: int, command: SimCommand) -> None:
+        site_id = str(command.params.get("site_id", ""))
+        site = self.state.world.sites.get(site_id)
+        if site is None:
+            self._append_site_enter_outcome(
+                tick=tick,
+                entity_id=entity_id,
+                site_id=site_id,
+                target_space_id=None,
+                outcome="unknown_site",
+            )
+            return
+
+        entrance = site.entrance
+        if not isinstance(entrance, dict):
+            self._append_site_enter_outcome(
+                tick=tick,
+                entity_id=entity_id,
+                site_id=site_id,
+                target_space_id=None,
+                outcome="no_entrance",
+            )
+            return
+
+        target_space_id = str(entrance.get("target_space_id", ""))
+        if target_space_id not in self.state.world.spaces:
+            self._append_site_enter_outcome(
+                tick=tick,
+                entity_id=entity_id,
+                site_id=site_id,
+                target_space_id=target_space_id,
+                outcome="unknown_target_space",
+            )
+            return
+
+        target_space = self.state.world.spaces[target_space_id]
+        spawn = entrance.get("spawn") if isinstance(entrance.get("spawn"), dict) else None
+        target_coord = spawn if spawn is not None else {"q": 0, "r": 0}
+
+        transition_command = SimCommand(
+            tick=tick,
+            entity_id=entity_id,
+            command_type="transition_space",
+            params={
+                "to_location": {
+                    "space_id": target_space_id,
+                    "topology_type": target_space.topology_type,
+                    "coord": target_coord,
+                },
+                "reason": "enter_site",
+                "site_id": site_id,
+            },
+        )
+        self._execute_transition_command(
+            entity_id=entity_id,
+            tick=tick,
+            command=transition_command,
+            to_location=LocationRef.from_dict(transition_command.params["to_location"]),
+        )
+        self._append_site_enter_outcome(
+            tick=tick,
+            entity_id=entity_id,
+            site_id=site_id,
+            target_space_id=target_space_id,
+            outcome="applied",
+        )
 
     def _inventory_action_uid(self, *, tick: int, command_index: int, explicit_uid: str | None = None) -> str:
         if explicit_uid is not None and explicit_uid:

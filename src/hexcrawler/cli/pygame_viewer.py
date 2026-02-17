@@ -54,6 +54,7 @@ ENCOUNTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
 ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 SUPPLY_DEBUG_OUTCOME_LIMIT = 20
+SITE_ENTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
@@ -176,6 +177,16 @@ class SimulationController:
                 entity_id=self.entity_id,
                 command_type="clear_selected_entity",
                 params={},
+            )
+        )
+
+    def enter_site(self, site_id: str) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="enter_site",
+                params={"site_id": site_id},
             )
         )
 
@@ -388,7 +399,13 @@ def _draw_world(
         pygame.draw.polygon(screen, terrain_color, points)
         pygame.draw.polygon(screen, (35, 35, 40), points, 1)
 
-        if record and record.site_type != "none":
+        location = {"space_id": "overworld", "coord": coord.to_dict()}
+        sites = sim.state.world.get_sites_at_location(location)
+        if sites:
+            site_color = SITE_COLORS.get(sites[0].site_type, (245, 245, 120))
+            pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
+            pygame.draw.circle(screen, (15, 15, 15), (int(pixel[0]), int(pixel[1])), 6, 1)
+        elif record and record.site_type != "none":
             site_color = SITE_COLORS.get(record.site_type, (245, 245, 120))
             pygame.draw.circle(screen, site_color, (int(pixel[0]), int(pixel[1])), 6)
 
@@ -684,9 +701,31 @@ def _draw_encounter_debug_panel(
             f"remaining={params.get('remaining_quantity', '-')} outcome={params.get('outcome', '?')}"
         )
 
+    player = sim.state.entities.get(PLAYER_ID)
+    current_hex_sites: list[str] = []
+    if player is not None:
+        for site in sim.state.world.get_sites_at_location({"space_id": player.space_id, "coord": player.hex_coord.to_dict()}):
+            current_hex_sites.append(
+                f"  site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}"
+            )
+
+    site_enter_rows = []
+    site_enter_outcomes = [
+        entry for entry in sim.get_event_trace() if entry.get("event_type") == "site_enter_outcome"
+    ]
+    for entry in reversed(site_enter_outcomes[-SITE_ENTER_DEBUG_OUTCOME_LIMIT:]):
+        params = entry.get("params")
+        params = params if isinstance(params, dict) else {}
+        site_enter_rows.append(
+            f"  tick={entry.get('tick', '?')} site={params.get('site_id', '?')} "
+            f"target={params.get('target_space_id', '-')} outcome={params.get('outcome', '?')}"
+        )
+
     render_section("rumors", "Recent Rumors (N=20)", rumor_rows)
     render_section("outcomes", "Recent Action Outcomes", outcome_rows)
     render_section("supplies", "Recent Supply Outcomes (N=20)", supply_rows_recent)
+    render_section("sites", "Sites (at current hex)", current_hex_sites)
+    render_section("site_outcomes", "Recent Site Enter Outcomes (N=20)", site_enter_rows)
     return section_rects, section_counts
 
 
@@ -852,6 +891,8 @@ def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulat
     should_enable_encounters = with_encounters or EncounterCheckModule.name in sim.state.rules_state
     if should_enable_encounters:
         _register_encounter_modules(sim)
+    if PLAYER_ID not in sim.state.entities:
+        sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
         _register_supply_module(sim)
     print(
@@ -981,6 +1022,14 @@ def run_pygame_viewer(
                 target_hex = world_xy_to_axial(world_x, world_y)
                 if sim.state.world.get_hex_record(target_hex) is not None:
                     items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
+                    hex_sites = sim.state.world.get_sites_at_location({"space_id": "overworld", "coord": target_hex.to_dict()})
+                    if hex_sites:
+                        items.append(ContextMenuItem(label="Inspect Site...", action="noop"))
+                        for site in hex_sites:
+                            site_label = site.name if site.name else site.site_id
+                            items.append(ContextMenuItem(label=f"- {site.site_id} ({site.site_type})", action="noop"))
+                            if site.entrance is not None:
+                                items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
                     items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
         items.extend(build_recent_save_items())
         if not items:
@@ -1067,6 +1116,8 @@ def run_pygame_viewer(
                             controller.clear_selected_entity()
                         elif item.action == "load_recent" and item.payload is not None:
                             load_simulation_from_path(item.payload)
+                        elif item.action == "enter_site" and item.payload is not None:
+                            controller.enter_site(item.payload)
                 context_menu = None
 
         move_x, move_y = _current_input_vector()

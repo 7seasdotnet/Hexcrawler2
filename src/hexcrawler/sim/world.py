@@ -251,6 +251,90 @@ class ContainerState:
 
 
 @dataclass
+class SiteRecord:
+    site_id: str
+    site_type: str
+    location: dict[str, Any]
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] = field(default_factory=list)
+    entrance: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.site_id, str) or not self.site_id:
+            raise ValueError("site_id must be a non-empty string")
+        if not isinstance(self.site_type, str) or not self.site_type:
+            raise ValueError("site_type must be a non-empty string")
+        if not isinstance(self.location, dict):
+            raise ValueError("location must be an object")
+        if not isinstance(self.location.get("space_id"), str) or not self.location.get("space_id"):
+            raise ValueError("location.space_id must be a non-empty string")
+        coord = self.location.get("coord")
+        if not isinstance(coord, dict):
+            raise ValueError("location.coord must be an object")
+        if self.name is not None and not isinstance(self.name, str):
+            raise ValueError("name must be a string when present")
+        if self.description is not None and not isinstance(self.description, str):
+            raise ValueError("description must be a string when present")
+        if not isinstance(self.tags, list):
+            raise ValueError("tags must be a list")
+        normalized_tags = sorted({str(tag) for tag in self.tags})
+        self.tags = normalized_tags
+        if self.entrance is not None:
+            if not isinstance(self.entrance, dict):
+                raise ValueError("entrance must be an object when present")
+            target_space_id = self.entrance.get("target_space_id")
+            if not isinstance(target_space_id, str) or not target_space_id:
+                raise ValueError("entrance.target_space_id must be a non-empty string")
+            spawn = self.entrance.get("spawn")
+            if spawn is not None and not isinstance(spawn, dict):
+                raise ValueError("entrance.spawn must be an object when present")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "site_id": self.site_id,
+            "site_type": self.site_type,
+            "location": dict(self.location),
+            "tags": list(self.tags),
+        }
+        if self.name is not None:
+            payload["name"] = self.name
+        if self.description is not None:
+            payload["description"] = self.description
+        if self.entrance is not None:
+            payload["entrance"] = {
+                "target_space_id": self.entrance["target_space_id"],
+                "spawn": dict(self.entrance["spawn"]) if isinstance(self.entrance.get("spawn"), dict) else None,
+            }
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SiteRecord":
+        entrance_payload = data.get("entrance")
+        entrance: dict[str, Any] | None
+        if entrance_payload is None:
+            entrance = None
+        else:
+            entrance = {
+                "target_space_id": str(entrance_payload["target_space_id"]),
+                "spawn": (
+                    dict(entrance_payload["spawn"])
+                    if isinstance(entrance_payload.get("spawn"), dict)
+                    else None
+                ),
+            }
+        return cls(
+            site_id=str(data["site_id"]),
+            site_type=str(data["site_type"]),
+            location=dict(data["location"]),
+            name=(str(data["name"]) if data.get("name") is not None else None),
+            description=(str(data["description"]) if data.get("description") is not None else None),
+            tags=[str(tag) for tag in data.get("tags", [])],
+            entrance=entrance,
+        )
+
+
+@dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
@@ -261,6 +345,7 @@ class WorldState:
     spawn_descriptors: list[dict[str, Any]] = field(default_factory=list)
     rumors: list[dict[str, Any]] = field(default_factory=list)
     containers: dict[str, ContainerState] = field(default_factory=dict)
+    sites: dict[str, SiteRecord] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.spaces:
@@ -334,6 +419,11 @@ class WorldState:
                 container_id: self.containers[container_id].to_dict()
                 for container_id in sorted(self.containers)
             }
+        if self.sites:
+            payload["sites"] = {
+                site_id: self.sites[site_id].to_dict()
+                for site_id in sorted(self.sites)
+            }
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -368,6 +458,11 @@ class WorldState:
             payload["containers"] = {
                 container_id: self.containers[container_id].to_dict()
                 for container_id in sorted(self.containers)
+            }
+        if self.sites:
+            payload["sites"] = {
+                site_id: self.sites[site_id].to_dict()
+                for site_id in sorted(self.sites)
             }
         return payload
 
@@ -439,7 +534,34 @@ class WorldState:
             if container.container_id != container_id:
                 raise ValueError(f"container key/id mismatch for '{container_id}'")
             world.containers[container_id] = container
+
+        raw_sites = data.get("sites", {})
+        if not isinstance(raw_sites, dict):
+            raise ValueError("sites must be an object")
+        world.sites = {}
+        for site_id in sorted(raw_sites):
+            row = raw_sites[site_id]
+            if not isinstance(row, dict):
+                raise ValueError(f"site '{site_id}' must be an object")
+            if "site_id" not in row:
+                row = {**row, "site_id": site_id}
+            site = SiteRecord.from_dict(row)
+            if site.site_id != site_id:
+                raise ValueError(f"site key/id mismatch for '{site_id}'")
+            world.sites[site_id] = site
         return world
+
+    def get_sites_at_location(self, location_ref: dict[str, Any]) -> list[SiteRecord]:
+        space_id = str(location_ref.get("space_id", ""))
+        coord = location_ref.get("coord")
+        if not isinstance(coord, dict):
+            return []
+        matches = [
+            site
+            for site in self.sites.values()
+            if site.location.get("space_id") == space_id and site.location.get("coord") == coord
+        ]
+        return sorted(matches, key=lambda site: site.site_id)
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:
         signal_uid = str(record["signal_uid"])
