@@ -203,6 +203,54 @@ class SpaceState:
 
 
 @dataclass
+class ContainerState:
+    container_id: str
+    location: dict[str, Any] | None = None
+    owner_entity_id: str | None = None
+    items: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.container_id, str) or not self.container_id:
+            raise ValueError("container_id must be a non-empty string")
+        if self.location is not None and not isinstance(self.location, dict):
+            raise ValueError("container location must be an object when present")
+        if self.owner_entity_id is not None and (not isinstance(self.owner_entity_id, str) or not self.owner_entity_id):
+            raise ValueError("owner_entity_id must be a non-empty string when present")
+
+        normalized_items: dict[str, int] = {}
+        for item_id, quantity in self.items.items():
+            if not isinstance(item_id, str) or not item_id:
+                raise ValueError("container item_id keys must be non-empty strings")
+            if not isinstance(quantity, int):
+                raise ValueError("container item quantities must be integers")
+            if quantity < 0:
+                raise ValueError("container item quantities must be >= 0")
+            if quantity > 0:
+                normalized_items[item_id] = quantity
+        self.items = normalized_items
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "container_id": self.container_id,
+            "items": {item_id: self.items[item_id] for item_id in sorted(self.items)},
+        }
+        if self.location is not None:
+            payload["location"] = dict(self.location)
+        if self.owner_entity_id is not None:
+            payload["owner_entity_id"] = self.owner_entity_id
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ContainerState":
+        return cls(
+            container_id=str(data["container_id"]),
+            location=(dict(data["location"]) if data.get("location") is not None else None),
+            owner_entity_id=(str(data["owner_entity_id"]) if data.get("owner_entity_id") is not None else None),
+            items=dict(data.get("items", {})),
+        )
+
+
+@dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
@@ -212,6 +260,7 @@ class WorldState:
     tracks: list[dict[str, Any]] = field(default_factory=list)
     spawn_descriptors: list[dict[str, Any]] = field(default_factory=list)
     rumors: list[dict[str, Any]] = field(default_factory=list)
+    containers: dict[str, ContainerState] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.spaces:
@@ -280,6 +329,11 @@ class WorldState:
             payload["spawn_descriptors"] = [dict(record) for record in self.spawn_descriptors]
         if self.rumors:
             payload["rumors"] = [RumorRecord.from_dict(record).to_dict() for record in self.rumors]
+        if self.containers:
+            payload["containers"] = {
+                container_id: self.containers[container_id].to_dict()
+                for container_id in sorted(self.containers)
+            }
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -310,6 +364,11 @@ class WorldState:
             payload["spawn_descriptors"] = [dict(record) for record in self.spawn_descriptors]
         if self.rumors:
             payload["rumors"] = [RumorRecord.from_dict(record).to_dict() for record in self.rumors]
+        if self.containers:
+            payload["containers"] = {
+                container_id: self.containers[container_id].to_dict()
+                for container_id in sorted(self.containers)
+            }
         return payload
 
     @classmethod
@@ -365,6 +424,21 @@ class WorldState:
         if not isinstance(raw_rumors, list):
             raise ValueError("rumors must be a list")
         world.rumors = [RumorRecord.from_dict(dict(row)).to_dict() for row in raw_rumors]
+
+        raw_containers = data.get("containers", {})
+        if not isinstance(raw_containers, dict):
+            raise ValueError("containers must be an object")
+        world.containers = {}
+        for container_id in sorted(raw_containers):
+            row = raw_containers[container_id]
+            if not isinstance(row, dict):
+                raise ValueError(f"container '{container_id}' must be an object")
+            if "container_id" not in row:
+                row = {**row, "container_id": container_id}
+            container = ContainerState.from_dict(row)
+            if container.container_id != container_id:
+                raise ValueError(f"container key/id mismatch for '{container_id}'")
+            world.containers[container_id] = container
         return world
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:

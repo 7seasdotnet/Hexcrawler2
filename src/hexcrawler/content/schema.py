@@ -127,6 +127,45 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
             raise ValueError(f"{field_prefix}.rumors[{index}] must be an object")
         _validate_rumor_record(record, field_name=f"{field_prefix}.rumors[{index}]")
 
+    containers = payload.get("containers", {})
+    if not isinstance(containers, dict):
+        raise ValueError(f"{field_prefix}.containers must be an object when present")
+    for container_id in sorted(containers):
+        row = containers[container_id]
+        if not isinstance(container_id, str) or not container_id:
+            raise ValueError(f"{field_prefix}.containers keys must be non-empty strings")
+        if not isinstance(row, dict):
+            raise ValueError(f"{field_prefix}.containers[{container_id}] must be an object")
+
+        explicit_id = row.get("container_id", container_id)
+        if not isinstance(explicit_id, str) or not explicit_id:
+            raise ValueError(f"{field_prefix}.containers[{container_id}].container_id must be a non-empty string")
+        if explicit_id != container_id:
+            raise ValueError(f"{field_prefix}.containers[{container_id}] key/id mismatch")
+
+        location = row.get("location")
+        if location is not None and not isinstance(location, dict):
+            raise ValueError(f"{field_prefix}.containers[{container_id}].location must be an object when present")
+
+        owner_entity_id = row.get("owner_entity_id")
+        if owner_entity_id is not None and (not isinstance(owner_entity_id, str) or not owner_entity_id):
+            raise ValueError(
+                f"{field_prefix}.containers[{container_id}].owner_entity_id must be a non-empty string when present"
+            )
+
+        items = row.get("items", {})
+        if not isinstance(items, dict):
+            raise ValueError(f"{field_prefix}.containers[{container_id}].items must be an object")
+        for item_id, quantity in items.items():
+            if not isinstance(item_id, str) or not item_id:
+                raise ValueError(
+                    f"{field_prefix}.containers[{container_id}].items keys must be non-empty strings"
+                )
+            if not isinstance(quantity, int) or quantity < 0:
+                raise ValueError(
+                    f"{field_prefix}.containers[{container_id}].items[{item_id}] must be integer >= 0"
+                )
+
 
 def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -> None:
     required_int_fields = {"created_tick", "quantity"}
@@ -208,6 +247,14 @@ def _validate_simulation_state(simulation_state: dict[str, Any]) -> None:
     entities = simulation_state.get("entities")
     if not isinstance(entities, list):
         raise ValueError("simulation_state.entities must be a list")
+    for index, entity in enumerate(entities):
+        if not isinstance(entity, dict):
+            raise ValueError(f"simulation_state.entities[{index}] must be an object")
+        inventory_container_id = entity.get("inventory_container_id")
+        if inventory_container_id is not None and (not isinstance(inventory_container_id, str) or not inventory_container_id):
+            raise ValueError(
+                f"simulation_state.entities[{index}].inventory_container_id must be a non-empty string when present"
+            )
 
     pending_events = simulation_state.get("pending_events")
     if not isinstance(pending_events, list):
