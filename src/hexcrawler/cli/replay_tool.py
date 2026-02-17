@@ -10,6 +10,7 @@ from hexcrawler.content.io import load_game_json, save_game_json
 from hexcrawler.sim.core import Simulation
 from hexcrawler.sim.encounters import ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash
+from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE
 
 ARTIFACT_PRINT_SIGNAL_LIMIT = 10
 ARTIFACT_PRINT_TRACK_LIMIT = 10
@@ -17,6 +18,7 @@ ARTIFACT_PRINT_SPAWN_LIMIT = 10
 ARTIFACT_PRINT_OUTCOME_LIMIT = 20
 ARTIFACT_PRINT_ENTITY_LIMIT = 20
 ARTIFACT_PRINT_RUMOR_LIMIT = 20
+ARTIFACT_PRINT_SUPPLY_OUTCOME_LIMIT = 20
 
 
 def _non_negative_int(value: str) -> int:
@@ -166,6 +168,30 @@ def _print_artifacts(simulation: Simulation) -> None:
             f"hop={record.get('hop', '?')} "
             f"confidence={record.get('confidence', '?')} "
             f"expires_tick={record.get('expires_tick', '?')}"
+        )
+
+
+    print(f"artifacts.supply_outcomes.limit={ARTIFACT_PRINT_SUPPLY_OUTCOME_LIMIT}")
+    supply_outcomes = [
+        entry
+        for entry in simulation.get_event_trace()
+        if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE
+    ]
+    recent_supply_outcomes = list(reversed(supply_outcomes[-ARTIFACT_PRINT_SUPPLY_OUTCOME_LIMIT:]))
+    if not recent_supply_outcomes:
+        print("artifacts.supply_outcome none")
+    for entry in recent_supply_outcomes:
+        params = entry.get("params")
+        params = params if isinstance(params, dict) else {}
+        print(
+            "artifacts.supply_outcome "
+            f"tick={entry.get('tick', '?')} "
+            f"entity_id={params.get('entity_id', '?')} "
+            f"item_id={params.get('item_id', '?')} "
+            f"quantity={params.get('quantity', '?')} "
+            f"remaining={params.get('remaining_quantity', '-')} "
+            f"outcome={params.get('outcome', '?')} "
+            f"action_uid={params.get('action_uid', '?')}"
         )
 
     print(f"artifacts.entities.limit={ARTIFACT_PRINT_ENTITY_LIMIT}")

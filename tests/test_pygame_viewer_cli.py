@@ -65,6 +65,13 @@ def test_viewer_simulation_registers_encounter_modules_only_when_enabled() -> No
     assert enabled_sim.get_rule_module(SpawnMaterializationModule.name) is not None
 
 
+
+
+def test_viewer_player_receives_default_supply_profile() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+
+    assert sim.state.entities[PLAYER_ID].supply_profile_id == "player_default"
+
 def test_simulation_controller_appends_move_vector_command() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)

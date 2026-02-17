@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5H1 — Inventory + Containers + Ledger (stackables only).
-- **Next action:** Phase 5H2 — inventory consumption/time-cost ticks (deterministic accounting) before broader site/settlement stockpile integration.
-- **Phase status:** ✅ Phase 5H1 complete (stackable inventory substrate + container persistence + idempotent ledger landed).
+- **Current phase:** Phase 5H2 — Supplies + Consumption ticks (deterministic accounting; no towns/prices).
+- **Next action:** Phase 5I — settlement/site substrates (non-economic) for stockpile locations and logistics anchors, or Phase 5J dungeon exploration actions.
+- **Phase status:** ✅ Phase 5H2 complete (data-driven supply profiles + deterministic periodic consumption + forensic outcomes landed).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -29,6 +29,10 @@
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
   - Deterministic `inventory_intent` command seam (`transfer`/`drop`/`pickup`/`consume`/`spawn`) with single authoritative apply path, no-negative enforcement, deterministic `action_uid` (`tick:command_index`), and serialized idempotence ledger in `rules_state["inventory_ledger"].applied_action_uids`.
   - Deterministic forensic `inventory_outcome` event-trace entries for every intent (`applied`, `already_applied`, `insufficient_quantity`, `unknown_item`, `unknown_container`, `invalid_quantity`, `unsupported_reason`).
+  - Deterministic supply profile content loader (`content/supplies/supply_profiles.json`) with strict schema validation + deterministic normalization (`hexcrawler.content.supplies`).
+  - Deterministic `SupplyConsumptionModule` periodic accounting seam that consumes configured supplies via the authoritative inventory apply path, with per-attempt deterministic `action_uid` and idempotence ledger in `rules_state["supply_consumption"]`.
+  - Deterministic forensic `supply_outcome` event-trace entries (`consumed`, `insufficient_supply`, `already_applied`, `unknown_item`, `no_inventory_container`) and warning stubs in `rules_state["supply_consumption"].warnings`.
+  - Default player (`scout`) supply profile assignment (`player_default`) on new entities/saves.
 - `src/hexcrawler/content/`
   - JSON schema validation + deterministic load/save helpers for legacy world-only payloads and canonical game-save payloads.
   - Encounter table content loader/validator (`content.encounters`) with strict schema checks, deterministic normalization, and default example table wiring.
@@ -70,6 +74,8 @@
 - Run replay tool from canonical save:
   - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200 --print-artifacts`
+- `PYTHONPATH=src pytest -q tests/test_supply_consumption.py`
+- `PYTHONPATH=src pytest -q tests/test_supplies_content.py`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## Progress
@@ -135,12 +141,17 @@
 - `hexcrawler.content.encounters.validate_encounter_table_payload(payload)`
 - `hexcrawler.content.encounters.DEFAULT_ENCOUNTER_TABLE_PATH`
 - `hexcrawler.sim.core.TRAVEL_STEP_EVENT_TYPE`
+- `hexcrawler.content.supplies.load_supply_profiles_json(path)`
+- `hexcrawler.content.supplies.DEFAULT_SUPPLY_PROFILES_PATH`
+- `hexcrawler.sim.supplies.SupplyConsumptionModule`
+- `hexcrawler.sim.supplies.SUPPLY_OUTCOME_EVENT_TYPE`
 - `hexcrawler.sim.location.LocationRef`
 - `hexcrawler.sim.location.OVERWORLD_HEX_TOPOLOGY`
 
 ## Out of Scope Kept
-- No pathfinding, terrain costs, factions, combat, wounds, or armor systems in this phase.
-- No networking in this phase.
+- No towns/markets/prices/economy systems in this phase.
+- No combat/wounds/armor/HP systems in this phase.
+- No AI/factions/networking in this phase.
 
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
@@ -164,6 +175,8 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200 --print-artifacts`
+- `PYTHONPATH=src pytest -q tests/test_supply_consumption.py`
+- `PYTHONPATH=src pytest -q tests/test_supplies_content.py`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## Initial Supported Action Set (provisional)
@@ -180,9 +193,9 @@
 - Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
 
 ## What Changed in This Commit
-- Added Phase 5H1 stackable inventory substrate: strict item registry content loading, `world.containers` persistence, and per-entity deterministic inventory container linkage with load validation.
-- Added deterministic `inventory_intent` execution path with hash-covered idempotence ledger (`rules_state["inventory_ledger"]`) and forensic `inventory_outcome` event-trace outcomes.
-- Added inventory-focused tests (save/load, determinism, idempotence, no-negatives, transfer conservation, drop/pickup flow, validation failures) and read-only selected-entity inventory inspection in the pygame debug panel.
+- Added data-driven supply profile content (`content/supplies/supply_profiles.json`) plus strict deterministic loader/validator (`hexcrawler.content.supplies`) and added `water` to default stackable items for the baseline player profile.
+- Added Phase 5H2 deterministic supply accounting: player default supply profile assignment, periodic consumption scheduling via `PeriodicScheduler`, authoritative inventory consumption through existing `inventory_intent` apply path, idempotent consumption ledger, and deterministic `supply_outcome` forensic events + warning stubs.
+- Extended read-only visibility surfaces: pygame debug panel now shows key supplies + recent supply outcomes, and replay tool `--print-artifacts` now prints supply outcome artifacts; added deterministic tests for content validation, scheduling, no-negative behavior, insufficient outcomes, determinism, and save/load stability.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

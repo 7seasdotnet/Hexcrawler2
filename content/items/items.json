@@ -6,21 +6,39 @@
       "name": "Trail Rations",
       "stackable": true,
       "unit_mass": 0.5,
-      "tags": ["food", "supply"]
+      "tags": [
+        "food",
+        "supply"
+      ]
     },
     {
       "item_id": "scrap_iron",
       "name": "Scrap Iron",
       "stackable": true,
       "unit_mass": 1.0,
-      "tags": ["material"]
+      "tags": [
+        "material"
+      ]
     },
     {
       "item_id": "torch",
       "name": "Torch",
       "stackable": true,
       "unit_mass": 0.3,
-      "tags": ["light", "supply"]
+      "tags": [
+        "light",
+        "supply"
+      ]
+    },
+    {
+      "item_id": "water",
+      "name": "Water Skin",
+      "stackable": true,
+      "unit_mass": 1.0,
+      "tags": [
+        "water",
+        "supply"
+      ]
     }
   ]
 }

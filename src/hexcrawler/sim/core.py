@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from hexcrawler.content.items import DEFAULT_ITEMS_PATH, load_items_json
+from hexcrawler.content.supplies import DEFAULT_SUPPLY_PROFILES_PATH, load_supply_profiles_json
 from hexcrawler.sim.location import LocationRef
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
 from hexcrawler.sim.rng import derive_stream_seed
@@ -26,6 +27,8 @@ MAX_EVENTS_PER_TICK = 10_000
 INVENTORY_OUTCOME_EVENT_TYPE = "inventory_outcome"
 INVENTORY_LEDGER_MODULE = "inventory_ledger"
 INVENTORY_ALLOWED_REASONS = {"transfer", "drop", "pickup", "consume", "spawn"}
+DEFAULT_PLAYER_ENTITY_ID = "scout"
+DEFAULT_PLAYER_SUPPLY_PROFILE_ID = "player_default"
 
 
 
@@ -152,6 +155,7 @@ class EntityState:
     space_id: str = DEFAULT_OVERWORLD_SPACE_ID
     selected_entity_id: str | None = None
     inventory_container_id: str | None = None
+    supply_profile_id: str | None = None
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -201,8 +205,12 @@ class Simulation:
         self._event_tick_by_id: dict[str, int] = {}
         self._next_event_counter = 1
         self._event_execution_trace: list[str] = []
+        self._supply_profiles = load_supply_profiles_json(DEFAULT_SUPPLY_PROFILES_PATH)
 
     def add_entity(self, entity: EntityState) -> None:
+        if entity.supply_profile_id is None and entity.entity_id == DEFAULT_PLAYER_ENTITY_ID:
+            if DEFAULT_PLAYER_SUPPLY_PROFILE_ID in self._supply_profiles.by_id():
+                entity.supply_profile_id = DEFAULT_PLAYER_SUPPLY_PROFILE_ID
         if entity.inventory_container_id is None:
             entity.inventory_container_id = f"inventory:{entity.entity_id}"
             if entity.inventory_container_id not in self.state.world.containers:
@@ -400,6 +408,7 @@ class Simulation:
                     "source_action_uid": entity.source_action_uid,
                     "selected_entity_id": entity.selected_entity_id,
                     "inventory_container_id": entity.inventory_container_id,
+                    "supply_profile_id": entity.supply_profile_id,
                 }
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
@@ -448,6 +457,7 @@ class Simulation:
                 inventory_container_id=(
                     str(row["inventory_container_id"]) if row.get("inventory_container_id") is not None else None
                 ),
+                supply_profile_id=(str(row["supply_profile_id"]) if row.get("supply_profile_id") is not None else None),
             )
             sim.add_entity(entity)
 
@@ -527,7 +537,9 @@ class Simulation:
             to_location = LocationRef.from_dict(to_location_payload)
             self._execute_transition_command(entity_id=entity_id, tick=command.tick, command=command, to_location=to_location)
 
-    def _inventory_action_uid(self, *, tick: int, command_index: int) -> str:
+    def _inventory_action_uid(self, *, tick: int, command_index: int, explicit_uid: str | None = None) -> str:
+        if explicit_uid is not None and explicit_uid:
+            return explicit_uid
         return f"{tick}:{command_index}"
 
     def _inventory_registry_item_ids(self) -> set[str]:
@@ -590,7 +602,9 @@ class Simulation:
         return f"world_drop:{entity.space_id}:{coord.q}:{coord.r}"
 
     def _execute_inventory_intent(self, command: SimCommand, *, command_index: int) -> None:
-        action_uid = self._inventory_action_uid(tick=command.tick, command_index=command_index)
+        explicit_uid_raw = command.params.get("action_uid")
+        explicit_uid = str(explicit_uid_raw) if isinstance(explicit_uid_raw, str) and explicit_uid_raw else None
+        action_uid = self._inventory_action_uid(tick=command.tick, command_index=command_index, explicit_uid=explicit_uid)
         ledger_state = self._inventory_ledger_state()
         applied_action_uids = set(ledger_state.get("applied_action_uids", []))
 
