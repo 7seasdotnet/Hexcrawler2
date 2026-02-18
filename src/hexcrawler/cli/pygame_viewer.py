@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -62,20 +63,11 @@ RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
 CONTEXT_MENU_ROW_HEIGHT = 28
 
-MARKER_SLOT_OFFSETS: tuple[tuple[int, int], ...] = (
-    (0, -10),
-    (9, -5),
-    (9, 5),
-    (0, 10),
-    (-9, 5),
-    (-9, -5),
-    (0, -16),
-    (14, -8),
-    (14, 8),
-    (0, 16),
-    (-14, 8),
-    (-14, -8),
-)
+MARKER_SCATTER_RADIUS_MIN = 8.0
+MARKER_SCATTER_RADIUS_MAX = 18.0
+MARKER_SCATTER_STEP = 3.0
+MARKER_SEPARATION_MIN = 11.0
+MARKER_PLACEMENT_ATTEMPTS = 8
 
 pygame: Any | None = None
 
@@ -204,6 +196,13 @@ class MarkerRecord:
 
 
 @dataclass(frozen=True)
+class MarkerCellRef:
+    space_id: str
+    topology_type: str
+    coord_key: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
 class MarkerPlacement:
     marker: MarkerRecord
     x: int
@@ -321,16 +320,28 @@ def _hard_wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[s
     return rows
 
 
-def _coord_from_location(location: object) -> HexCoord | None:
+def _marker_cell_from_location(location: object, default_topology_type: str) -> MarkerCellRef | None:
     if not isinstance(location, dict):
         return None
     coord = location.get("coord")
     if not isinstance(coord, dict):
         return None
-    try:
-        return HexCoord(q=int(coord["q"]), r=int(coord["r"]))
-    except Exception:
+    topology_type = str(location.get("topology_type", default_topology_type))
+    space_id = str(location.get("space_id", "overworld"))
+    if topology_type == OVERWORLD_HEX_TOPOLOGY:
+        try:
+            normalized = {"q": int(coord["q"]), "r": int(coord["r"])}
+        except Exception:
+            return None
+    elif topology_type == SQUARE_GRID_TOPOLOGY:
+        try:
+            normalized = {"x": int(coord["x"]), "y": int(coord["y"])}
+        except Exception:
+            return None
+    else:
         return None
+    coord_key = tuple(sorted((axis, int(value)) for axis, value in normalized.items()))
+    return MarkerCellRef(space_id=space_id, topology_type=topology_type, coord_key=coord_key)
 
 
 def _truncate_label(text: str, max_length: int = 10) -> str:
@@ -357,17 +368,17 @@ def _section_entries(rows: list[str], *, entry_limit: int = PANEL_SECTION_ENTRY_
     return list(reversed(rows[-entry_limit:]))
 
 
-def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]]:
-    markers_by_hex: dict[HexCoord, list[MarkerRecord]] = {}
+def _collect_world_markers(sim: Simulation, active_space_id: str, active_location_topology: str) -> dict[MarkerCellRef, list[MarkerRecord]]:
+    markers_by_cell: dict[MarkerCellRef, list[MarkerRecord]] = {}
 
-    def add_marker(hex_coord: HexCoord | None, marker: MarkerRecord) -> None:
-        if hex_coord is None:
+    def add_marker(cell: MarkerCellRef | None, marker: MarkerRecord) -> None:
+        if cell is None or cell.space_id != active_space_id or cell.topology_type != active_location_topology:
             return
-        markers_by_hex.setdefault(hex_coord, []).append(marker)
+        markers_by_cell.setdefault(cell, []).append(marker)
 
     for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
         add_marker(
-            _coord_from_location(site.location),
+            _marker_cell_from_location(site.location, active_location_topology),
             MarkerRecord(
                 priority=0,
                 marker_id=f"site:{site.site_id}",
@@ -381,9 +392,23 @@ def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
         if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
             continue
+        if entity.space_id != active_space_id:
+            continue
         label = entity.template_id if entity.template_id else _short_stable_id(entity.entity_id)
+        if active_location_topology == SQUARE_GRID_TOPOLOGY:
+            cell = MarkerCellRef(
+                space_id=entity.space_id,
+                topology_type=active_location_topology,
+                coord_key=(("x", math.floor(entity.position_x)), ("y", math.floor(entity.position_y))),
+                            )
+        else:
+            cell = MarkerCellRef(
+                space_id=entity.space_id,
+                topology_type=active_location_topology,
+                coord_key=(("q", entity.hex_coord.q), ("r", entity.hex_coord.r)),
+                            )
         add_marker(
-            entity.hex_coord,
+            cell,
             MarkerRecord(
                 priority=1,
                 marker_id=f"entity:{entity.entity_id}",
@@ -397,7 +422,7 @@ def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]
     for index, record in enumerate(sim.state.world.spawn_descriptors):
         action_uid = str(record.get("action_uid", "?"))
         add_marker(
-            _coord_from_location(record.get("location")),
+            _marker_cell_from_location(record.get("location"), active_location_topology),
             MarkerRecord(
                 priority=2,
                 marker_id=f"spawn_desc:{action_uid}:{index}",
@@ -410,7 +435,7 @@ def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]
 
     for record in sim.state.world.signals:
         add_marker(
-            _coord_from_location(record.get("location")),
+            _marker_cell_from_location(record.get("location"), active_location_topology),
             MarkerRecord(
                 priority=3,
                 marker_id=f"signal:{record.get('signal_uid', '')}",
@@ -423,7 +448,7 @@ def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]
 
     for record in sim.state.world.tracks:
         add_marker(
-            _coord_from_location(record.get("location")),
+            _marker_cell_from_location(record.get("location"), active_location_topology),
             MarkerRecord(
                 priority=4,
                 marker_id=f"track:{record.get('track_uid', '')}",
@@ -434,33 +459,77 @@ def _collect_world_markers(sim: Simulation) -> dict[HexCoord, list[MarkerRecord]
             ),
         )
 
-    for hex_coord, markers in markers_by_hex.items():
+    for cell, markers in markers_by_cell.items():
         markers.sort(key=lambda row: (row.priority, row.marker_id))
-    return markers_by_hex
+    return markers_by_cell
 
 
-def _slot_markers_for_hex(
-    center_x: float,
-    center_y: float,
-    markers: list[MarkerRecord],
-) -> tuple[list[MarkerPlacement], int]:
-    placements = [
-        MarkerPlacement(
-            marker=marker,
-            x=int(center_x + MARKER_SLOT_OFFSETS[index][0]),
-            y=int(center_y + MARKER_SLOT_OFFSETS[index][1]),
-        )
-        for index, marker in enumerate(markers[: len(MARKER_SLOT_OFFSETS)])
-    ]
-    return placements, max(0, len(markers) - len(placements))
+def _marker_cell_center(cell: MarkerCellRef, center: tuple[float, float]) -> tuple[float, float]:
+    if cell.topology_type == SQUARE_GRID_TOPOLOGY:
+        world_x = float(dict(cell.coord_key)["x"]) + 0.5
+        world_y = float(dict(cell.coord_key)["y"]) + 0.5
+        return center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE
+    return _axial_to_pixel(HexCoord(q=dict(cell.coord_key)["q"], r=dict(cell.coord_key)["r"]), center)
+
+
+def _placement_signature(cell: MarkerCellRef, marker: MarkerRecord) -> str:
+    return "|".join(
+        [
+            cell.space_id,
+            cell.topology_type,
+            repr(cell.coord_key),
+            marker.marker_id,
+            marker.marker_kind,
+        ]
+    )
+
+
+def _stable_unit_pair(signature: str, attempt: int) -> tuple[float, float]:
+    digest = hashlib.sha256(f"{signature}:{attempt}".encode("utf-8")).digest()
+    angle_u = int.from_bytes(digest[:8], "big") / float(2**64)
+    radius_u = int.from_bytes(digest[8:16], "big") / float(2**64)
+    return angle_u, radius_u
+
+
+def _slot_markers_for_hex(center_x: float, center_y: float, markers: list[MarkerRecord], cell: MarkerCellRef) -> tuple[list[MarkerPlacement], int]:
+    placements: list[MarkerPlacement] = []
+    for marker in markers:
+        signature = _placement_signature(cell, marker)
+        chosen_point: tuple[float, float] | None = None
+        for attempt in range(MARKER_PLACEMENT_ATTEMPTS):
+            angle_u, radius_u = _stable_unit_pair(signature, attempt)
+            angle = angle_u * math.tau
+            radius = MARKER_SCATTER_RADIUS_MIN + (MARKER_SCATTER_RADIUS_MAX - MARKER_SCATTER_RADIUS_MIN) * radius_u + (
+                attempt * MARKER_SCATTER_STEP
+            )
+            radius = min(radius, MARKER_SCATTER_RADIUS_MAX + (MARKER_PLACEMENT_ATTEMPTS * MARKER_SCATTER_STEP))
+            candidate = (center_x + math.cos(angle) * radius, center_y + math.sin(angle) * radius)
+            if all((candidate[0] - current.x) ** 2 + (candidate[1] - current.y) ** 2 >= MARKER_SEPARATION_MIN**2 for current in placements):
+                chosen_point = candidate
+                break
+        if chosen_point is None:
+            fallback_index = len(placements)
+            angle = fallback_index * 2.399963229728653
+            radius = MARKER_SCATTER_RADIUS_MIN + fallback_index * MARKER_SCATTER_STEP
+            chosen_point = (center_x + math.cos(angle) * radius, center_y + math.sin(angle) * radius)
+        placements.append(MarkerPlacement(marker=marker, x=int(round(chosen_point[0])), y=int(round(chosen_point[1]))))
+    return placements, 0
 
 
 def _world_marker_placements(sim: Simulation, center: tuple[float, float]) -> list[MarkerPlacement]:
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    if active_space is None:
+        return []
     placements: list[MarkerPlacement] = []
-    markers_by_hex = _collect_world_markers(sim)
-    for hex_coord in sorted(markers_by_hex):
-        center_x, center_y = _axial_to_pixel(hex_coord, center)
-        slotted, _ = _slot_markers_for_hex(center_x, center_y, markers_by_hex[hex_coord])
+    markers_by_cell = _collect_world_markers(
+        sim,
+        active_space.space_id,
+        SQUARE_GRID_TOPOLOGY if active_space.topology_type == SQUARE_GRID_TOPOLOGY else OVERWORLD_HEX_TOPOLOGY,
+    )
+    for cell in sorted(markers_by_cell, key=lambda current: (current.space_id, current.topology_type, current.coord_key)):
+        center_x, center_y = _marker_cell_center(cell, center)
+        slotted, _ = _slot_markers_for_hex(center_x, center_y, markers_by_cell[cell], cell)
         placements.extend(slotted)
     return placements
 
@@ -471,21 +540,15 @@ def _draw_world_markers(
     center: tuple[float, float],
     font: pygame.font.Font,
 ) -> None:
-    markers_by_hex = _collect_world_markers(sim)
-    for hex_coord in sorted(markers_by_hex):
-        center_x, center_y = _axial_to_pixel(hex_coord, center)
-        placements, overflow_count = _slot_markers_for_hex(center_x, center_y, markers_by_hex[hex_coord])
-        for placement in placements:
-            pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
-            pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
-            label_surface = font.render(placement.marker.label, True, (248, 250, 255))
-            outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
-            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
-            screen.blit(label_surface, (placement.x + 8, placement.y - 8))
-        if overflow_count > 0:
-            summary_surface = font.render(f"+{overflow_count}", True, (255, 245, 200))
-            screen.blit(summary_surface, (int(center_x) + 8, int(center_y) + 8))
+    for placement in _world_marker_placements(sim, center):
+        pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
+        pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
+        label_surface = font.render(placement.marker.label, True, (248, 250, 255))
+        outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
+        screen.blit(label_surface, (placement.x + 8, placement.y - 8))
+
 
 def _draw_world(
     screen: pygame.Surface,
@@ -508,13 +571,7 @@ def _draw_world(
             rect = pygame.Rect(int(pixel_x - HEX_SIZE / 2), int(pixel_y - HEX_SIZE / 2), HEX_SIZE, HEX_SIZE)
             pygame.draw.rect(screen, (58, 58, 64), rect)
             pygame.draw.rect(screen, (35, 35, 40), rect, 1)
-
-            location = {"space_id": active_space.space_id, "coord": coord}
-            sites = sim.state.world.get_sites_at_location(location)
-            if sites:
-                site_color = SITE_COLORS.get(sites[0].site_type, (245, 245, 120))
-                pygame.draw.circle(screen, site_color, (int(pixel_x), int(pixel_y)), 6)
-                pygame.draw.circle(screen, (15, 15, 15), (int(pixel_x), int(pixel_y)), 6, 1)
+        _draw_world_markers(screen, sim, center, marker_font)
         screen.set_clip(old_clip)
         return
 
@@ -808,13 +865,13 @@ def _find_entity_at_pixel(
 
 
 
-def _find_world_marker_at_pixel(
+def _find_world_marker_candidates_at_pixel(
     sim: Simulation,
     pixel_pos: tuple[int, int],
     center: tuple[float, float],
     *,
     radius_px: float = 10.0,
-) -> MarkerRecord | None:
+) -> list[MarkerRecord]:
     candidates: list[tuple[float, str, MarkerRecord]] = []
     for placement in _world_marker_placements(sim, center):
         dx = pixel_pos[0] - placement.x
@@ -823,10 +880,21 @@ def _find_world_marker_at_pixel(
         hit_radius = max(radius_px, float(placement.marker.radius + 2))
         if distance_sq <= hit_radius * hit_radius:
             candidates.append((distance_sq, placement.marker.marker_id, placement.marker))
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in candidates]
+
+
+def _find_world_marker_at_pixel(
+    sim: Simulation,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    *,
+    radius_px: float = 10.0,
+) -> MarkerRecord | None:
+    candidates = _find_world_marker_candidates_at_pixel(sim, pixel_pos, center, radius_px=radius_px)
     if not candidates:
         return None
-    candidates.sort(key=lambda row: (row[0], row[1]))
-    return candidates[0][2]
+    return candidates[0]
 
 
 def _current_input_vector() -> tuple[float, float]:
@@ -1058,20 +1126,21 @@ def run_pygame_viewer(
     def build_context_menu(event_pos: tuple[int, int]) -> ContextMenuState | None:
         items: list[ContextMenuItem] = []
         if viewport_rect.collidepoint(event_pos):
-            marker = _find_world_marker_at_pixel(sim, event_pos, world_center)
-            if marker is not None:
-                items.append(ContextMenuItem(label=f"Marker: {marker.marker_kind} {marker.label}", action="noop"))
-                if marker.marker_kind == "entity":
-                    entity_id = marker.marker_id.split(":", 1)[1]
-                    items.append(ContextMenuItem(label="Select", action="select", payload=entity_id))
-                    if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
-                        items.append(ContextMenuItem(label="Deselect", action="clear_selection"))
-                elif marker.marker_kind == "site":
-                    site_id = marker.marker_id.split(":", 1)[1]
-                    site = sim.state.world.sites.get(site_id)
-                    if site is not None and site.entrance is not None:
-                        site_label = site.name if site.name else site.site_id
-                        items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+            markers = _find_world_marker_candidates_at_pixel(sim, event_pos, world_center)
+            if markers:
+                for marker in markers:
+                    items.append(ContextMenuItem(label=f"Marker: {marker.marker_kind} {marker.label}", action="noop"))
+                    if marker.marker_kind == "entity":
+                        entity_id = marker.marker_id.split(":", 1)[1]
+                        items.append(ContextMenuItem(label=f"Select {marker.label}", action="select", payload=entity_id))
+                        if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
+                            items.append(ContextMenuItem(label=f"Deselect {marker.label}", action="clear_selection"))
+                    elif marker.marker_kind == "site":
+                        site_id = marker.marker_id.split(":", 1)[1]
+                        site = sim.state.world.sites.get(site_id)
+                        if site is not None and site.entrance is not None:
+                            site_label = site.name if site.name else site.site_id
+                            items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
             else:
                 world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center)

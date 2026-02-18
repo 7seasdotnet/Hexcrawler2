@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5J2b — Viewer Marker Slot Offsets + Visible Labels (viewer-only hotfix, no gameplay changes).
+- **Current phase:** Phase 5J2c — Canonical Launcher + Organic Marker Placement Finalization (viewer-only UX + launch hygiene).
 - **Next action:** Phase 5K — Exploration Action Economy (time-costed actions).
-- **Phase status:** ✅ Phase 5J2b complete (restored in-cell marker slot rendering + matching hit-test; visible per-marker labels and compact legend).
+- **Phase status:** ✅ Phase 5J2c complete (single canonical launcher path + deterministic organic marker placement/labels with render-hit-test parity).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -57,7 +57,8 @@
   - CLI bridge that converts a world-only map template into canonical runtime save JSON with seed-controlled simulation initialization.
 - `src/hexcrawler/__main__.py`
   - Package entrypoint routing to pygame viewer.
-- `run_game.py`
+- `play.py`
+- `run_game.py` (deprecated wrapper to `play.py`)
   - Simple launch script that injects `src/` into `sys.path` and runs the pygame viewer.
 - `docs/PROMPTLOG.md`
   - Canonical reverse-chronological prompt history linking verbatim prompts, Codex summaries, commit references, and verification notes.
@@ -155,20 +156,23 @@
 - No combat/wounds/armor/HP systems in this phase.
 - No AI/factions/networking in this phase.
 
+## Canonical Launch
+- Canonical launch: `python play.py`
+
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
-- `python run_game.py [--map-path ...] [--with-encounters] [--save-path ...] [--load-save ...]  # default map: content/examples/viewer_map.json`
-- `python run_game.py --headless`
-- `HEXCRAWLER_HEADLESS=1 python run_game.py --with-encounters`
-- `python run_game.py --with-encounters --save-path saves/canonical_with_artifacts.json`
+- `python play.py [--seed N] [--load-save PATH] [--map-path PATH] [--headless]  # canonical launch`
+- `python play.py --headless`
+- `HEXCRAWLER_HEADLESS=1 python play.py --headless`
+- `python play.py --load-save saves/canonical_with_artifacts.json`
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/ui_demo.json --seed 7 --force`
-- `python run_game.py --load-save saves/ui_demo.json --with-encounters`
-- `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/ui_demo.json --with-encounters`
-- `HEXCRAWLER_HEADLESS=1 python run_game.py --load-save saves/space_topology_demo.json --with-encounters`
+- `python play.py --load-save saves/ui_demo.json`
+- `HEXCRAWLER_HEADLESS=1 python play.py --load-save saves/ui_demo.json`
+- `HEXCRAWLER_HEADLESS=1 python play.py --load-save saves/space_topology_demo.json --headless`
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/space_topology_demo.json --ticks 200 --print-artifacts`
 - `set PYTHONPATH=src && pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_check_runner.py`
@@ -199,12 +203,12 @@
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
 
 ## Repo Hygiene Note
-- Assessed potential stray path `python`: no such tracked/untracked file or directory exists in the repo root at this time (`git status -sb` clean, `test -e python` false), so no deletion/ignore change was necessary in this commit.
+- Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Restored deterministic in-cell marker slotting for sites, spawned entities, spawn descriptors, signals, and tracks via shared viewer-only marker collection/slot helpers with deterministic overflow `+N` summaries.
-- Updated viewer hit-testing/context-menu selection to resolve specific markers using the same offset slot positions used during rendering, keeping inspect/select behavior aligned with what is drawn.
-- Improved label readability (per-marker labels with outline) and added a compact on-panel legend (`Site=S Spawn=E Desc=D Signal=G Track=T`) plus deterministic unit tests for slot ordering, clamp/overflow, and offset hit-testing.
+- Canonical launch path is now `python play.py`; it auto-creates/loads `saves/canonical_viewer_save.json` from `content/examples/viewer_map.json` (seed 7), always enables encounters, and avoids manual `PYTHONPATH` setup.
+- Viewer marker UX now uses deterministic SHA-256-derived organic in-cell scatter placement with minimum separation and render/hit-test parity for both `overworld_hex` and `square_grid` spaces; context menus list all nearby markers deterministically.
+- Marker labels remain always-on with halo/outline and stable truncation/short-id fallbacks; compact legend remains in the debug panel.
 
 ## Troubleshooting
-- On CI/WSL/remote shells without a GUI display, run `python run_game.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
+- On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

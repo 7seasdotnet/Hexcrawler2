@@ -4,3 +4,4 @@ __pycache__/
 saves/
 viewer_out.txt
 viewer_err.txt
+/python
