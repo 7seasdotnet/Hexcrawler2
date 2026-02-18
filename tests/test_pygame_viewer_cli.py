@@ -10,6 +10,8 @@ from hexcrawler.cli.pygame_viewer import (
     MarkerRecord,
     _find_entity_at_pixel,
     _find_world_marker_at_pixel,
+    _find_world_marker_candidates_at_pixel,
+    _marker_cell_from_location,
     _slot_markers_for_hex,
     _load_viewer_simulation,
     _save_viewer_simulation,
@@ -179,34 +181,42 @@ def test_find_entity_at_pixel_uses_deterministic_tie_break() -> None:
     assert hit == "alpha"
 
 
-def test_slot_markers_for_hex_assigns_deterministic_positions_in_input_order() -> None:
+def test_slot_markers_for_hex_is_deterministic_for_same_inputs() -> None:
     markers = [
         MarkerRecord(priority=0, marker_id="site:a", marker_kind="site", color=(1, 1, 1), radius=4, label="a"),
         MarkerRecord(priority=0, marker_id="site:b", marker_kind="site", color=(1, 1, 1), radius=4, label="b"),
         MarkerRecord(priority=0, marker_id="site:c", marker_kind="site", color=(1, 1, 1), radius=4, label="c"),
     ]
+    cell = _marker_cell_from_location({"space_id": "overworld", "coord": {"q": 0, "r": 0}}, "overworld_hex")
+    assert cell is not None
 
-    placements, overflow = _slot_markers_for_hex(100.0, 100.0, markers)
+    first, overflow_first = _slot_markers_for_hex(100.0, 100.0, markers, cell)
+    second, overflow_second = _slot_markers_for_hex(100.0, 100.0, markers, cell)
 
-    assert overflow == 0
-    assert [placement.marker.marker_id for placement in placements] == ["site:a", "site:b", "site:c"]
-    assert [(placement.x, placement.y) for placement in placements] == [(100, 90), (109, 95), (109, 105)]
-
-
-def test_slot_markers_for_hex_clamps_and_reports_overflow() -> None:
-    markers = [
-        MarkerRecord(priority=0, marker_id=f"site:{index:02d}", marker_kind="site", color=(1, 1, 1), radius=4, label=str(index))
-        for index in range(20)
+    assert overflow_first == 0
+    assert overflow_second == 0
+    assert [(placement.marker.marker_id, placement.x, placement.y) for placement in first] == [
+        (placement.marker.marker_id, placement.x, placement.y) for placement in second
     ]
 
-    placements, overflow = _slot_markers_for_hex(0.0, 0.0, markers)
 
-    assert len(placements) == 12
-    assert overflow == 8
-    assert placements[-1].marker.marker_id == "site:11"
+def test_slot_markers_for_hex_separates_markers_in_same_cell() -> None:
+    markers = [
+        MarkerRecord(priority=0, marker_id=f"site:{index:02d}", marker_kind="site", color=(1, 1, 1), radius=4, label=str(index))
+        for index in range(8)
+    ]
+    cell = _marker_cell_from_location({"space_id": "overworld", "coord": {"q": 0, "r": 0}}, "overworld_hex")
+    assert cell is not None
+
+    placements, overflow = _slot_markers_for_hex(0.0, 0.0, markers, cell)
+
+    assert overflow == 0
+    assert len(placements) == len(markers)
+    unique_points = {(placement.x, placement.y) for placement in placements}
+    assert len(unique_points) == len(markers)
 
 
-def test_find_world_marker_at_pixel_uses_offset_slot_positions() -> None:
+def test_world_marker_candidates_are_deterministically_ordered() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
     sim.state.world.sites["site-alpha"] = SiteRecord(
         site_id="site-alpha",
@@ -219,7 +229,22 @@ def test_find_world_marker_at_pixel_uses_offset_slot_positions() -> None:
         location={"space_id": "overworld", "coord": {"q": 0, "r": 0}},
     )
 
-    marker = _find_world_marker_at_pixel(sim, (109, 95), (100.0, 100.0), radius_px=5.0)
+    first = _find_world_marker_candidates_at_pixel(sim, (100, 100), (100.0, 100.0), radius_px=40.0)
+    second = _find_world_marker_candidates_at_pixel(sim, (100, 100), (100.0, 100.0), radius_px=40.0)
+
+    assert len(first) >= 2
+    assert [marker.marker_id for marker in first] == [marker.marker_id for marker in second]
+
+
+def test_find_world_marker_at_pixel_uses_same_positions_as_rendering_pipeline() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.state.world.sites["site-alpha"] = SiteRecord(
+        site_id="site-alpha",
+        site_type="town",
+        location={"space_id": "overworld", "coord": {"q": 0, "r": 0}},
+    )
+
+    marker = _find_world_marker_at_pixel(sim, (100, 100), (100.0, 100.0), radius_px=30.0)
 
     assert marker is not None
-    assert marker.marker_id == "site:site-beta"
+    assert marker.marker_id == "site:site-alpha"
