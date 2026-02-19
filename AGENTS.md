@@ -107,6 +107,15 @@ When asked to implement:
 - Keep graphics minimal early; prioritize simulation + editor + pipelines.
 - Avoid feature creep not serving the core loop.
 
+## Must-Not-Lock-Out Constraints (Future Features)
+- Follow `docs/FUTURE_FEATURES_NOT_TO_LOCK_OUT.md` as an architecture constraints reference.
+- This document is **not** a roadmap and must **not** be used to justify scope creep.
+- Treat it as a guardrail list that informs design choices and interface boundaries.
+- Codex must ensure new changes do not violate these constraints unless explicitly approved.
+- For PRs touching architecture/substrate/UI/editor surfaces, include:
+  - `Lock-out constraints reviewed: OK`
+  - or list the specific lock-out constraints impacted.
+
 ## Phase 5 Discipline (Execution & Mutation Safety)
 - Any new world mutation must be:
   1) deterministic,
