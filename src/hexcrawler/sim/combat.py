@@ -15,6 +15,20 @@ DEFAULT_CALLED_REGION = "torso"
 PLACEHOLDER_COOLDOWN_TICKS = 1
 
 
+def _is_json_primitive(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float, str))
+
+
+def _is_json_safe(value: Any) -> bool:
+    if _is_json_primitive(value):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_safe(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_json_safe(nested) for key, nested in value.items())
+    return False
+
+
 class CombatExecutionModule(RuleModule):
     name = "combat"
 
@@ -168,30 +182,11 @@ class CombatExecutionModule(RuleModule):
             return None, "invalid_target_cell"
 
         coord_raw = payload.get("coord")
-        coord = cls._normalize_coord_for_space(space.topology_type, coord_raw)
-        if coord is None:
+        if not _is_json_safe(coord_raw):
             return None, "invalid_target_cell"
-        if not space.is_valid_cell(coord):
-            return None, "invalid_target_cell"
-        return {"space_id": space_id, "coord": coord}, None
-
-    @staticmethod
-    def _normalize_coord_for_space(topology_type: str, coord: Any) -> dict[str, int] | None:
-        if isinstance(coord, dict):
-            try:
-                if topology_type == SQUARE_GRID_TOPOLOGY:
-                    return {"x": int(coord["x"]), "y": int(coord["y"])}
-                return {"q": int(coord["q"]), "r": int(coord["r"])}
-            except (KeyError, TypeError, ValueError):
-                return None
-        if isinstance(coord, (list, tuple)) and len(coord) == 2:
-            try:
-                if topology_type == SQUARE_GRID_TOPOLOGY:
-                    return {"x": int(coord[0]), "y": int(coord[1])}
-                return {"q": int(coord[0]), "r": int(coord[1])}
-            except (TypeError, ValueError):
-                return None
-        return None
+        if not space.is_valid_cell(coord_raw):
+            return None, "invalid_target_cell_coord_for_space"
+        return {"space_id": space_id, "coord": copy.deepcopy(coord_raw)}, None
 
     @staticmethod
     def _is_adjacent(attacker: dict[str, Any], target: dict[str, Any]) -> bool:

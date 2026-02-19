@@ -226,7 +226,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Docs: clarified called-shot defaulting point and tightened weapon arc admissibility wording (no runtime changes).
+- Hardening: canonicalize called-shot default token to `torso` (center-mass remains descriptive text only in docs and outcomes).
+- Hardening: ensure `CellRef.coord` validation in combat intake remains topology-owned, without generic length-2 combat-level assumptions.
+- Tests: add regressions for omitted/null called-shot default persistence and topology-attributed invalid coord rejection reasons.
 
 
 ## Troubleshooting

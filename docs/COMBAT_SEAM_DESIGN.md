@@ -63,7 +63,7 @@ Optional fields:
 - `target_id` (nullable only when `target_cell` is provided)
 - `target_cell` (nullable `CellRef`; seam supports cell-only and combined targeting)
 - `weapon_ref`
-- `target_region` (nullable called-shot request; defaults to `torso`/center-mass when omitted)
+- `target_region` (nullable called-shot request; defaults to canonical region token `torso` (described as center-mass) when omitted)
 - `tags` (array of strings)
 
 Targeting forms accepted by seam:
@@ -91,8 +91,8 @@ Validation vs resolution boundary:
 
 Called-shot contract:
 - `target_region` is a requested called-shot region, not a guaranteed outcome.
-- If `target_region` is omitted/null, called shot defaults to `torso` (center-mass label).
-- If `target_region` is null/omitted, resolution treats `called_region` as `torso`/center-mass for outcome recording.
+- If `target_region` is omitted/null, called shot defaults to canonical region token `torso` (described as center-mass).
+- If `target_region` is null/omitted, resolution treats `called_region` as canonical token `torso` for outcome recording.
 - Wherever the default is applied, it must be deterministic and recorded forensically (e.g., `combat_outcome.called_region`).
 - Region taxonomy remains content/rules-owned and deferred at seam level.
 
