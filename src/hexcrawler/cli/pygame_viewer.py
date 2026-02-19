@@ -25,6 +25,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.combat import CombatExecutionModule
 from hexcrawler.sim.entity_stats import EntityStatsExecutionModule
 from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE, ExplorationExecutionModule
 from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE, InteractionExecutionModule
@@ -1067,6 +1068,13 @@ def _register_supply_module(sim: Simulation) -> None:
     sim.register_rule_module(SupplyConsumptionModule())
 
 
+
+
+def _register_combat_module(sim: Simulation) -> None:
+    if sim.get_rule_module(CombatExecutionModule.name) is not None:
+        return
+    sim.register_rule_module(CombatExecutionModule())
+
 def _register_entity_stats_module(sim: Simulation) -> None:
     if sim.get_rule_module(EntityStatsExecutionModule.name) is not None:
         return
@@ -1111,6 +1119,7 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
     _register_interaction_module(sim)
     _register_signal_module(sim)
     _register_entity_stats_module(sim)
+    _register_combat_module(sim)
     _register_supply_module(sim)
     return sim
 
@@ -1126,6 +1135,7 @@ def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulat
     _register_interaction_module(sim)
     _register_signal_module(sim)
     _register_entity_stats_module(sim)
+    _register_combat_module(sim)
     if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
         _register_supply_module(sim)
     print(
