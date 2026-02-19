@@ -65,6 +65,43 @@ def _json_list_to_tuple(value: Any) -> Any:
     return value
 
 
+def _normalize_entity_stats(stats: Any) -> dict[str, Any] | None:
+    if stats is None:
+        return None
+    if not isinstance(stats, dict):
+        raise ValueError("entity.stats must be an object")
+    normalized: dict[str, Any] = {}
+    for raw_key, value in stats.items():
+        if not isinstance(raw_key, str) or not raw_key:
+            raise ValueError("entity.stats keys must be non-empty strings")
+        _validate_json_value(value, field_name=f"entity.stats[{raw_key}]")
+        normalized[raw_key] = copy.deepcopy(value)
+    return dict(sorted(normalized.items()))
+
+
+def apply_stat_patch(stats: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(patch, dict):
+        raise ValueError("stat patch must be an object")
+    op = patch.get("op")
+    key = patch.get("key")
+    if op not in {"set", "remove"}:
+        raise ValueError("stat patch op must be one of: set, remove")
+    if not isinstance(key, str) or not key:
+        raise ValueError("stat patch key must be a non-empty string")
+
+    normalized = _normalize_entity_stats(stats) or {}
+    updated = copy.deepcopy(normalized)
+    if op == "remove":
+        updated.pop(key, None)
+        return dict(sorted(updated.items()))
+
+    if "value" not in patch:
+        raise ValueError("stat patch set operation requires value")
+    _validate_json_value(patch["value"], field_name=f"entity.stats[{key}]")
+    updated[key] = copy.deepcopy(patch["value"])
+    return dict(sorted(updated.items()))
+
+
 @dataclass
 class SimulationTimeState:
     ticks_per_day: int = TICKS_PER_DAY
@@ -193,6 +230,7 @@ class EntityState:
     selected_entity_id: str | None = None
     inventory_container_id: str | None = None
     supply_profile_id: str | None = None
+    stats: dict[str, Any] | None = None
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -246,6 +284,7 @@ class Simulation:
         self._supply_profiles = load_supply_profiles_json(DEFAULT_SUPPLY_PROFILES_PATH)
 
     def add_entity(self, entity: EntityState) -> None:
+        entity.stats = _normalize_entity_stats(entity.stats)
         if entity.supply_profile_id is None and entity.entity_id == DEFAULT_PLAYER_ENTITY_ID:
             if DEFAULT_PLAYER_SUPPLY_PROFILE_ID in self._supply_profiles.by_id():
                 entity.supply_profile_id = DEFAULT_PLAYER_SUPPLY_PROFILE_ID
@@ -324,6 +363,21 @@ class Simulation:
         entity = self.state.entities[entity_id]
         entity.move_input_x = move_x
         entity.move_input_y = move_y
+
+    def get_entity_stats(self, entity_id: str) -> dict[str, Any]:
+        entity = self.state.entities[entity_id]
+        return copy.deepcopy(entity.stats or {})
+
+    def get_entity_stat(self, entity_id: str, key: str, default: Any = None) -> Any:
+        if not isinstance(key, str) or not key:
+            raise ValueError("entity stat key must be a non-empty string")
+        entity = self.state.entities[entity_id]
+        if entity.stats is None:
+            return default
+        return copy.deepcopy(entity.stats.get(key, default))
+
+    def apply_stat_patch(self, stats: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:
+        return apply_stat_patch(stats=stats, patch=patch)
 
     def stop_entity(self, entity_id: str) -> None:
         entity = self.state.entities[entity_id]
@@ -460,6 +514,7 @@ class Simulation:
                     "selected_entity_id": entity.selected_entity_id,
                     "inventory_container_id": entity.inventory_container_id,
                     "supply_profile_id": entity.supply_profile_id,
+                    "stats": copy.deepcopy(entity.stats),
                 }
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
@@ -510,6 +565,7 @@ class Simulation:
                     str(row["inventory_container_id"]) if row.get("inventory_container_id") is not None else None
                 ),
                 supply_profile_id=(str(row["supply_profile_id"]) if row.get("supply_profile_id") is not None else None),
+                stats=_normalize_entity_stats(row.get("stats")),
             )
             sim.add_entity(entity)
 

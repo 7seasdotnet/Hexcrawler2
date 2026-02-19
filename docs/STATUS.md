@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5M — Calendar / Time-of-Day Substrate (structural).
-- **Next action:** Phase 5N — Perception/Noise emission substrate (structural, no gameplay semantics).
-- **Phase status:** ✅ Phase 5M scaffold complete (deterministic serialized calendar/time substrate derived from authoritative tick state).
+- **Current phase:** Phase 5N — Entity Stats Substrate (structural).
+- **Next action:** Phase 5O — Perception/Noise substrate planning (structural, no gameplay semantics).
+- **Phase status:** ✅ Phase 5N scaffold complete (deterministic serialized entity stats substrate with idempotent stat intents).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -29,6 +29,7 @@
   - Deterministic `enter_site` command seam that validates site/entrance/target-space records, routes valid requests through the existing `transition_space` seam, and emits deterministic `site_enter_outcome` forensic events (`applied`, `unknown_site`, `no_entrance`, `unknown_target_space`).
   - Space interaction substrate for non-overworld spaces: deterministic canonical `SpaceState.doors` / `SpaceState.anchors` / `SpaceState.interactables` records with strict JSON-safe structural validation, back-compat defaults, and hash coverage through world serialization.
   - Deterministic `interaction_intent` command seam via `InteractionExecutionModule`: validates intent/target/duration, schedules `interaction_execute`, enforces idempotence using serialized `rules_state["interaction"].executed_action_uids`, applies structural door/anchor/interactable mutations only, and emits deterministic forensic `interaction_outcome` events.
+  - Deterministic `entity_stat_intent` command seam via `EntityStatsExecutionModule`: validates structural stat patch params, schedules `entity_stat_execute`, applies stat set/remove via pure patch helper, enforces idempotence using serialized `rules_state["entity_stats"].executed_action_uids`, and emits deterministic forensic `entity_stat_outcome` events.
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
   - Deterministic calendar/time substrate on `SimulationState.time` (`ticks_per_day`, `epoch_tick`) with derived read-only APIs (`get_ticks_per_day`, `get_day_index`, `get_tick_in_day`, `get_time_of_day_fraction`), save/load back-compat defaults, schema validation, and simulation hash coverage.
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
@@ -206,6 +207,7 @@
 - `enter_site` (simulation command seam; structural site entrance transition router)
 - `explore_intent` (simulation command seam; time-costed exploration actions: `search`/`listen`/`rest`)
 - `interaction_intent` (simulation command seam; time-costed non-overworld interactions: `open`/`close`/`toggle`/`inspect`/`use`/`exit`)
+- `entity_stat_intent` (simulation command seam; structural per-entity stat set/remove operations with delayed execution and idempotent outcomes)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -214,9 +216,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added a serialized, hash-covered calendar/time substrate (`simulation_state.time`) with deterministic derivation from authoritative tick state and back-compat load defaults.
-- Added read-only simulation time helper APIs and updated viewer/CLI displays to consume derived day/time values without mutating simulation state.
-- Added deterministic boundary/save-load/hash tests for calendar derivation and time-model stability.
+- Added optional serialized/hash-covered `entity.stats` on entities with strict key/value validation and deterministic stat patch helpers (`get_entity_stats`, `get_entity_stat`, `apply_stat_patch`).
+- Added `EntityStatsExecutionModule` with `entity_stat_intent` -> `entity_stat_execute` -> `entity_stat_outcome` deterministic command/event seam, including delayed execution and idempotence ledger in serialized `rules_state`.
+- Added deterministic tests for stat mutation, save/load idempotence, replay/hash identity, invalid-parameter safety, and remove semantics.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

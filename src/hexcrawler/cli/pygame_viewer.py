@@ -25,6 +25,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.entity_stats import EntityStatsExecutionModule
 from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE, ExplorationExecutionModule
 from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE, InteractionExecutionModule
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
@@ -1065,6 +1066,10 @@ def _register_supply_module(sim: Simulation) -> None:
     sim.register_rule_module(SupplyConsumptionModule())
 
 
+def _register_entity_stats_module(sim: Simulation) -> None:
+    if sim.get_rule_module(EntityStatsExecutionModule.name) is not None:
+        return
+    sim.register_rule_module(EntityStatsExecutionModule())
 
 def _register_exploration_module(sim: Simulation) -> None:
     if sim.get_rule_module(ExplorationExecutionModule.name) is not None:
@@ -1097,6 +1102,7 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     _register_exploration_module(sim)
     _register_interaction_module(sim)
+    _register_entity_stats_module(sim)
     _register_supply_module(sim)
     return sim
 
@@ -1110,6 +1116,7 @@ def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulat
         sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     _register_exploration_module(sim)
     _register_interaction_module(sim)
+    _register_entity_stats_module(sim)
     if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
         _register_supply_module(sim)
     print(

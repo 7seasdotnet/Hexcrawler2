@@ -40,23 +40,26 @@ def simulation_hash(simulation: Simulation) -> str:
         "world": simulation.state.world.to_dict(),
         "entities": [
             {
-                "entity_id": entity.entity_id,
-                "space_id": entity.space_id,
-                "hex_coord": entity.hex_coord.to_dict(),
-                "position_x": round(entity.position_x, 8),
-                "position_y": round(entity.position_y, 8),
-                "move_input_x": round(entity.move_input_x, 8),
-                "move_input_y": round(entity.move_input_y, 8),
-                "speed_per_tick": entity.speed_per_tick,
-                "target_position": (
-                    [round(entity.target_position[0], 8), round(entity.target_position[1], 8)]
-                    if entity.target_position
-                    else None
-                ),
-                "template_id": entity.template_id,
-                "source_action_uid": entity.source_action_uid,
-                "selected_entity_id": entity.selected_entity_id,
-                "inventory_container_id": entity.inventory_container_id,
+                **{
+                    "entity_id": entity.entity_id,
+                    "space_id": entity.space_id,
+                    "hex_coord": entity.hex_coord.to_dict(),
+                    "position_x": round(entity.position_x, 8),
+                    "position_y": round(entity.position_y, 8),
+                    "move_input_x": round(entity.move_input_x, 8),
+                    "move_input_y": round(entity.move_input_y, 8),
+                    "speed_per_tick": entity.speed_per_tick,
+                    "target_position": (
+                        [round(entity.target_position[0], 8), round(entity.target_position[1], 8)]
+                        if entity.target_position
+                        else None
+                    ),
+                    "template_id": entity.template_id,
+                    "source_action_uid": entity.source_action_uid,
+                    "selected_entity_id": entity.selected_entity_id,
+                    "inventory_container_id": entity.inventory_container_id,
+                },
+                **({"stats": entity.stats} if entity.stats is not None else {}),
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],
