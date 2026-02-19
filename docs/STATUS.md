@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 5R — Signal Occlusion / Door Attenuation Substrate.
-- **Next action:** Review and ratify the combat seam memo, then scope the smallest implementation slice for schema-only combat intent/outcome plumbing.
+- **Next action:** Scope the smallest implementation slice for schema-only combat intent/outcome plumbing using the amended facing/targeting seam contract.
 - **Phase status:** ✅ Phase 5R complete: structural edge-occlusion ledger, deterministic door-driven occlusion updates, and occlusion-aware signal perception forensics are implemented with save/load + hash coverage.
 
 ## What Exists (folders / entry points)
@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added `docs/COMBAT_SEAM_DESIGN.md` as an architectural combat seam contract for continuous tick combat with wound-ledger-first design and explicit deferred decisions.
-- Updated `docs/STATUS.md` phase metadata and verification section to reflect this docs-only planning commit.
-- No engine/runtime code paths were changed in this commit (documentation-only update).
+- Amended `docs/COMBAT_SEAM_DESIGN.md` to add authoritative facing-state contract requirements (serialized/hash-covered, topology-aware representation, movement-equivalent authority updates).
+- Extended the combat seam memo to support `attack_intent` targeting via entity, cell, or both; clarified deterministic consistency validation and outcome recording for cell-based resolution.
+- Documented called-shot defaults/forensics (`called_region` vs `region_hit`) and added deterministic weapon arc/attack-shape validation contract language without selecting mechanics math.
 
 
 ## Troubleshooting
