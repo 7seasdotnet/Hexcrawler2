@@ -4,6 +4,7 @@ import copy
 
 import pytest
 
+from hexcrawler.cli.viewer import SimulationController
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation
 from hexcrawler.sim.entity_stats import ENTITY_STAT_OUTCOME_EVENT_TYPE, EntityStatsExecutionModule
 from hexcrawler.sim.hash import simulation_hash
@@ -445,3 +446,102 @@ def test_door_toggle_changes_signal_perception_strength_deterministically() -> N
     closed_strength = run(open_first=False)
     open_strength = run(open_first=True)
     assert open_strength > closed_strength
+
+
+def test_controller_set_destination_does_not_mutate_authoritative_state_until_tick() -> None:
+    sim = _make_sim(seed=511)
+    controller = SimulationController(sim)
+    scout = sim.state.entities["scout"]
+    initial_position = (scout.position_x, scout.position_y)
+    initial_target = scout.target_position
+
+    controller.set_destination("scout", 1, 0)
+    controller.set_destination("scout", 1, 1)
+
+    assert (scout.position_x, scout.position_y) == initial_position
+    assert scout.target_position == initial_target
+    assert [command.command_type for command in sim.input_log] == ["set_target_position", "set_target_position"]
+    assert [command.tick for command in sim.input_log] == [0, 0]
+
+    sim.advance_ticks(1)
+
+    assert (scout.position_x, scout.position_y) != initial_position
+    assert scout.target_position is not None
+    expected_x, expected_y = sim.input_log[-1].params["x"], sim.input_log[-1].params["y"]
+    assert scout.target_position == (expected_x, expected_y)
+
+
+def test_near_cap_ledgers_remain_bounded_with_deterministic_eviction_and_replay_hash() -> None:
+    def build_run() -> Simulation:
+        sim = _make_sim(seed=512)
+        sim.register_rule_module(SignalPropagationModule())
+
+        for index in range(MAX_SIGNALS - 1):
+            sim.state.world.append_signal_record(
+                {
+                    "signal_id": f"prefill:{index}",
+                    "tick_emitted": 0,
+                    "space_id": "overworld",
+                    "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+                    "channel": "sound",
+                    "base_intensity": 4,
+                    "falloff_model": "linear",
+                    "max_radius": 2,
+                    "ttl_ticks": 20,
+                    "metadata": {},
+                }
+            )
+        for index in range(MAX_OCCLUSION_EDGES + 3):
+            sim.state.world.set_structure_occlusion_edge(
+                space_id="dungeon:test",
+                cell_a={"x": index, "y": 0},
+                cell_b={"x": index + 1, "y": 0},
+                occlusion_value=(index % 3) + 1,
+            )
+
+        for tick in range(5):
+            sim.append_command(
+                SimCommand(
+                    tick=tick,
+                    entity_id="scout",
+                    command_type=EMIT_SIGNAL_INTENT_COMMAND_TYPE,
+                    params={"channel": "sound", "base_intensity": 5, "max_radius": 4, "ttl_ticks": 10, "duration_ticks": 0},
+                )
+            )
+        return sim
+
+    sim_a = build_run()
+    sim_b = build_run()
+    sim_a.advance_ticks(6)
+    sim_b.advance_ticks(6)
+
+    assert len(sim_a.state.world.signals) == MAX_SIGNALS
+    assert len(sim_a.state.world.structure_occlusion) == MAX_OCCLUSION_EDGES
+    assert [row["signal_id"] for row in sim_a.state.world.signals[:3]] == ["prefill:4", "prefill:5", "prefill:6"]
+    assert [row["signal_id"] for row in sim_a.state.world.signals[-5:]] == [
+        "0:0",
+        "1:0",
+        "2:0",
+        "3:0",
+        "4:0",
+    ]
+    assert sim_a.state.world.structure_occlusion[0]["cell_a"] == {"x": 3, "y": 0}
+    assert sim_a.state.world.structure_occlusion[-1]["cell_a"] == {"x": MAX_OCCLUSION_EDGES + 2, "y": 0}
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
+
+
+@pytest.mark.parametrize("field_name,empty_value", [("tracks", []), ("signals", []), ("structure_occlusion", []), ("containers", {}), ("sites", {})])
+def test_world_optional_collections_absent_vs_empty_are_hash_equivalent(field_name: str, empty_value: object) -> None:
+    base_payload = Simulation(world=_build_world(), seed=513).simulation_payload()
+
+    payload_absent = copy.deepcopy(base_payload)
+    payload_absent["world"].pop(field_name, None)
+
+    payload_empty = copy.deepcopy(base_payload)
+    payload_empty["world"][field_name] = copy.deepcopy(empty_value)
+
+    sim_absent = Simulation.from_simulation_payload(payload_absent)
+    sim_empty = Simulation.from_simulation_payload(payload_empty)
+
+    assert sim_absent.state.world.to_dict() == sim_empty.state.world.to_dict()
+    assert simulation_hash(sim_absent) == simulation_hash(sim_empty)

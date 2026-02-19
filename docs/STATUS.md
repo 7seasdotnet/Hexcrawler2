@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 5R — Signal Occlusion / Door Attenuation Substrate.
-- **Next action:** Phase 5S — Continue substrate hardening around signal edge-cases and migration guards.
+- **Next action:** Phase 5S — Continue substrate hardening by expanding malformed-payload matrices and bounded-ledger smoke coverage.
 - **Phase status:** ✅ Phase 5R complete: structural edge-occlusion ledger, deterministic door-driven occlusion updates, and occlusion-aware signal perception forensics are implemented with save/load + hash coverage.
 
 ## What Exists (folders / entry points)
@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added `docs/ENGINE_INVARIANTS_REPORT.md`, a broad readiness audit mapping core engine invariants to enforcement points, concrete tests, and explicit risk/gap assessments.
-- Recorded deterministic evidence coverage by category (determinism/authority, serialization/hash, boundedness, time coherence, debug forensics, and structural complexity envelope).
-- Captured minimal follow-up test proposals for remaining medium-risk evidence gaps without altering gameplay semantics or substrate behavior.
+- Added controller mutation-seam regression coverage proving `SimulationController.set_destination(...)` queues commands without immediate authoritative state mutation and only mutates after tick execution.
+- Added a deterministic near-cap stress-style test for `signals` + `structure_occlusion` ledgers that crosses eviction boundaries, verifies cap enforcement + FIFO survivors, and verifies replay hash stability.
+- Added parameterized absent-vs-empty parity tests for selected optional world fields (`tracks`, `signals`, `structure_occlusion`, `containers`, `sites`) and updated `docs/ENGINE_INVARIANTS_REPORT.md` evidence/risk notes accordingly.
 
 
 ## Troubleshooting
