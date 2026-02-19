@@ -6,7 +6,8 @@ from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
 from hexcrawler.sim.core import EntityState, TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
-from hexcrawler.sim.location import LocationRef
+from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import HexCoord, RumorRecord
@@ -512,6 +513,11 @@ class SpawnMaterializationModule(RuleModule):
     def _materialize(self, sim: Simulation) -> None:
         state = self._rules_state(sim)
         materialized_ids = set(state["materialized_entity_ids"])
+        warnings = list(state["warnings"])
+        warning_keys = {
+            (warning["action_uid"], warning["reason"], warning["topology_type"])
+            for warning in warnings
+        }
 
         for descriptor in sim.state.world.spawn_descriptors:
             action_uid = self._required_non_empty_string(descriptor.get("action_uid"), field_name="action_uid")
@@ -520,20 +526,40 @@ class SpawnMaterializationModule(RuleModule):
             if quantity < 1:
                 raise ValueError("spawn_descriptor quantity must be >= 1")
 
-            spawn_hex = self._hex_from_location(descriptor.get("location"))
+            placement = self._placement_from_location(descriptor.get("location"))
+            if placement is None:
+                topology_type = self._topology_type_from_location(descriptor.get("location"))
+                warning_key = (action_uid, "unsupported_topology", topology_type)
+                if warning_key not in warning_keys:
+                    warnings.append(
+                        {
+                            "action_uid": action_uid,
+                            "reason": "unsupported_topology",
+                            "topology_type": topology_type,
+                        }
+                    )
+                    warning_keys.add(warning_key)
+                continue
             for index in range(quantity):
                 entity_id = self._entity_id(action_uid=action_uid, index=index)
                 if entity_id in sim.state.entities:
                     materialized_ids.add(entity_id)
                     continue
 
-                entity = EntityState.from_hex(entity_id=entity_id, hex_coord=spawn_hex, speed_per_tick=0.0)
+                entity = EntityState(
+                    entity_id=entity_id,
+                    position_x=placement["position_x"],
+                    position_y=placement["position_y"],
+                    speed_per_tick=0.0,
+                    space_id=placement["space_id"],
+                )
                 entity.template_id = template_id
                 entity.source_action_uid = action_uid
                 sim.add_entity(entity)
                 materialized_ids.add(entity_id)
 
         state["materialized_entity_ids"] = sorted(materialized_ids)
+        state["warnings"] = warnings[-200:]
         sim.set_rules_state(self.name, state)
 
     def _rules_state(self, sim: Simulation) -> dict[str, Any]:
@@ -546,17 +572,56 @@ class SpawnMaterializationModule(RuleModule):
             if not isinstance(value, str) or not value:
                 raise ValueError("spawn_materialization.rules_state.materialized_entity_ids entries must be strings")
             normalized_ids.append(value)
-        return {"materialized_entity_ids": sorted(set(normalized_ids))}
+        raw_warnings = state.get("warnings", [])
+        normalized_warnings: list[dict[str, Any]] = []
+        if isinstance(raw_warnings, list):
+            for warning in raw_warnings:
+                if not isinstance(warning, dict):
+                    continue
+                action_uid = warning.get("action_uid")
+                reason = warning.get("reason")
+                topology_type = warning.get("topology_type")
+                if isinstance(action_uid, str) and isinstance(reason, str) and isinstance(topology_type, str):
+                    normalized_warnings.append(
+                        {
+                            "action_uid": action_uid,
+                            "reason": reason,
+                            "topology_type": topology_type,
+                        }
+                    )
+        return {"materialized_entity_ids": sorted(set(normalized_ids)), "warnings": normalized_warnings}
 
-    def _hex_from_location(self, location_payload: Any):
+    def _placement_from_location(self, location_payload: Any) -> dict[str, Any] | None:
         if not isinstance(location_payload, dict):
             raise ValueError("spawn_descriptor.location must be an object")
         location = LocationRef.from_dict(location_payload)
-        if location.topology_type != "overworld_hex":
-            raise ValueError("spawn_descriptor.location.topology_type must be overworld_hex")
-        q = int(location.coord["q"])
-        r = int(location.coord["r"])
-        return HexCoord(q=q, r=r)
+        if location.topology_type == OVERWORLD_HEX_TOPOLOGY:
+            q = int(location.coord["q"])
+            r = int(location.coord["r"])
+            position_x, position_y = axial_to_world_xy(HexCoord(q=q, r=r))
+            return {
+                "space_id": location.space_id,
+                "position_x": position_x,
+                "position_y": position_y,
+            }
+        if location.topology_type == SQUARE_GRID_TOPOLOGY:
+            x = int(location.coord["x"])
+            y = int(location.coord["y"])
+            position_x, position_y = square_grid_cell_to_world_xy(x, y)
+            return {
+                "space_id": location.space_id,
+                "position_x": position_x,
+                "position_y": position_y,
+            }
+        return None
+
+    def _topology_type_from_location(self, location_payload: Any) -> str:
+        if not isinstance(location_payload, dict):
+            return ""
+        topology_type = location_payload.get("topology_type")
+        if not isinstance(topology_type, str):
+            return ""
+        return topology_type
 
     def _required_non_empty_string(self, value: Any, *, field_name: str) -> str:
         if not isinstance(value, str) or not value:
