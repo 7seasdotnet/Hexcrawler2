@@ -6,10 +6,7 @@ Scope: Substrate/readiness audit only (no gameplay semantics changes)
 ## Summary of Findings
 - **No confirmed hard invariant violations** were found in the audited substrate contracts.
 - Determinism, canonical serialization/hash coverage, and bounded same-tick execution guards have direct code enforcement and regression coverage.
-- **Highest current risks are evidence gaps, not observed failures**:
-  - **Medium:** no explicit regression asserting that viewer/controller surfaces cannot mutate state except through command/event seams.
-  - **Medium:** structural performance envelope is mostly contract-and-code boundedness, but lacks explicit stress/perf guard tests.
-  - **Low/Medium:** absent-vs-empty canonicalization is strongly covered for several payloads but not comprehensively for every optional world list/map field.
+- Evidence gaps called out by this audit now have direct regression coverage for controller mutation timing, near-cap bounded ledgers, and absent-vs-empty canonicalization parity on selected optional world fields.
 
 ---
 
@@ -24,9 +21,10 @@ Scope: Substrate/readiness audit only (no gameplay semantics changes)
 - **Current tests:**
   - `tests/test_viewer_controller.py::test_ascii_viewer_controller_goto_appends_command`
   - `tests/test_phase5q_integrity_audit.py::test_invalid_intents_fail_deterministically_without_mutation_across_new_seams`
-- **Gaps:** No dedicated negative test that attempts direct viewer-side mutation bypass (beyond destination command seam).
-- **Risk:** **Medium** (contract clear, test depth modest).
-- **Proposed minimal test(s):** Add a regression that drives viewer/controller operations and asserts world/entity changes only occur after ticks process queued commands/events.
+  - `tests/test_phase5q_integrity_audit.py::test_controller_set_destination_does_not_mutate_authoritative_state_until_tick`
+- **Gaps:** None significant for this seam after direct no-mutation timing regression coverage.
+- **Risk:** **Low**.
+- **Proposed minimal test(s):** None.
 
 ### Invariant 1.2 — Same seed + same input log => identical hash
 - **Statement:** Replayability contract: same initial conditions and input log produce identical simulation hash.
@@ -97,9 +95,10 @@ Scope: Substrate/readiness audit only (no gameplay semantics changes)
   - `tests/test_save_load.py::test_game_save_load_round_trip_preserves_spawn_descriptors_exactly`
   - `tests/test_save_load.py::test_game_save_load_round_trip_preserves_rumors_exactly`
   - `tests/test_world_spaces.py::test_world_state_from_legacy_payload_populates_default_overworld_space`
-- **Gaps:** Not every optional field has explicit absent-vs-empty round-trip assertion (e.g., `tracks`, some world maps).
-- **Risk:** **Low/Medium**.
-- **Proposed minimal test(s):** Add a focused absent-vs-empty parity test for `tracks`, `sites`, and `containers` empty/default forms.
+  - `tests/test_phase5q_integrity_audit.py::test_world_optional_collections_absent_vs_empty_are_hash_equivalent`
+- **Gaps:** Coverage is intentionally targeted (selected hash-relevant optional fields), not exhaustive for every optional payload field.
+- **Risk:** **Low**.
+- **Proposed minimal test(s):** Extend parameterized parity matrix only when new optional world collections/maps are introduced.
 
 ---
 
@@ -233,9 +232,10 @@ Scope: Substrate/readiness audit only (no gameplay semantics changes)
   - `tests/test_event_queue.py::test_same_tick_event_guard_fails_deterministically`
   - `tests/test_signal_propagation_module.py::test_signal_occlusion_path_cost_reduces_strength_deterministically`
   - `tests/test_phase5q_integrity_audit.py::test_door_toggle_changes_signal_perception_strength_deterministically`
-- **Gaps:** No explicit complexity/stress tests asserting acceptable behavior at upper bounded sizes.
-- **Risk:** **Medium** (evidence gap, not known failure).
-- **Proposed minimal test(s):** Add one deterministic stress test constructing near-cap `signals`/`structure_occlusion` and asserting bounded tick progress and stable hashes.
+  - `tests/test_phase5q_integrity_audit.py::test_near_cap_ledgers_remain_bounded_with_deterministic_eviction_and_replay_hash`
+- **Gaps:** No dedicated runtime benchmark in CI (intentional); structural boundedness now has near-cap deterministic stress-style evidence.
+- **Risk:** **Low/Medium**.
+- **Proposed minimal test(s):** Optional future benchmark harness outside unit-test suite.
 
 ---
 
