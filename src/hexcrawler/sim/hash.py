@@ -34,7 +34,9 @@ def simulation_hash(simulation: Simulation) -> str:
         "master_seed": simulation.master_seed,
         "rng_state": simulation.rng_state_payload(),
         "tick": simulation.state.tick,
-        "day": simulation.state.day,
+        "time": simulation.state.time.to_dict(),
+        "day": simulation.get_day_index(),
+        "tick_in_day": simulation.get_tick_in_day(),
         "world": simulation.state.world.to_dict(),
         "entities": [
             {

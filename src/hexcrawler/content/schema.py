@@ -340,6 +340,17 @@ def _validate_simulation_state(simulation_state: dict[str, Any]) -> None:
     if not isinstance(event_trace, list):
         raise ValueError("simulation_state.event_trace must be a list")
 
+    time_state = simulation_state.get("time")
+    if time_state is not None:
+        if not isinstance(time_state, dict):
+            raise ValueError("simulation_state.time must be an object")
+        ticks_per_day = time_state.get("ticks_per_day", 240)
+        if not isinstance(ticks_per_day, int) or ticks_per_day <= 0:
+            raise ValueError("simulation_state.time.ticks_per_day must be an integer > 0")
+        epoch_tick = time_state.get("epoch_tick", 0)
+        if not isinstance(epoch_tick, int):
+            raise ValueError("simulation_state.time.epoch_tick must be an integer")
+
     rng_state = simulation_state.get("rng_state")
     if not isinstance(rng_state, dict):
         raise ValueError("simulation_state.rng_state must be an object")
