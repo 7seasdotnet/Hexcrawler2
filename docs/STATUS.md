@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5K — Exploration Action Economy (time-costed actions).
-- **Next action:** Phase 5L — Site/Dungeon Interaction Hooks.
-- **Phase status:** ✅ Phase 5K scaffold complete (deterministic exploration intents schedule time-costed execution and emit structural outcomes).
+- **Current phase:** Phase 5L — Site/Dungeon Interaction Hooks (structural + time seam).
+- **Next action:** Phase 5M — Calendar/stats/perception seam (structural, no domain semantics).
+- **Phase status:** ✅ Phase 5L scaffold complete (deterministic site/dungeon interaction intents schedule execution and emit structural outcomes).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -27,6 +27,8 @@
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
   - Deterministic `enter_site` command seam that validates site/entrance/target-space records, routes valid requests through the existing `transition_space` seam, and emits deterministic `site_enter_outcome` forensic events (`applied`, `unknown_site`, `no_entrance`, `unknown_target_space`).
+  - Space interaction substrate for non-overworld spaces: deterministic canonical `SpaceState.doors` / `SpaceState.anchors` / `SpaceState.interactables` records with strict JSON-safe structural validation, back-compat defaults, and hash coverage through world serialization.
+  - Deterministic `interaction_intent` command seam via `InteractionExecutionModule`: validates intent/target/duration, schedules `interaction_execute`, enforces idempotence using serialized `rules_state["interaction"].executed_action_uids`, applies structural door/anchor/interactable mutations only, and emits deterministic forensic `interaction_outcome` events.
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
   - Deterministic `inventory_intent` command seam (`transfer`/`drop`/`pickup`/`consume`/`spawn`) with single authoritative apply path, no-negative enforcement, deterministic `action_uid` (`tick:command_index`), and serialized idempotence ledger in `rules_state["inventory_ledger"].applied_action_uids`.
@@ -163,12 +165,14 @@
 ## Current Verification Commands
 - `python -m pip install -r requirements.txt`
 - `python play.py [--seed N] [--load-save PATH] [--map-path PATH] [--headless]  # canonical launch`
+- `python play.py`
 - `python play.py --headless`
 - `HEXCRAWLER_HEADLESS=1 python play.py --headless`
 - `python play.py --load-save saves/canonical_with_artifacts.json`
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_interaction_execution_module.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/ui_demo.json --seed 7 --force`
 - `python play.py --load-save saves/ui_demo.json`
@@ -200,6 +204,7 @@
 - `inventory_intent` (simulation command seam; stackable inventory delta substrate)
 - `enter_site` (simulation command seam; structural site entrance transition router)
 - `explore_intent` (simulation command seam; time-costed exploration actions: `search`/`listen`/`rest`)
+- `interaction_intent` (simulation command seam; time-costed non-overworld interactions: `open`/`close`/`toggle`/`inspect`/`use`/`exit`)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -208,9 +213,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added deterministic `explore_intent` command handling through the new `ExplorationExecutionModule`, including serialized action UID ledgers for scheduled/completed exploration actions and deterministic failure outcomes for invalid intents.
-- Added minimal viewer integration for right-click `Explore...` actions (Search 60 / Listen 30 / Rest 120 ticks), command enqueueing via controller, and `exploration_outcome` visibility in the Outcomes tab.
-- Added deterministic test coverage for replay hash identity, duration enforcement, once-only completion across re-queued execute events, and save/load continuation without duplicate completion.
+- Added structural non-overworld interaction data seams in `SpaceState` (`doors`, `anchors`, `interactables`) with deterministic serialization, strict record validation, and backward-compatible load defaults when absent.
+- Added `InteractionExecutionModule` and `interaction_intent` command handling with deterministic time-cost scheduling, serialized idempotence ledger (`rules_state["interaction"]`), structural door state transitions, anchor exit routing, and `interaction_outcome` forensic events.
+- Added minimal viewer integration for non-overworld right-click interaction intents (door open/close/toggle, anchor exit, interactable inspect/use) plus outcome panel visibility and deterministic regression tests for replay/save-load/unknown-target/door-state behavior.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
