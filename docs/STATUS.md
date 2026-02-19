@@ -213,9 +213,7 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added structural non-overworld interaction data seams in `SpaceState` (`doors`, `anchors`, `interactables`) with deterministic serialization, strict record validation, and backward-compatible load defaults when absent.
-- Added `InteractionExecutionModule` and `interaction_intent` command handling with deterministic time-cost scheduling, serialized idempotence ledger (`rules_state["interaction"]`), structural door state transitions, anchor exit routing, and `interaction_outcome` forensic events.
-- Added minimal viewer integration for non-overworld right-click interaction intents (door open/close/toggle, anchor exit, interactable inspect/use) plus outcome panel visibility and deterministic regression tests for replay/save-load/unknown-target/door-state behavior.
+- Fixed SpawnMaterialization to support square_grid spawn descriptors and skip unsupported topologies without crashing; added regression tests.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

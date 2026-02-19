@@ -4,6 +4,7 @@ from hexcrawler.content.io import load_game_json, load_world_json, save_game_jso
 from hexcrawler.sim.core import Simulation
 from hexcrawler.sim.encounters import SpawnMaterializationModule
 from hexcrawler.sim.hash import simulation_hash
+from hexcrawler.sim.world import SpaceState
 
 
 def _spawn_descriptor(*, action_uid: str, quantity: int, q: int, r: int, template_id: str = "bandit_scouts") -> dict[str, object]:
@@ -82,3 +83,66 @@ def test_materialization_replay_stability_keeps_hash_and_spawn_ids_identical() -
 
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
     assert _spawn_entity_ids(sim_a) == _spawn_entity_ids(sim_b)
+
+
+def test_materialization_supports_square_grid_locations() -> None:
+    sim = _build_materialization_sim()
+    sim.state.world.spaces["dungeon"] = SpaceState(
+        space_id="dungeon",
+        topology_type="square_grid",
+        topology_params={"width": 8, "height": 8, "origin": {"x": 0, "y": 0}},
+    )
+    sim.state.world.append_spawn_descriptor(
+        {
+            "created_tick": 0,
+            "location": {
+                "space_id": "dungeon",
+                "topology_type": "square_grid",
+                "coord": {"x": 1, "y": 2},
+            },
+            "template_id": "bandit_scouts",
+            "quantity": 1,
+            "expires_tick": None,
+            "source_event_id": "evt-source",
+            "action_uid": "evt-spawn:dungeon",
+            "params": {},
+        }
+    )
+
+    sim.advance_ticks(1)
+
+    entity = sim.state.entities["spawn:evt-spawn:dungeon:0"]
+    assert entity.space_id == "dungeon"
+    assert entity.position_x == 1.5
+    assert entity.position_y == 2.5
+
+
+def test_materialization_skips_unsupported_topology_with_warning() -> None:
+    sim = _build_materialization_sim()
+    sim.state.world.append_spawn_descriptor(
+        {
+            "created_tick": 0,
+            "location": {
+                "space_id": "overworld",
+                "topology_type": "tri_grid",
+                "coord": {"x": 1, "y": 2},
+            },
+            "template_id": "bandit_scouts",
+            "quantity": 1,
+            "expires_tick": None,
+            "source_event_id": "evt-source",
+            "action_uid": "evt-spawn:unsupported",
+            "params": {},
+        }
+    )
+
+    sim.advance_ticks(1)
+
+    assert "spawn:evt-spawn:unsupported:0" not in sim.state.entities
+    assert sim.get_rules_state("spawn_materialization")["warnings"] == [
+        {
+            "action_uid": "evt-spawn:unsupported",
+            "reason": "unsupported_topology",
+            "topology_type": "tri_grid",
+        }
+    ]
