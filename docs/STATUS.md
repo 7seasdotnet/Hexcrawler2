@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6A — Combat Substrate Foundations (seams + state + tests, no combat math).
-- **Next action:** Start Phase 6B combat resolution stubs (intent taxonomy expansion + deterministic affected-target scaffolding) while keeping damage/armor/wound math deferred.
-- **Phase status:** ✅ Phase 6A complete: authoritative combat seam substrate (`attack_intent` -> `combat_outcome`), per-entity facing/cooldown/wounds state, and bounded forensic combat logging are implemented with save/load + hash coverage.
+- **Current phase:** Phase 6B — Combat Resolution Stubs (affected-target scaffolding, no combat math).
+- **Next action:** Expand 6B combat seams with deterministic multi-affected scaffolding consumers while deferring all damage/armor/wound mechanics.
+- **Phase status:** ✅ Phase 6A complete and 6B scaffolding in progress: `combat_outcome.affected[]` is now deterministic, bounded, and save/load stable for resolved target projection.
 
 
 ## What changed in this commit
-- Added Phase 6A combat substrate seams: `attack_intent` command intake with deterministic validation and `combat_outcome` forensic records (placeholder wound deltas only).
-- Added authoritative entity combat state (`facing`, `cooldown_until_tick`, `wounds`) with canonical defaults, strict load normalization, and hash coverage.
-- Added bounded `combat_log` ledger (`MAX_COMBAT_LOG`) plus deterministic regression tests for authority, cooldown gating, save/load+hash stability, FIFO eviction, and absent-vs-empty parity.
+- Added Phase 6B affected-target scaffolding: applied `combat_outcome` records now include deterministic `affected[]` entries (currently 0/1) with resolved entity/cell projection and stub wound deltas.
+- Added deterministic boundedness contract `MAX_AFFECTED_PER_ACTION = 8` with FIFO truncation (`keep first N`) in combat outcome normalization.
+- Added regression coverage for applied affected payloads, cell-only no-occupant rejection (`no_target_in_cell`), save/load+hash stability, and bounded affected truncation.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -25,6 +25,8 @@
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
+  - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing deterministic validation/range/cooldown checks, and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
+  - Combat outcomes support bounded deterministic affected-target projection via `affected[]` (cap: `MAX_AFFECTED_PER_ACTION = 8`, FIFO keep-first-N truncation), with applied entries carrying resolved `entity_id` + `cell` and rejected outcomes omitting `affected`.
   - Rumor pipeline seam (`RumorPipelineModule`) that deterministically creates `world.rumors` from executed `encounter_action_outcome` events, persists emitted-rumor ledger state in `rules_state["rumor_pipeline"]`, and runs serialized periodic propagation/expiration accounting (hop cap 4).
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
@@ -226,9 +228,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Hardening: canonicalize called-shot default token to `torso` (center-mass remains descriptive text only in docs and outcomes).
-- Hardening: ensure `CellRef.coord` validation in combat intake remains topology-owned, without generic length-2 combat-level assumptions.
-- Tests: add regressions for omitted/null called-shot default persistence and topology-attributed invalid coord rejection reasons.
+- Combat outcomes now emit deterministic bounded `affected[]` target projection entries for applied attacks (no combat math introduced).
+- Cell-only targeting now resolves deterministic occupancy and rejects empty target cells with `no_target_in_cell` outcomes.
+- Tests now cover affected payload correctness, save/load/hash stability, and explicit bounded truncation behavior for affected entries.
 
 
 ## Troubleshooting

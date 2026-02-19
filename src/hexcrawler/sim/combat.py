@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from hexcrawler.sim.core import SimCommand, Simulation
+from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, SimCommand, Simulation
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
@@ -52,6 +52,7 @@ class CombatExecutionModule(RuleModule):
             tags = []
 
         target_cell: dict[str, Any] | None = None
+        resolved_target_id: str | None = None
         reason = "resolved"
         applied = False
 
@@ -95,6 +96,14 @@ class CombatExecutionModule(RuleModule):
                         if attacker.space_id != str(target_cell["space_id"]):
                             reason = "space_mismatch"
 
+                    if reason == "resolved" and target_id_value is None and target_cell is not None:
+                        resolved_target_id = self._entity_id_at_cell(sim, target_cell)
+                        if resolved_target_id is None:
+                            reason = "no_target_in_cell"
+
+                    if reason == "resolved" and target_id_value is not None:
+                        resolved_target_id = target_id_value
+
                     if reason == "resolved" and self._mode_is_melee(mode):
                         attacker_location = self._entity_location(sim, attacker_id)
                         target_location = {
@@ -116,13 +125,20 @@ class CombatExecutionModule(RuleModule):
                         applied = True
                         attacker.cooldown_until_tick = int(command.tick) + PLACEHOLDER_COOLDOWN_TICKS
 
-        sim.append_combat_outcome(
-            {
+        affected = self._build_affected_outcomes(
+            sim=sim,
+            resolved_target_id=resolved_target_id,
+            called_region=called_region,
+            applied=applied,
+            reason=reason,
+        )
+
+        outcome = {
                 "tick": int(command.tick),
                 "intent": ATTACK_INTENT_COMMAND_TYPE,
                 "action_uid": f"{command.tick}:{command_index}",
                 "attacker_id": attacker_id if isinstance(attacker_id, str) else None,
-                "target_id": target_id if isinstance(target_id, str) else None,
+                "target_id": target_id if isinstance(target_id, str) else resolved_target_id,
                 "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
                 "mode": mode if isinstance(mode, str) else None,
                 "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
@@ -134,8 +150,59 @@ class CombatExecutionModule(RuleModule):
                 "roll_trace": [],
                 "tags": list(tags),
             }
-        )
+        if affected:
+            outcome["affected"] = affected
+        sim.append_combat_outcome(outcome)
         return True
+
+    @staticmethod
+    def _truncate_affected_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(entries) <= MAX_AFFECTED_PER_ACTION:
+            return entries
+        return entries[:MAX_AFFECTED_PER_ACTION]
+
+    @classmethod
+    def _build_affected_outcomes(
+        cls,
+        *,
+        sim: Simulation,
+        resolved_target_id: str | None,
+        called_region: str,
+        applied: bool,
+        reason: str,
+    ) -> list[dict[str, Any]]:
+        if not applied or resolved_target_id is None:
+            return []
+        resolved_coord = cls._entity_coord(sim, resolved_target_id)
+        resolved_entity = sim.state.entities.get(resolved_target_id)
+        if resolved_entity is None or resolved_coord is None:
+            return []
+        entries = [
+            {
+                "entity_id": resolved_target_id,
+                "cell": {"space_id": resolved_entity.space_id, "coord": resolved_coord},
+                "called_region": called_region,
+                "region_hit": called_region,
+                "wound_deltas": [],
+                "applied": True,
+                "reason": reason,
+            }
+        ]
+        return cls._truncate_affected_entries(entries)
+
+    @classmethod
+    def _entity_id_at_cell(cls, sim: Simulation, cell: dict[str, Any]) -> str | None:
+        matches: list[str] = []
+        for entity_id in sorted(sim.state.entities):
+            entity = sim.state.entities[entity_id]
+            if entity.space_id != str(cell["space_id"]):
+                continue
+            coord = cls._entity_coord(sim, entity_id)
+            if coord == cell["coord"]:
+                matches.append(entity_id)
+        if not matches:
+            return None
+        return matches[0]
 
     @staticmethod
     def _mode_is_melee(mode: str) -> bool:

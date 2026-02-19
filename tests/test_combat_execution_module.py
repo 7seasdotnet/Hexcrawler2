@@ -1,6 +1,6 @@
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, CombatExecutionModule
-from hexcrawler.sim.core import MAX_COMBAT_LOG, EntityState, SimCommand, Simulation
+from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, EntityState, SimCommand, Simulation
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.world import HexCoord
 
@@ -59,6 +59,42 @@ def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> Non
     assert rejected["reason"] == "out_of_range"
 
 
+def test_applied_attack_populates_affected_target_fields() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": "overworld", "coord": {"q": 1, "r": 0}}))
+    sim.advance_ticks(2)
+
+    outcome = sim.state.combat_log[0]
+    assert outcome["applied"] is True
+    assert outcome["reason"] == "resolved"
+    assert outcome["called_region"] == "torso"
+    assert outcome["region_hit"] == "torso"
+
+    affected = outcome["affected"]
+    assert len(affected) == 1
+    assert affected[0]["entity_id"] == "target"
+    assert affected[0]["cell"] == {"space_id": "overworld", "coord": {"q": 1, "r": 0}}
+    assert affected[0]["called_region"] == "torso"
+    assert affected[0]["region_hit"] == "torso"
+    assert affected[0]["wound_deltas"] == []
+    assert affected[0]["applied"] is True
+    assert affected[0]["reason"] == "resolved"
+
+
+def test_cell_only_targeting_without_occupant_is_rejected_and_omits_affected() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": "overworld", "coord": {"q": 1, "r": -1}}))
+    sim.advance_ticks(2)
+
+    outcome = sim.state.combat_log[0]
+    assert outcome["applied"] is False
+    assert outcome["reason"] == "no_target_in_cell"
+    assert "affected" not in outcome
+
+    restored = Simulation.from_simulation_payload(sim.simulation_payload())
+    assert restored.state.combat_log[0] == outcome
+
+
 def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
     sim = _build_sim()
     sim.append_command(_attack_command(tick=0))
@@ -103,6 +139,39 @@ def test_combat_log_is_bounded_with_deterministic_fifo_eviction() -> None:
     assert len(sim.state.combat_log) == MAX_COMBAT_LOG
     assert sim.state.combat_log[0]["tick"] == 3
     assert sim.state.combat_log[-1]["tick"] == MAX_COMBAT_LOG + 2
+
+
+def test_affected_entries_are_truncated_to_max_bound() -> None:
+    oversized = [{"entity_id": str(index), "wound_deltas": []} for index in range(MAX_AFFECTED_PER_ACTION + 3)]
+    normalized = Simulation.from_simulation_payload(
+        {
+            **_build_sim().simulation_payload(),
+            "combat_log": [
+                {
+                    "tick": 0,
+                    "intent": ATTACK_INTENT_COMMAND_TYPE,
+                    "action_uid": "0:0",
+                    "attacker_id": "attacker",
+                    "target_id": "target",
+                    "target_cell": {"space_id": "overworld", "coord": {"q": 1, "r": 0}},
+                    "mode": "melee",
+                    "weapon_ref": None,
+                    "called_region": "torso",
+                    "region_hit": "torso",
+                    "applied": True,
+                    "reason": "resolved",
+                    "wound_deltas": [],
+                    "roll_trace": [],
+                    "tags": [],
+                    "affected": oversized,
+                }
+            ],
+        }
+    )
+
+    affected = normalized.state.combat_log[0]["affected"]
+    assert len(affected) == MAX_AFFECTED_PER_ACTION
+    assert [row["entity_id"] for row in affected] == [str(index) for index in range(MAX_AFFECTED_PER_ACTION)]
 
 
 def test_absent_vs_explicit_default_entity_fields_have_matching_hash() -> None:
