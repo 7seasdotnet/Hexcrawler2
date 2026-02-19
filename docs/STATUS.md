@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added Phase 5O signal substrate module with deterministic delayed `emit_signal_intent` and `perceive_signal_intent` command handling, serialized idempotence ledgers, and deterministic forensic outcomes.
-- Added topology-aware signal helpers (`distance_between_locations`, `compute_signal_strength`) and a bounded deterministic FIFO world signal container (`MAX_SIGNALS`) for hash-covered save/load stability.
-- Added deterministic tests covering emission/perception outcomes, FIFO eviction, save/load idempotence, expiry filtering, and replay/hash identity for the new signal substrate.
+- Added `docs/FUTURE_FEATURES_NOT_TO_LOCK_OUT.md` as a non-roadmap constraints checklist to preserve future architecture feasibility without changing current contracts.
+- Captured explicit must-not-lock-out constraints for multiplayer-safe authority boundaries, editor-first data extensibility, topology evolution, deferred signal propagation sophistication, wounds/armor data-first design, content pipeline compatibility, and bounded performance behavior.
+- Kept phase scope unchanged (Phase 5O/5P) and made no simulation/runtime code changes.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
