@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added hash-covered bounded `world.structure_occlusion` edge ledger with canonical space-aware edge keys, deterministic FIFO truncation, load-time normalization, and save/load round-trip support.
-- Extended door interaction mutation path so open/close/toggle updates the associated structural occlusion edge deterministically through the same authoritative command/event pipeline.
-- Extended deterministic signal perception to use bounded topology-aware path cost (`step_count + occlusion_cost`) and emit occlusion forensic fields (`occlusion_cost`, `step_count`, `effective_path_cost`) in perception outcomes.
+- Added `docs/ENGINE_INVARIANTS_REPORT.md`, a broad readiness audit mapping core engine invariants to enforcement points, concrete tests, and explicit risk/gap assessments.
+- Recorded deterministic evidence coverage by category (determinism/authority, serialization/hash, boundedness, time coherence, debug forensics, and structural complexity envelope).
+- Captured minimal follow-up test proposals for remaining medium-risk evidence gaps without altering gameplay semantics or substrate behavior.
 
 
 ## Troubleshooting
