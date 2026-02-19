@@ -11,6 +11,7 @@ RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
 DEFAULT_OVERWORLD_SPACE_ID = "overworld"
 SQUARE_GRID_TOPOLOGY = "square_grid"
+MAX_SIGNALS = 256
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -697,7 +698,7 @@ class WorldState:
         if self.signals:
             payload["signals"] = sorted(
                 (dict(record) for record in self.signals),
-                key=lambda record: str(record.get("signal_uid", "")),
+                key=lambda record: str(record.get("signal_id", record.get("signal_uid", ""))),
             )
         if self.tracks:
             payload["tracks"] = sorted(
@@ -737,7 +738,7 @@ class WorldState:
         if self.signals:
             payload["signals"] = sorted(
                 (dict(record) for record in self.signals),
-                key=lambda record: str(record.get("signal_uid", "")),
+                key=lambda record: str(record.get("signal_id", record.get("signal_uid", ""))),
             )
         if self.tracks:
             payload["tracks"] = sorted(
@@ -864,6 +865,11 @@ class WorldState:
                 return False
         self.signals.append(dict(record))
         return True
+
+    def append_signal_record(self, record: dict[str, Any]) -> None:
+        self.signals.append(dict(record))
+        if len(self.signals) > MAX_SIGNALS:
+            del self.signals[: len(self.signals) - MAX_SIGNALS]
 
     def upsert_track(self, record: dict[str, Any]) -> bool:
         track_uid = str(record["track_uid"])
