@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 5R — Signal Occlusion / Door Attenuation Substrate.
-- **Next action:** TBD — Continue post-5R hardening by expanding malformed-payload matrices and bounded-ledger smoke coverage.
+- **Next action:** Review and ratify the combat seam memo, then scope the smallest implementation slice for schema-only combat intent/outcome plumbing.
 - **Phase status:** ✅ Phase 5R complete: structural edge-occlusion ledger, deterministic door-driven occlusion updates, and occlusion-aware signal perception forensics are implemented with save/load + hash coverage.
 
 ## What Exists (folders / entry points)
@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Hardening pass (tests/docs only): clarified the prior invariant-evidence test additions as post-5R hardening without introducing a new phase label.
-- Removed erroneous phase-label wording from the phase ledger so roadmap naming remains coherent (Phase 5R complete, next action remains TBD).
-- Verified repository references for this labeling issue and retained existing invariant evidence/test references unchanged.
+- Added `docs/COMBAT_SEAM_DESIGN.md` as an architectural combat seam contract for continuous tick combat with wound-ledger-first design and explicit deferred decisions.
+- Updated `docs/STATUS.md` phase metadata and verification section to reflect this docs-only planning commit.
+- No engine/runtime code paths were changed in this commit (documentation-only update).
 
 
 ## Troubleshooting
