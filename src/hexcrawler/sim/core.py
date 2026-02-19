@@ -30,6 +30,7 @@ RNG_SIM_STREAM_NAME = "rng_sim"
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 MAX_EVENT_TRACE = 256
 MAX_COMBAT_LOG = 256
+MAX_AFFECTED_PER_ACTION = 8
 MAX_WOUNDS = 64
 MAX_EVENTS_PER_TICK = 10_000
 INVENTORY_OUTCOME_EVENT_TYPE = "inventory_outcome"
@@ -117,6 +118,51 @@ def _normalize_cooldown_until_tick(value: Any) -> int:
     return _require_int(value, field_name="entity.cooldown_until_tick", minimum=0)
 
 
+def _normalize_combat_affected_entry(entry: Any, *, index: int) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise ValueError(f"combat_log.affected[{index}] must be an object")
+    normalized = copy.deepcopy(entry)
+
+    for key in ("entity_id", "called_region", "region_hit", "reason"):
+        if key in normalized and normalized[key] is not None and not isinstance(normalized[key], str):
+            raise ValueError(f"combat_log.affected[{index}].{key} must be a string or null")
+
+    if "cell" in normalized and normalized["cell"] is not None:
+        cell = normalized["cell"]
+        if not isinstance(cell, dict):
+            raise ValueError(f"combat_log.affected[{index}].cell must be an object or null")
+        space_id = cell.get("space_id")
+        coord = cell.get("coord")
+        if not isinstance(space_id, str) or not space_id:
+            raise ValueError(f"combat_log.affected[{index}].cell.space_id must be a non-empty string")
+        if not isinstance(coord, dict):
+            raise ValueError(f"combat_log.affected[{index}].cell.coord must be an object")
+        _validate_json_value(coord, field_name=f"combat_log.affected[{index}].cell.coord")
+        normalized["cell"] = {"space_id": space_id, "coord": copy.deepcopy(coord)}
+
+    wound_deltas = normalized.get("wound_deltas", [])
+    if not isinstance(wound_deltas, list):
+        raise ValueError(f"combat_log.affected[{index}].wound_deltas must be a list")
+    normalized["wound_deltas"] = copy.deepcopy(wound_deltas)
+
+    if "applied" in normalized and not isinstance(normalized["applied"], bool):
+        raise ValueError(f"combat_log.affected[{index}].applied must be boolean")
+
+    _validate_json_value(normalized, field_name=f"combat_log.affected[{index}]")
+    return normalized
+
+
+def _normalize_combat_affected_list(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("combat_log.affected must be a list")
+    normalized = [_normalize_combat_affected_entry(entry, index=index) for index, entry in enumerate(value)]
+    if len(normalized) > MAX_AFFECTED_PER_ACTION:
+        return normalized[:MAX_AFFECTED_PER_ACTION]
+    return normalized
+
+
 def _normalize_combat_log_entry(entry: Any) -> dict[str, Any]:
     if not isinstance(entry, dict):
         raise ValueError("combat_log entries must be objects")
@@ -168,9 +214,8 @@ def _normalize_combat_log_entry(entry: Any) -> dict[str, Any]:
             raise ValueError("combat_log.target_cell.coord must be an object")
         _validate_json_value(coord, field_name="combat_log.target_cell.coord")
         normalized["target_cell"] = {"space_id": space_id, "coord": copy.deepcopy(coord)}
-    for key in ("affected",):
-        if key in normalized and normalized[key] is not None and not isinstance(normalized[key], list):
-            raise ValueError("combat_log.affected must be a list when present")
+    if "affected" in normalized:
+        normalized["affected"] = _normalize_combat_affected_list(normalized["affected"])
     _validate_json_value(normalized, field_name="combat_log")
     return normalized
 
