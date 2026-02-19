@@ -172,6 +172,12 @@ class InteractionExecutionModule(RuleModule):
                                 door.state = "closed" if door.state == "open" else "open"
                             outcome = "applied"
                             details = {"no_change": prior_state == door.state, "state": door.state}
+                            sim.state.world.set_structure_occlusion_edge(
+                                space_id=space.space_id,
+                                cell_a=door.a,
+                                cell_b=door.b,
+                                occlusion_value=1 if door.state == "closed" else 0,
+                            )
                         else:
                             outcome = "invalid_params"
                 elif target_kind == "interactable":

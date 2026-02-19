@@ -122,6 +122,13 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
         if not isinstance(signal, dict):
             raise ValueError(f"{field_prefix}.signals[{index}] must be an object")
 
+    structure_occlusion = payload.get("structure_occlusion", [])
+    if not isinstance(structure_occlusion, list):
+        raise ValueError(f"{field_prefix}.structure_occlusion must be a list when present")
+    for index, edge in enumerate(structure_occlusion):
+        if not isinstance(edge, dict):
+            raise ValueError(f"{field_prefix}.structure_occlusion[{index}] must be an object")
+
     tracks = payload.get("tracks", [])
     if not isinstance(tracks, list):
         raise ValueError(f"{field_prefix}.tracks must be a list when present")
