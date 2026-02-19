@@ -520,6 +520,10 @@ class Simulation:
             self._execute_inventory_intent(command, command_index=command_index)
             return
 
+        for module in self.rule_modules:
+            if module.on_command(self, command, command_index):
+                return
+
         entity_id = command.entity_id
         if entity_id is None or entity_id not in self.state.entities:
             return

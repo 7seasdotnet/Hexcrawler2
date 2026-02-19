@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5J2c — Canonical Launcher + Organic Marker Placement Finalization (viewer-only UX + launch hygiene).
-- **Next action:** Phase 5K — Exploration Action Economy (time-costed actions).
-- **Phase status:** ✅ Phase 5J2c complete (single canonical launcher path + deterministic organic marker placement/labels with render-hit-test parity).
+- **Current phase:** Phase 5K — Exploration Action Economy (time-costed actions).
+- **Next action:** Phase 5L — Site/Dungeon Interaction Hooks.
+- **Phase status:** ✅ Phase 5K scaffold complete (deterministic exploration intents schedule time-costed execution and emit structural outcomes).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -30,7 +30,8 @@
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
   - Deterministic `inventory_intent` command seam (`transfer`/`drop`/`pickup`/`consume`/`spawn`) with single authoritative apply path, no-negative enforcement, deterministic `action_uid` (`tick:command_index`), and serialized idempotence ledger in `rules_state["inventory_ledger"].applied_action_uids`.
-  - Deterministic forensic `inventory_outcome` event-trace entries for every intent (`applied`, `already_applied`, `insufficient_quantity`, `unknown_item`, `unknown_container`, `invalid_quantity`, `unsupported_reason`).
+  - Deterministic forensic `inventory_outcome` event-trace entries for every intent (`applied`, `already_applied`, `insufficient_quantity`, `unknown_item`, `unknown_container`, `invalid_quantity`, `unsupported_reason`) and deterministic failure handling.
+  - Exploration action economy seam (`ExplorationExecutionModule`) that consumes `explore_intent` commands (`search`/`listen`/`rest`), schedules serialized `explore_execute` events at `tick + duration_ticks`, and emits structural `exploration_outcome` events exactly once per action UID with save/load-safe idempotence via `rules_state["exploration"]`.
   - Deterministic supply profile content loader (`content/supplies/supply_profiles.json`) with strict schema validation + deterministic normalization (`hexcrawler.content.supplies`).
   - Deterministic `SupplyConsumptionModule` periodic accounting seam that consumes configured supplies via the authoritative inventory apply path, with per-attempt deterministic `action_uid` and idempotence ledger in `rules_state["supply_consumption"]`.
   - Deterministic forensic `supply_outcome` event-trace entries (`consumed`, `insufficient_supply`, `already_applied`, `unknown_item`, `no_inventory_container`) and warning stubs in `rules_state["supply_consumption"].warnings`.
@@ -198,6 +199,7 @@
 - `transition_space` (simulation command seam; structural space transition only)
 - `inventory_intent` (simulation command seam; stackable inventory delta substrate)
 - `enter_site` (simulation command seam; structural site entrance transition router)
+- `explore_intent` (simulation command seam; time-costed exploration actions: `search`/`listen`/`rest`)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -206,9 +208,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Canonical launch path is now `python play.py`; it auto-creates/loads `saves/canonical_viewer_save.json` from `content/examples/viewer_map.json` (seed 7), always enables encounters, and avoids manual `PYTHONPATH` setup.
-- Viewer marker UX now uses deterministic SHA-256-derived organic in-cell scatter placement with minimum separation and render/hit-test parity for both `overworld_hex` and `square_grid` spaces; context menus list all nearby markers deterministically.
-- Marker labels remain always-on with halo/outline and stable truncation/short-id fallbacks; compact legend remains in the debug panel.
+- Added deterministic `explore_intent` command handling through the new `ExplorationExecutionModule`, including serialized action UID ledgers for scheduled/completed exploration actions and deterministic failure outcomes for invalid intents.
+- Added minimal viewer integration for right-click `Explore...` actions (Search 60 / Listen 30 / Rest 120 ticks), command enqueueing via controller, and `exploration_outcome` visibility in the Outcomes tab.
+- Added deterministic test coverage for replay hash identity, duration enforcement, once-only completion across re-queued execute events, and save/load continuation without duplicate completion.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

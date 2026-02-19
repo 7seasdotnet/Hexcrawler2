@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hexcrawler.sim.core import SimEvent, Simulation
+    from hexcrawler.sim.core import SimCommand, SimEvent, Simulation
 
 
 class RuleModule:
@@ -23,6 +23,11 @@ class RuleModule:
 
     def on_tick_end(self, sim: Simulation, tick: int) -> None:
         """Called at the end of each authoritative simulation tick."""
+
+
+    def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        """Called for each command at its scheduled tick; return True when handled."""
+        return False
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
         """Called after each event is executed on its scheduled tick."""
