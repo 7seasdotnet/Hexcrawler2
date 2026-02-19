@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+import copy
+from dataclasses import dataclass
+from typing import Any
+
+from hexcrawler.sim.core import SimCommand, SimEvent, Simulation
+from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.world import HexCoord
+
+EMIT_SIGNAL_INTENT_COMMAND_TYPE = "emit_signal_intent"
+PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE = "perceive_signal_intent"
+SIGNAL_EMIT_EXECUTE_EVENT_TYPE = "signal_emit_execute"
+SIGNAL_PERCEIVE_EXECUTE_EVENT_TYPE = "perceive_signal_execute"
+SIGNAL_EMIT_OUTCOME_EVENT_TYPE = "signal_emit_outcome"
+SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE = "signal_perception_outcome"
+
+
+@dataclass(frozen=True)
+class SignalRecord:
+    signal_id: str
+    tick_emitted: int
+    space_id: str
+    origin: LocationRef
+    channel: str
+    base_intensity: int
+    falloff_model: str
+    max_radius: int
+    ttl_ticks: int
+    metadata: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "signal_id": self.signal_id,
+            "tick_emitted": self.tick_emitted,
+            "space_id": self.space_id,
+            "origin": self.origin.to_dict(),
+            "channel": self.channel,
+            "base_intensity": self.base_intensity,
+            "falloff_model": self.falloff_model,
+            "max_radius": self.max_radius,
+            "ttl_ticks": self.ttl_ticks,
+            "metadata": copy.deepcopy(self.metadata),
+        }
+
+
+def distance_between_locations(a: LocationRef, b: LocationRef) -> int | None:
+    if a.space_id != b.space_id:
+        return None
+    if a.topology_type != b.topology_type:
+        return None
+
+    if a.topology_type == OVERWORLD_HEX_TOPOLOGY:
+        hex_a = HexCoord.from_dict(a.coord)
+        hex_b = HexCoord.from_dict(b.coord)
+        dq = hex_a.q - hex_b.q
+        dr = hex_a.r - hex_b.r
+        ds = (hex_a.q + hex_a.r) - (hex_b.q + hex_b.r)
+        return int((abs(dq) + abs(dr) + abs(ds)) / 2)
+
+    if a.topology_type == SQUARE_GRID_TOPOLOGY:
+        ax = int(a.coord["x"])
+        ay = int(a.coord["y"])
+        bx = int(b.coord["x"])
+        by = int(b.coord["y"])
+        return abs(ax - bx) + abs(ay - by)
+
+    return None
+
+
+def compute_signal_strength(signal: SignalRecord, listener: LocationRef, current_tick: int) -> int:
+    expires_tick = signal.tick_emitted + signal.ttl_ticks
+    if current_tick > expires_tick:
+        return 0
+
+    distance = distance_between_locations(signal.origin, listener)
+    if distance is None or distance > signal.max_radius:
+        return 0
+
+    if signal.falloff_model != "linear":
+        return 0
+
+    return max(0, signal.base_intensity - distance)
+
+
+class SignalPropagationModule(RuleModule):
+    name = "signal_propagation"
+
+    _ALLOWED_CHANNELS = {"sound"}
+
+    def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type == EMIT_SIGNAL_INTENT_COMMAND_TYPE:
+            self._handle_emit_command(sim, command, command_index=command_index)
+            return True
+        if command.command_type == PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE:
+            self._handle_perceive_command(sim, command, command_index=command_index)
+            return True
+        return False
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == SIGNAL_EMIT_EXECUTE_EVENT_TYPE:
+            self._handle_emit_execute(sim, event)
+            return
+        if event.event_type == SIGNAL_PERCEIVE_EXECUTE_EVENT_TYPE:
+            self._handle_perceive_execute(sim, event)
+
+    def _handle_emit_command(self, sim: Simulation, command: SimCommand, *, command_index: int) -> None:
+        action_uid = f"{command.tick}:{command_index}"
+        channel = command.params.get("channel")
+        base_intensity = command.params.get("base_intensity")
+        max_radius = command.params.get("max_radius")
+        ttl_ticks = command.params.get("ttl_ticks")
+        duration_ticks = command.params.get("duration_ticks")
+
+        if not isinstance(channel, str) or channel not in self._ALLOWED_CHANNELS:
+            self._schedule_emit_outcome(sim, tick=command.tick, action_uid=action_uid, entity_id=command.entity_id, channel=channel, outcome="invalid_params")
+            return
+        if not self._is_non_negative_int(base_intensity, max_radius, ttl_ticks, duration_ticks):
+            self._schedule_emit_outcome(sim, tick=command.tick, action_uid=action_uid, entity_id=command.entity_id, channel=channel, outcome="invalid_params")
+            return
+        if command.entity_id is None or command.entity_id not in sim.state.entities:
+            self._schedule_emit_outcome(sim, tick=command.tick, action_uid=action_uid, entity_id=command.entity_id, channel=channel, outcome="unknown_entity")
+            return
+
+        origin = self._entity_location(sim, command.entity_id)
+        sim.schedule_event_at(
+            tick=command.tick + int(duration_ticks),
+            event_type=SIGNAL_EMIT_EXECUTE_EVENT_TYPE,
+            params={
+                "action_uid": action_uid,
+                "entity_id": command.entity_id,
+                "channel": channel,
+                "base_intensity": int(base_intensity),
+                "max_radius": int(max_radius),
+                "ttl_ticks": int(ttl_ticks),
+                "origin": origin.to_dict(),
+                "metadata": copy.deepcopy(command.params.get("metadata", {})),
+                "falloff_model": "linear",
+            },
+        )
+
+    def _handle_perceive_command(self, sim: Simulation, command: SimCommand, *, command_index: int) -> None:
+        action_uid = f"{command.tick}:{command_index}"
+        channel = command.params.get("channel")
+        radius = command.params.get("radius")
+        duration_ticks = command.params.get("duration_ticks")
+
+        if not isinstance(channel, str) or channel not in self._ALLOWED_CHANNELS:
+            self._schedule_perceive_outcome(sim, tick=command.tick, action_uid=action_uid, entity_id=command.entity_id, channel=channel, radius=radius, outcome="invalid_params", hits=[])
+            return
+        if not self._is_non_negative_int(radius, duration_ticks):
+            self._schedule_perceive_outcome(sim, tick=command.tick, action_uid=action_uid, entity_id=command.entity_id, channel=channel, radius=radius, outcome="invalid_params", hits=[])
+            return
+        if command.entity_id is None or command.entity_id not in sim.state.entities:
+            self._schedule_perceive_outcome(sim, tick=command.tick, action_uid=action_uid, entity_id=command.entity_id, channel=channel, radius=radius, outcome="unknown_entity", hits=[])
+            return
+
+        sim.schedule_event_at(
+            tick=command.tick + int(duration_ticks),
+            event_type=SIGNAL_PERCEIVE_EXECUTE_EVENT_TYPE,
+            params={
+                "action_uid": action_uid,
+                "entity_id": command.entity_id,
+                "channel": channel,
+                "radius": int(radius),
+            },
+        )
+
+    def _handle_emit_execute(self, sim: Simulation, event: SimEvent) -> None:
+        state = self._rules_state(sim, "signal_emission")
+        action_uid = str(event.params.get("action_uid", ""))
+        if action_uid in state["executed_action_uids"]:
+            self._schedule_emit_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=event.params.get("entity_id"), channel=event.params.get("channel"), outcome="already_applied")
+            return
+
+        channel = event.params.get("channel")
+        if (
+            not action_uid
+            or not isinstance(channel, str)
+            or channel not in self._ALLOWED_CHANNELS
+            or not self._is_non_negative_int(event.params.get("base_intensity"), event.params.get("max_radius"), event.params.get("ttl_ticks"))
+            or not isinstance(event.params.get("origin"), dict)
+        ):
+            self._mark_executed(sim, "signal_emission", action_uid)
+            self._schedule_emit_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=event.params.get("entity_id"), channel=channel, outcome="invalid_params")
+            return
+
+        entity_id = event.params.get("entity_id")
+        if not isinstance(entity_id, str) or entity_id not in sim.state.entities:
+            self._mark_executed(sim, "signal_emission", action_uid)
+            self._schedule_emit_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=entity_id, channel=channel, outcome="unknown_entity")
+            return
+
+        origin = LocationRef.from_dict(dict(event.params["origin"]))
+        signal = SignalRecord(
+            signal_id=action_uid,
+            tick_emitted=event.tick,
+            space_id=origin.space_id,
+            origin=origin,
+            channel=channel,
+            base_intensity=int(event.params["base_intensity"]),
+            falloff_model="linear",
+            max_radius=int(event.params["max_radius"]),
+            ttl_ticks=int(event.params["ttl_ticks"]),
+            metadata=dict(event.params.get("metadata", {})),
+        )
+        sim.state.world.append_signal_record(signal.to_dict())
+        self._mark_executed(sim, "signal_emission", action_uid)
+        self._schedule_emit_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=entity_id, channel=channel, outcome="applied")
+
+    def _handle_perceive_execute(self, sim: Simulation, event: SimEvent) -> None:
+        state = self._rules_state(sim, "signal_perception")
+        action_uid = str(event.params.get("action_uid", ""))
+        if action_uid in state["executed_action_uids"]:
+            self._schedule_perceive_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=event.params.get("entity_id"), channel=event.params.get("channel"), radius=event.params.get("radius"), outcome="already_applied", hits=[])
+            return
+
+        entity_id = event.params.get("entity_id")
+        channel = event.params.get("channel")
+        radius = event.params.get("radius")
+        if not action_uid or not isinstance(channel, str) or channel not in self._ALLOWED_CHANNELS or not self._is_non_negative_int(radius):
+            self._mark_executed(sim, "signal_perception", action_uid)
+            self._schedule_perceive_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=entity_id, channel=channel, radius=radius, outcome="invalid_params", hits=[])
+            return
+
+        if not isinstance(entity_id, str) or entity_id not in sim.state.entities:
+            self._mark_executed(sim, "signal_perception", action_uid)
+            self._schedule_perceive_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=entity_id, channel=channel, radius=radius, outcome="unknown_entity", hits=[])
+            return
+
+        listener = self._entity_location(sim, entity_id)
+        hits: list[dict[str, int | str]] = []
+        for record in sim.state.world.signals:
+            signal = self._signal_from_dict(record)
+            if signal is None or signal.channel != channel or signal.space_id != listener.space_id:
+                continue
+            distance = distance_between_locations(signal.origin, listener)
+            if distance is None or distance > int(radius):
+                continue
+            strength = compute_signal_strength(signal, listener, event.tick)
+            if strength <= 0:
+                continue
+            hits.append(
+                {
+                    "signal_id": signal.signal_id,
+                    "distance": distance,
+                    "computed_strength": strength,
+                    "age_ticks": event.tick - signal.tick_emitted,
+                }
+            )
+
+        hits.sort(key=lambda entry: (str(entry["signal_id"]), int(entry["distance"])))
+        self._mark_executed(sim, "signal_perception", action_uid)
+        self._schedule_perceive_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=entity_id, channel=channel, radius=radius, outcome="completed", hits=hits)
+
+    def _rules_state(self, sim: Simulation, key: str) -> dict[str, Any]:
+        root = sim.get_rules_state(self.name)
+        state = root.get(key, {})
+        if not isinstance(state, dict):
+            raise ValueError(f"{self.name}.{key} must be an object")
+        executed = state.get("executed_action_uids", [])
+        if not isinstance(executed, list):
+            raise ValueError(f"{self.name}.{key}.executed_action_uids must be a list")
+        normalized = sorted({str(uid) for uid in executed if isinstance(uid, str) and uid})
+        state["executed_action_uids"] = normalized
+        root[key] = state
+        sim.set_rules_state(self.name, root)
+        return state
+
+    def _mark_executed(self, sim: Simulation, key: str, action_uid: str) -> None:
+        if not action_uid:
+            return
+        root = sim.get_rules_state(self.name)
+        bucket = root.get(key, {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+        executed = bucket.get("executed_action_uids", [])
+        if not isinstance(executed, list):
+            executed = []
+        deduped = sorted({str(uid) for uid in executed if isinstance(uid, str) and uid} | {action_uid})
+        bucket["executed_action_uids"] = deduped
+        root[key] = bucket
+        sim.set_rules_state(self.name, root)
+
+    def _schedule_emit_outcome(self, sim: Simulation, *, tick: int, action_uid: str, entity_id: Any, channel: Any, outcome: str) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=SIGNAL_EMIT_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": entity_id,
+                "action_uid": action_uid,
+                "channel": str(channel) if isinstance(channel, str) else "",
+                "outcome": outcome,
+            },
+        )
+
+    def _schedule_perceive_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        action_uid: str,
+        entity_id: Any,
+        channel: Any,
+        radius: Any,
+        outcome: str,
+        hits: list[dict[str, Any]],
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": entity_id,
+                "action_uid": action_uid,
+                "channel": str(channel) if isinstance(channel, str) else "",
+                "radius": int(radius) if isinstance(radius, int) and radius >= 0 else 0,
+                "outcome": outcome,
+                "hits": copy.deepcopy(hits),
+            },
+        )
+
+    def _entity_location(self, sim: Simulation, entity_id: str) -> LocationRef:
+        entity = sim.state.entities[entity_id]
+        space = sim.state.world.spaces.get(entity.space_id)
+        if space is not None and space.topology_type == SQUARE_GRID_TOPOLOGY:
+            return LocationRef(
+                space_id=entity.space_id,
+                topology_type=SQUARE_GRID_TOPOLOGY,
+                coord={"x": int(entity.position_x), "y": int(entity.position_y)},
+            )
+        return LocationRef(space_id=entity.space_id, topology_type=OVERWORLD_HEX_TOPOLOGY, coord=entity.hex_coord.to_dict())
+
+    def _signal_from_dict(self, payload: dict[str, Any]) -> SignalRecord | None:
+        try:
+            return SignalRecord(
+                signal_id=str(payload["signal_id"]),
+                tick_emitted=int(payload["tick_emitted"]),
+                space_id=str(payload["space_id"]),
+                origin=LocationRef.from_dict(dict(payload["origin"])),
+                channel=str(payload["channel"]),
+                base_intensity=int(payload["base_intensity"]),
+                falloff_model=str(payload["falloff_model"]),
+                max_radius=int(payload["max_radius"]),
+                ttl_ticks=int(payload["ttl_ticks"]),
+                metadata=dict(payload.get("metadata", {})),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _is_non_negative_int(self, *values: Any) -> bool:
+        return all(isinstance(value, int) and value >= 0 for value in values)

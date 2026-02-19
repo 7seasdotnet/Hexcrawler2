@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5N — Entity Stats Substrate (structural).
-- **Next action:** Phase 5O — Perception/Noise substrate planning (structural, no gameplay semantics).
-- **Phase status:** ✅ Phase 5N scaffold complete (deterministic serialized entity stats substrate with idempotent stat intents).
+- **Current phase:** Phase 5O — Signal Propagation Substrate (modern, topology-aware, structural).
+- **Next action:** Phase 5P — Stat-driven perception integration (placeholder; no stealth/AI/combat semantics yet).
+- **Phase status:** ✅ Phase 5O scaffold complete (deterministic signal emission/perception substrate with bounded world signal records and idempotent delayed execution).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -30,6 +30,7 @@
   - Space interaction substrate for non-overworld spaces: deterministic canonical `SpaceState.doors` / `SpaceState.anchors` / `SpaceState.interactables` records with strict JSON-safe structural validation, back-compat defaults, and hash coverage through world serialization.
   - Deterministic `interaction_intent` command seam via `InteractionExecutionModule`: validates intent/target/duration, schedules `interaction_execute`, enforces idempotence using serialized `rules_state["interaction"].executed_action_uids`, applies structural door/anchor/interactable mutations only, and emits deterministic forensic `interaction_outcome` events.
   - Deterministic `entity_stat_intent` command seam via `EntityStatsExecutionModule`: validates structural stat patch params, schedules `entity_stat_execute`, applies stat set/remove via pure patch helper, enforces idempotence using serialized `rules_state["entity_stats"].executed_action_uids`, and emits deterministic forensic `entity_stat_outcome` events.
+  - Deterministic signal propagation substrate via `SignalPropagationModule`: validates/schedules `emit_signal_intent` + `perceive_signal_intent`, appends hash-covered bounded `world.signals` `SignalRecord` entries, computes deterministic topology-aware attenuation helpers, and emits deterministic forensic outcomes (`signal_emit_outcome`, `signal_perception_outcome`) with serialized idempotence ledgers.
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
   - Deterministic calendar/time substrate on `SimulationState.time` (`ticks_per_day`, `epoch_tick`) with derived read-only APIs (`get_ticks_per_day`, `get_day_index`, `get_tick_in_day`, `get_time_of_day_fraction`), save/load back-compat defaults, schema validation, and simulation hash coverage.
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
@@ -208,6 +209,8 @@
 - `explore_intent` (simulation command seam; time-costed exploration actions: `search`/`listen`/`rest`)
 - `interaction_intent` (simulation command seam; time-costed non-overworld interactions: `open`/`close`/`toggle`/`inspect`/`use`/`exit`)
 - `entity_stat_intent` (simulation command seam; structural per-entity stat set/remove operations with delayed execution and idempotent outcomes)
+- `emit_signal_intent` (simulation command seam; delayed signal record emission into deterministic bounded world signal container)
+- `perceive_signal_intent` (simulation command seam; delayed deterministic signal query with channel/radius filtering and strength reporting)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -216,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Canonicalized `entity.stats` to always exist as `{}` in-memory and in save payloads when omitted by legacy data, with strict dict/string-key validation unchanged.
-- Updated deterministic simulation hashing to always include `entity.stats` (including empty dicts), removing absent-vs-empty divergence risk.
-- Added regression tests covering hash equivalence for missing-vs-empty stats payloads and save/load round-trip preservation of empty stats.
+- Added Phase 5O signal substrate module with deterministic delayed `emit_signal_intent` and `perceive_signal_intent` command handling, serialized idempotence ledgers, and deterministic forensic outcomes.
+- Added topology-aware signal helpers (`distance_between_locations`, `compute_signal_strength`) and a bounded deterministic FIFO world signal container (`MAX_SIGNALS`) for hash-covered save/load stability.
+- Added deterministic tests covering emission/perception outcomes, FIFO eviction, save/load idempotence, expiry filtering, and replay/hash identity for the new signal substrate.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.
