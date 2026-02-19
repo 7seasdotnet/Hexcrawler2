@@ -1,9 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5R — Signal Occlusion / Door Attenuation Substrate.
-- **Next action:** Scope the smallest implementation slice for schema-only combat intent/outcome plumbing using the amended facing/targeting seam contract plus CellRef/admissibility/multi-affected outcome refinements.
-- **Phase status:** ✅ Phase 5R complete: structural edge-occlusion ledger, deterministic door-driven occlusion updates, and occlusion-aware signal perception forensics are implemented with save/load + hash coverage.
+- **Current phase:** Phase 6A — Combat Substrate Foundations (seams + state + tests, no combat math).
+- **Next action:** Start Phase 6B combat resolution stubs (intent taxonomy expansion + deterministic affected-target scaffolding) while keeping damage/armor/wound math deferred.
+- **Phase status:** ✅ Phase 6A complete: authoritative combat seam substrate (`attack_intent` -> `combat_outcome`), per-entity facing/cooldown/wounds state, and bounded forensic combat logging are implemented with save/load + hash coverage.
+
+
+## What changed in this commit
+- Added Phase 6A combat substrate seams: `attack_intent` command intake with deterministic validation and `combat_outcome` forensic records (placeholder wound deltas only).
+- Added authoritative entity combat state (`facing`, `cooldown_until_tick`, `wounds`) with canonical defaults, strict load normalization, and hash coverage.
+- Added bounded `combat_log` ledger (`MAX_COMBAT_LOG`) plus deterministic regression tests for authority, cooldown gating, save/load+hash stability, FIFO eviction, and absent-vs-empty parity.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -175,6 +181,7 @@
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
 - `PYTHONPATH=src pytest -q tests/test_interaction_execution_module.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/ui_demo.json --seed 7 --force`

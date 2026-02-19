@@ -343,7 +343,7 @@ def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "2e8482026e3d42565e533977f97381297ea1bc9582d337b71c5c223673cf30b2"
+        == "2780257eb8f5a424716827e53f0ef758f94b7a1a911642c6ce533d24436b8d97"
     )
 
 
@@ -353,5 +353,5 @@ def test_travel_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "eb683cb9cdb63e1d90b3afde39f555641b42fb67599c42787c5ce05a2eff4dbd"
+        == "63acc8044803079c1432ff317187ced83e5c394d13e759ff4241c4547d6a6e26"
     )

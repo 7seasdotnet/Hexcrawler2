@@ -29,6 +29,8 @@ TRAVEL_STEP_EVENT_TYPE = "travel_step"
 RNG_SIM_STREAM_NAME = "rng_sim"
 RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 MAX_EVENT_TRACE = 256
+MAX_COMBAT_LOG = 256
+MAX_WOUNDS = 64
 MAX_EVENTS_PER_TICK = 10_000
 INVENTORY_OUTCOME_EVENT_TYPE = "inventory_outcome"
 SITE_ENTER_OUTCOME_EVENT_TYPE = "site_enter_outcome"
@@ -85,6 +87,92 @@ def _normalize_entity_stats(stats: Any) -> dict[str, Any]:
         _validate_json_value(value, field_name=f"entity.stats[{raw_key}]")
         normalized[raw_key] = copy.deepcopy(value)
     return dict(sorted(normalized.items()))
+
+
+def _normalize_entity_wounds(wounds: Any) -> list[dict[str, Any]]:
+    if wounds is None:
+        return []
+    if not isinstance(wounds, list):
+        raise ValueError("entity.wounds must be a list")
+    normalized: list[dict[str, Any]] = []
+    for index, value in enumerate(wounds):
+        if not isinstance(value, dict):
+            raise ValueError(f"entity.wounds[{index}] must be an object")
+        _validate_json_value(value, field_name=f"entity.wounds[{index}]")
+        normalized.append(copy.deepcopy(value))
+    if len(normalized) > MAX_WOUNDS:
+        normalized = normalized[-MAX_WOUNDS:]
+    return normalized
+
+
+def _normalize_facing_token(value: Any) -> int:
+    if value is None:
+        return 0
+    return _require_int(value, field_name="entity.facing")
+
+
+def _normalize_cooldown_until_tick(value: Any) -> int:
+    if value is None:
+        return 0
+    return _require_int(value, field_name="entity.cooldown_until_tick", minimum=0)
+
+
+def _normalize_combat_log_entry(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise ValueError("combat_log entries must be objects")
+    required_fields = {
+        "tick",
+        "intent",
+        "action_uid",
+        "attacker_id",
+        "target_id",
+        "target_cell",
+        "mode",
+        "called_region",
+        "region_hit",
+        "applied",
+        "reason",
+        "wound_deltas",
+        "roll_trace",
+        "tags",
+    }
+    normalized = copy.deepcopy(entry)
+    missing = required_fields - set(normalized)
+    if missing:
+        raise ValueError(f"combat_log entry missing required fields: {sorted(missing)}")
+    normalized["tick"] = _require_int(normalized["tick"], field_name="combat_log.tick", minimum=0)
+    for key in ("intent", "action_uid", "reason"):
+        if not isinstance(normalized[key], str) or not normalized[key]:
+            raise ValueError(f"combat_log.{key} must be a non-empty string")
+    for key in ("attacker_id", "target_id", "mode", "weapon_ref", "called_region", "region_hit"):
+        if key not in normalized:
+            continue
+        if normalized[key] is not None and not isinstance(normalized[key], str):
+            raise ValueError(f"combat_log.{key} must be a string or null")
+    if not isinstance(normalized["applied"], bool):
+        raise ValueError("combat_log.applied must be boolean")
+    for key in ("wound_deltas", "roll_trace", "tags"):
+        if not isinstance(normalized[key], list):
+            raise ValueError(f"combat_log.{key} must be a list")
+    if any(not isinstance(tag, str) for tag in normalized["tags"]):
+        raise ValueError("combat_log.tags entries must be strings")
+    target_cell = normalized["target_cell"]
+    if target_cell is not None:
+        if not isinstance(target_cell, dict):
+            raise ValueError("combat_log.target_cell must be an object or null")
+        space_id = target_cell.get("space_id")
+        coord = target_cell.get("coord")
+        if not isinstance(space_id, str) or not space_id:
+            raise ValueError("combat_log.target_cell.space_id must be a non-empty string")
+        if not isinstance(coord, dict):
+            raise ValueError("combat_log.target_cell.coord must be an object")
+        _validate_json_value(coord, field_name="combat_log.target_cell.coord")
+        normalized["target_cell"] = {"space_id": space_id, "coord": copy.deepcopy(coord)}
+    for key in ("affected",):
+        if key in normalized and normalized[key] is not None and not isinstance(normalized[key], list):
+            raise ValueError("combat_log.affected must be a list when present")
+    _validate_json_value(normalized, field_name="combat_log")
+    return normalized
 
 
 def apply_stat_patch(stats: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:
@@ -239,6 +327,9 @@ class EntityState:
     inventory_container_id: str | None = None
     supply_profile_id: str | None = None
     stats: dict[str, Any] = field(default_factory=dict)
+    facing: int = 0
+    cooldown_until_tick: int = 0
+    wounds: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_hex(cls, entity_id: str, hex_coord: HexCoord, speed_per_tick: float = 0.15) -> "EntityState":
@@ -260,6 +351,7 @@ class SimulationState:
     entities: dict[str, EntityState] = field(default_factory=dict)
     rules_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     event_trace: list[dict[str, Any]] = field(default_factory=list)
+    combat_log: list[dict[str, Any]] = field(default_factory=list)
     selected_entity_id: str | None = None
     time: SimulationTimeState = field(default_factory=SimulationTimeState)
 
@@ -293,6 +385,9 @@ class Simulation:
 
     def add_entity(self, entity: EntityState) -> None:
         entity.stats = _normalize_entity_stats(entity.stats)
+        entity.facing = _normalize_facing_token(entity.facing)
+        entity.cooldown_until_tick = _normalize_cooldown_until_tick(entity.cooldown_until_tick)
+        entity.wounds = _normalize_entity_wounds(entity.wounds)
         if entity.supply_profile_id is None and entity.entity_id == DEFAULT_PLAYER_ENTITY_ID:
             if DEFAULT_PLAYER_SUPPLY_PROFILE_ID in self._supply_profiles.by_id():
                 entity.supply_profile_id = DEFAULT_PLAYER_SUPPLY_PROFILE_ID
@@ -521,12 +616,16 @@ class Simulation:
                     "inventory_container_id": entity.inventory_container_id,
                     "supply_profile_id": entity.supply_profile_id,
                     "stats": copy.deepcopy(entity.stats),
+                    "facing": entity.facing,
+                    "cooldown_until_tick": entity.cooldown_until_tick,
+                    "wounds": copy.deepcopy(entity.wounds),
                 }
                 for entity in sorted(self.state.entities.values(), key=lambda current: current.entity_id)
             ],
             "input_log": [command.to_dict() for command in self.input_log],
             "pending_events": [event.to_dict() for event in self.pending_events()],
             "event_trace": copy.deepcopy(self.state.event_trace),
+            "combat_log": copy.deepcopy(self.state.combat_log),
             "selected_entity_id": self.state.selected_entity_id,
         }
 
@@ -572,6 +671,9 @@ class Simulation:
                 ),
                 supply_profile_id=(str(row["supply_profile_id"]) if row.get("supply_profile_id") is not None else None),
                 stats=_normalize_entity_stats(row.get("stats", {})),
+                facing=_normalize_facing_token(row.get("facing", 0)),
+                cooldown_until_tick=_normalize_cooldown_until_tick(row.get("cooldown_until_tick", 0)),
+                wounds=_normalize_entity_wounds(row.get("wounds", [])),
             )
             sim.add_entity(entity)
 
@@ -592,6 +694,13 @@ class Simulation:
             if not isinstance(entry, dict):
                 raise ValueError("event_trace entries must be objects")
             sim._append_event_trace_entry(entry)
+
+        raw_combat_log = payload.get("combat_log", [])
+        if not isinstance(raw_combat_log, list):
+            raise ValueError("combat_log must be a list")
+        sim.state.combat_log = []
+        for entry in raw_combat_log:
+            sim.append_combat_outcome(entry)
 
         if "rng_state" in payload:
             sim.restore_rng_state(payload["rng_state"])
@@ -1138,6 +1247,13 @@ class Simulation:
         if len(self.state.event_trace) > MAX_EVENT_TRACE:
             overflow = len(self.state.event_trace) - MAX_EVENT_TRACE
             del self.state.event_trace[:overflow]
+
+    def append_combat_outcome(self, entry: dict[str, Any]) -> None:
+        normalized = _normalize_combat_log_entry(entry)
+        self.state.combat_log.append(normalized)
+        if len(self.state.combat_log) > MAX_COMBAT_LOG:
+            overflow = len(self.state.combat_log) - MAX_COMBAT_LOG
+            del self.state.combat_log[:overflow]
 
     @staticmethod
     def _trace_event_id_as_int(event_id: str) -> int:

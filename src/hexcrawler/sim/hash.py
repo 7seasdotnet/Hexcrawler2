@@ -59,6 +59,9 @@ def simulation_hash(simulation: Simulation) -> str:
                     "selected_entity_id": entity.selected_entity_id,
                     "inventory_container_id": entity.inventory_container_id,
                     "stats": entity.stats,
+                    "facing": entity.facing,
+                    "cooldown_until_tick": entity.cooldown_until_tick,
+                    "wounds": entity.wounds,
                 },
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
@@ -68,6 +71,7 @@ def simulation_hash(simulation: Simulation) -> str:
         "next_event_counter": simulation._next_event_counter,
         "pending_events": [event.to_dict() for event in simulation.pending_events()],
         "event_trace": simulation.get_event_trace(),
+        "combat_log": simulation.state.combat_log,
         "selected_entity_id": simulation.state.selected_entity_id,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

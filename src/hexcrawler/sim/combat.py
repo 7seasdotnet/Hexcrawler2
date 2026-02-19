@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import copy
+from typing import Any
+
+from hexcrawler.sim.core import SimCommand, Simulation
+from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
+from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.signals import distance_between_locations
+
+ATTACK_INTENT_COMMAND_TYPE = "attack_intent"
+COMBAT_OUTCOME_EVENT_TYPE = "combat_outcome"
+DEFAULT_CALLED_REGION = "torso"
+PLACEHOLDER_COOLDOWN_TICKS = 1
+
+
+class CombatExecutionModule(RuleModule):
+    name = "combat"
+
+    def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type != ATTACK_INTENT_COMMAND_TYPE:
+            return False
+
+        attacker_id = command.params.get("attacker_id")
+        mode = command.params.get("mode")
+        target_id = command.params.get("target_id")
+        target_cell_payload = command.params.get("target_cell")
+        weapon_ref = command.params.get("weapon_ref")
+        target_region_raw = command.params.get("target_region")
+        tags = command.params.get("tags", [])
+
+        called_region = DEFAULT_CALLED_REGION
+        if isinstance(target_region_raw, str) and target_region_raw:
+            called_region = target_region_raw
+
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            tags = []
+
+        target_cell: dict[str, Any] | None = None
+        reason = "resolved"
+        applied = False
+
+        if not isinstance(attacker_id, str) or not attacker_id:
+            reason = "invalid_attacker"
+        elif not isinstance(mode, str) or not mode:
+            reason = "invalid_mode"
+        elif attacker_id not in sim.state.entities:
+            reason = "invalid_attacker"
+        else:
+            attacker = sim.state.entities[attacker_id]
+            target_id_value = str(target_id) if isinstance(target_id, str) and target_id else None
+            if target_id_value is not None and target_id_value not in sim.state.entities:
+                reason = "invalid_target"
+            elif target_id_value is None and target_cell_payload is None:
+                reason = "invalid_target"
+            else:
+                parsed_cell, cell_error = self._parse_cell_ref(sim, target_cell_payload)
+                if cell_error is not None:
+                    reason = cell_error
+                else:
+                    target_cell = parsed_cell
+                    if target_id_value is not None:
+                        target = sim.state.entities[target_id_value]
+                        if attacker.space_id != target.space_id:
+                            reason = "space_mismatch"
+                        elif target_cell is not None:
+                            target_coord = self._entity_coord(sim, target_id_value)
+                            if target_coord is None:
+                                reason = "invalid_target"
+                            elif target_cell["space_id"] != target.space_id or target_cell["coord"] != target_coord:
+                                reason = "target_cell_mismatch"
+                    if reason == "resolved" and target_cell is None and target_id_value is not None:
+                        target_coord = self._entity_coord(sim, target_id_value)
+                        if target_coord is None:
+                            reason = "invalid_target"
+                        else:
+                            target_cell = {"space_id": sim.state.entities[target_id_value].space_id, "coord": target_coord}
+
+                    if reason == "resolved" and target_cell is not None:
+                        if attacker.space_id != str(target_cell["space_id"]):
+                            reason = "space_mismatch"
+
+                    if reason == "resolved" and self._mode_is_melee(mode):
+                        attacker_location = self._entity_location(sim, attacker_id)
+                        target_location = {
+                            "space_id": str(target_cell["space_id"]) if target_cell is not None else attacker.space_id,
+                            "topology_type": attacker_location["topology_type"],
+                            "coord": copy.deepcopy(target_cell["coord"]) if target_cell is not None else copy.deepcopy(attacker_location["coord"]),
+                        }
+                        if target_cell is None:
+                            reason = "invalid_target"
+                        elif target_location["space_id"] != attacker_location["space_id"]:
+                            reason = "space_mismatch"
+                        elif not self._is_adjacent(attacker_location, target_location):
+                            reason = "out_of_range"
+
+                    if reason == "resolved" and attacker.cooldown_until_tick > command.tick:
+                        reason = "cooldown_blocked"
+
+                    if reason == "resolved":
+                        applied = True
+                        attacker.cooldown_until_tick = int(command.tick) + PLACEHOLDER_COOLDOWN_TICKS
+
+        sim.append_combat_outcome(
+            {
+                "tick": int(command.tick),
+                "intent": ATTACK_INTENT_COMMAND_TYPE,
+                "action_uid": f"{command.tick}:{command_index}",
+                "attacker_id": attacker_id if isinstance(attacker_id, str) else None,
+                "target_id": target_id if isinstance(target_id, str) else None,
+                "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
+                "mode": mode if isinstance(mode, str) else None,
+                "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+                "called_region": called_region,
+                "region_hit": called_region if applied else None,
+                "applied": applied,
+                "reason": reason,
+                "wound_deltas": [],
+                "roll_trace": [],
+                "tags": list(tags),
+            }
+        )
+        return True
+
+    @staticmethod
+    def _mode_is_melee(mode: str) -> bool:
+        normalized = mode.strip().lower()
+        return normalized == "melee" or normalized.startswith("melee_")
+
+    @staticmethod
+    def _entity_coord(sim: Simulation, entity_id: str) -> dict[str, int] | None:
+        entity = sim.state.entities.get(entity_id)
+        if entity is None:
+            return None
+        space = sim.state.world.spaces.get(entity.space_id)
+        if space is None:
+            return None
+        if space.topology_type == SQUARE_GRID_TOPOLOGY:
+            return world_xy_to_square_grid_cell(entity.position_x, entity.position_y)
+        if space.topology_type == OVERWORLD_HEX_TOPOLOGY or space.topology_type.startswith("hex") or space.topology_type == "custom":
+            return world_xy_to_axial(entity.position_x, entity.position_y).to_dict()
+        return None
+
+    @classmethod
+    def _entity_location(cls, sim: Simulation, entity_id: str) -> dict[str, Any]:
+        entity = sim.state.entities[entity_id]
+        space = sim.state.world.spaces[entity.space_id]
+        coord = cls._entity_coord(sim, entity_id)
+        return {
+            "space_id": entity.space_id,
+            "topology_type": space.topology_type if space.topology_type == SQUARE_GRID_TOPOLOGY else OVERWORLD_HEX_TOPOLOGY,
+            "coord": coord,
+        }
+
+    @classmethod
+    def _parse_cell_ref(cls, sim: Simulation, payload: Any) -> tuple[dict[str, Any] | None, str | None]:
+        if payload is None:
+            return None, None
+        if not isinstance(payload, dict):
+            return None, "invalid_target_cell"
+
+        space_id = payload.get("space_id")
+        if not isinstance(space_id, str) or not space_id:
+            return None, "invalid_target_cell"
+        space = sim.state.world.spaces.get(space_id)
+        if space is None:
+            return None, "invalid_target_cell"
+
+        coord_raw = payload.get("coord")
+        coord = cls._normalize_coord_for_space(space.topology_type, coord_raw)
+        if coord is None:
+            return None, "invalid_target_cell"
+        if not space.is_valid_cell(coord):
+            return None, "invalid_target_cell"
+        return {"space_id": space_id, "coord": coord}, None
+
+    @staticmethod
+    def _normalize_coord_for_space(topology_type: str, coord: Any) -> dict[str, int] | None:
+        if isinstance(coord, dict):
+            try:
+                if topology_type == SQUARE_GRID_TOPOLOGY:
+                    return {"x": int(coord["x"]), "y": int(coord["y"])}
+                return {"q": int(coord["q"]), "r": int(coord["r"])}
+            except (KeyError, TypeError, ValueError):
+                return None
+        if isinstance(coord, (list, tuple)) and len(coord) == 2:
+            try:
+                if topology_type == SQUARE_GRID_TOPOLOGY:
+                    return {"x": int(coord[0]), "y": int(coord[1])}
+                return {"q": int(coord[0]), "r": int(coord[1])}
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    @staticmethod
+    def _is_adjacent(attacker: dict[str, Any], target: dict[str, Any]) -> bool:
+        from hexcrawler.sim.location import LocationRef
+
+        distance = distance_between_locations(
+            LocationRef(
+                space_id=str(attacker["space_id"]),
+                topology_type=str(attacker["topology_type"]),
+                coord=dict(attacker["coord"]),
+            ),
+            LocationRef(
+                space_id=str(target["space_id"]),
+                topology_type=str(target["topology_type"]),
+                coord=dict(target["coord"]),
+            ),
+        )
+        return distance == 1
