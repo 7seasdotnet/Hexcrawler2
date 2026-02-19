@@ -28,6 +28,18 @@ This section defines minimal command seams only. It does **not** define combat m
 
 ### `attack_intent` (required seam)
 
+Canonical target cell reference type used by this seam:
+
+- `CellRef`
+  - `space_id` (string)
+  - `coord` (topology-dependent payload)
+
+`CellRef.coord` encoding is owned by topology rules for the referenced `space_id`.
+- Hex spaces may use axial `(q,r)` or another canonical hex encoding selected by topology rules.
+- Square spaces may use `(x,y)`.
+- The seam does not require `coord` to be a fixed 2-tuple; alternative coordinate schemes (including nested/z-aware forms) remain topology-owned.
+- Engine validates `CellRef` against the referenced space topology at tick `T`.
+
 Minimal JSON-safe payload:
 
 ```json
@@ -49,7 +61,7 @@ Required fields:
 
 Optional fields:
 - `target_id` (nullable only when `target_cell` is provided)
-- `target_cell` (nullable location payload; seam supports cell-only and combined targeting)
+- `target_cell` (nullable `CellRef`; seam supports cell-only and combined targeting)
 - `weapon_ref`
 - `target_region` (nullable called-shot request; defaults to `torso`/center-mass when omitted)
 - `tags` (array of strings)
@@ -68,9 +80,14 @@ Validation contract at intake (deterministic pass/fail):
 - If `target_id` is present, attacker and target are in the same `space_id`.
 - If only `target_cell` is present, attacker and target cell must be in the same `space_id`.
 - For melee-tagged modes, adjacency/topology reach check passes.
-- Selected target discriminator (entity or cell) is inside the deterministic legal affected set at tick `T` for attacker position + facing + weapon/mode attack shape contract.
+- Selected target discriminator (entity and/or cell) is admissible for the deterministic attack shape contract at tick `T` (attacker position + facing + weapon/mode + topology rules).
 - Actor eligibility check passes (alive/present/not otherwise disqualified by serialized state).
 - Unknown optional fields are ignored deterministically or rejected via schema policy (decision deferred to command schema policy, not combat logic).
+
+Validation vs resolution boundary:
+- Validation checks admissibility of the player-selected discriminator(s) at intake.
+- Resolution deterministically determines actual affected entity/entities and records results in outcomes.
+- Engine seam does not require precomputing the full affected set at intake; it enforces admissibility and records results.
 
 Called-shot contract:
 - `target_region` is a requested called-shot region, not a guaranteed outcome.
@@ -97,6 +114,17 @@ Forensic `combat_outcome` record (minimum):
   "region_hit": "arm",
   "applied": true,
   "reason": "resolved",
+  "affected": [
+    {
+      "entity_id": "entity:...",
+      "cell": {"space_id": "overworld", "coord": [0, 0]},
+      "called_region": "torso",
+      "region_hit": "arm",
+      "wound_deltas": [],
+      "applied": true,
+      "reason": "resolved"
+    }
+  ],
   "wound_deltas": [],
   "roll_trace": [],
   "tags": []
@@ -109,6 +137,16 @@ Forensic `combat_outcome` record (minimum):
 - `called_region` records requested region after defaulting logic (`torso` when omitted/null).
 - `region_hit` records deterministic actual impacted region (nullable when no hit is applied).
 - Optional deterministic redirect rationale may be included via outcome metadata (e.g., `redirected_by_rules`), with taxonomy deferred.
+- `target_id`/`target_cell` remain the selected/aimed target for UI correlation with the submitted intent.
+- `affected` is optional and records actual applied consequences for multi-target resolution paths (sweeps/AoE/cell effects) while preserving primary selected-target fields.
+- Each `affected` entry is JSON-safe and may include:
+  - `entity_id` (nullable when effect is purely on a cell),
+  - `cell` (optional `CellRef`),
+  - `called_region` (optional/nullable),
+  - `region_hit` (optional/nullable),
+  - `wound_deltas` (array, may be empty),
+  - `applied` (bool) and optional `reason` (string).
+- If `affected` is introduced in implementation, it must be bounded by a fixed constant (e.g., `MAX_AFFECTED_PER_ACTION`) with deterministic overflow policy.
 
 ### `defend_intent` (optional seam, deferred)
 
@@ -266,7 +304,9 @@ Each entity must support a bounded wound ledger:
 ### Weapon arc / attack-shape seam contract
 - Weapons may define deterministic attack shapes in content/rules (`arc`, `cone`, `line`, `sweep`, etc.; taxonomy deferred).
 - At tick `T`, legal affected targets are derived deterministically from attacker position + authoritative facing + weapon/mode reference + topology rules.
-- Engine seam enforces deterministic validation that chosen entity/cell target lies within that legal set before application.
+- Validation step: engine seam enforces deterministic admissibility checks that chosen entity/cell discriminator is legal for that computed attack shape at tick `T`.
+- Resolution step: rules deterministically resolve actual affected entity/entities (e.g., first-in-line, all in cone, etc.) and outcome records what was affected.
+- Engine seam does not require precomputing the full affected set at intake; it enforces admissibility and records results.
 - Cell-only targeting is permitted; resolution may deterministically affect an entity in that cell or none, and outcome records what was affected.
 - LOS/cover coupling is explicitly deferred, but seam choices here must not lock out future LOS/cover integration.
 
