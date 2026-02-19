@@ -26,6 +26,7 @@ from hexcrawler.sim.encounters import (
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE, ExplorationExecutionModule
+from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE, InteractionExecutionModule
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
@@ -180,6 +181,20 @@ class SimulationController:
                 entity_id=self.entity_id,
                 command_type="explore_intent",
                 params={"action": action, "duration_ticks": duration_ticks},
+            )
+        )
+
+    def interaction_intent(self, interaction_type: str, target_kind: str, target_id: str, duration_ticks: int) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="interaction_intent",
+                params={
+                    "interaction_type": interaction_type,
+                    "target": {"kind": target_kind, "id": target_id},
+                    "duration_ticks": duration_ticks,
+                },
             )
         )
 
@@ -400,6 +415,54 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
             ),
         )
 
+    space = sim.state.world.spaces.get(active_space_id)
+    if space is not None:
+        for door in sorted(space.doors.values(), key=lambda row: row.door_id):
+            add_marker(
+                _marker_cell_from_location(
+                    {"space_id": active_space_id, "topology_type": space.topology_type, "coord": door.a},
+                    active_location_topology,
+                ),
+                MarkerRecord(
+                    priority=0,
+                    marker_id=f"door:{door.door_id}",
+                    marker_kind="door",
+                    color=(220, 180, 80) if door.state == "closed" else (130, 210, 150),
+                    radius=5,
+                    label=_truncate_label(f"door:{door.state}", max_length=12),
+                ),
+            )
+        for anchor in sorted(space.anchors.values(), key=lambda row: row.anchor_id):
+            add_marker(
+                _marker_cell_from_location(
+                    {"space_id": active_space_id, "topology_type": space.topology_type, "coord": anchor.coord},
+                    active_location_topology,
+                ),
+                MarkerRecord(
+                    priority=0,
+                    marker_id=f"anchor:{anchor.anchor_id}",
+                    marker_kind="anchor",
+                    color=(255, 120, 120),
+                    radius=5,
+                    label=_truncate_label(anchor.kind, max_length=12),
+                ),
+            )
+        for interactable in sorted(space.interactables.values(), key=lambda row: row.interactable_id):
+            add_marker(
+                _marker_cell_from_location(
+                    {"space_id": active_space_id, "topology_type": space.topology_type, "coord": interactable.coord},
+                    active_location_topology,
+                ),
+                MarkerRecord(
+                    priority=0,
+                    marker_id=f"interactable:{interactable.interactable_id}",
+                    marker_kind="interactable",
+                    color=(170, 170, 255),
+                    radius=5,
+                    label=_truncate_label(interactable.kind, max_length=12),
+                ),
+            )
+
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
         if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
             continue
@@ -411,13 +474,13 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
                 space_id=entity.space_id,
                 topology_type=active_location_topology,
                 coord_key=(("x", math.floor(entity.position_x)), ("y", math.floor(entity.position_y))),
-                            )
+            )
         else:
             cell = MarkerCellRef(
                 space_id=entity.space_id,
                 topology_type=active_location_topology,
                 coord_key=(("q", entity.hex_coord.q), ("r", entity.hex_coord.r)),
-                            )
+            )
         add_marker(
             cell,
             MarkerRecord(
@@ -473,8 +536,6 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
     for cell, markers in markers_by_cell.items():
         markers.sort(key=lambda row: (row.priority, row.marker_id))
     return markers_by_cell
-
-
 def _marker_cell_center(cell: MarkerCellRef, center: tuple[float, float]) -> tuple[float, float]:
     if cell.topology_type == SQUARE_GRID_TOPOLOGY:
         world_x = float(dict(cell.coord_key)["x"]) + 0.5
@@ -721,7 +782,7 @@ def _draw_encounter_debug_panel(
     filtered_trace = [
         entry
         for entry in sim.get_event_trace()
-        if entry.get("event_type") in {ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE, EXPLORATION_OUTCOME_EVENT_TYPE}
+        if entry.get("event_type") in {ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE, EXPLORATION_OUTCOME_EVENT_TYPE, INTERACTION_OUTCOME_EVENT_TYPE}
     ]
     outcome_rows = _section_entries([
         (
@@ -777,7 +838,7 @@ def _draw_encounter_debug_panel(
     section_counts = {section: len(rows) for section, rows in rows_by_section.items()}
 
     y = panel_rect.y + 8
-    title = font.render("Encounter Debug | Site=S Spawn=E Desc=D Signal=G Track=T", True, (245, 245, 245))
+    title = font.render("Encounter Debug | Site=S Spawn=E Desc=D Signal=G Track=T Door/Anchor/Int", True, (245, 245, 245))
     screen.blit(title, (panel_rect.x + 10, y))
     y += 18
 
@@ -1003,6 +1064,12 @@ def _register_exploration_module(sim: Simulation) -> None:
     sim.register_rule_module(ExplorationExecutionModule())
 
 
+def _register_interaction_module(sim: Simulation) -> None:
+    if sim.get_rule_module(InteractionExecutionModule.name) is not None:
+        return
+    sim.register_rule_module(InteractionExecutionModule())
+
+
 def _register_encounter_modules(sim: Simulation) -> None:
     if sim.get_rule_module(EncounterCheckModule.name) is not None:
         return
@@ -1021,6 +1088,7 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
         _register_encounter_modules(sim)
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     _register_exploration_module(sim)
+    _register_interaction_module(sim)
     _register_supply_module(sim)
     return sim
 
@@ -1033,6 +1101,7 @@ def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulat
     if PLAYER_ID not in sim.state.entities:
         sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     _register_exploration_module(sim)
+    _register_interaction_module(sim)
     if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
         _register_supply_module(sim)
     print(
@@ -1166,6 +1235,20 @@ def run_pygame_viewer(
                         if site is not None and site.entrance is not None:
                             site_label = site.name if site.name else site.site_id
                             items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+                    elif marker.marker_kind == "door":
+                        door_id = marker.marker_id.split(":", 1)[1]
+                        items.append(ContextMenuItem(label="Door...", action="noop"))
+                        items.append(ContextMenuItem(label="- Open (10 ticks)", action="interaction", payload=f"open:door:{door_id}:10"))
+                        items.append(ContextMenuItem(label="- Close (10 ticks)", action="interaction", payload=f"close:door:{door_id}:10"))
+                        items.append(ContextMenuItem(label="- Toggle (10 ticks)", action="interaction", payload=f"toggle:door:{door_id}:10"))
+                    elif marker.marker_kind == "anchor":
+                        anchor_id = marker.marker_id.split(":", 1)[1]
+                        items.append(ContextMenuItem(label="Exit (30 ticks)", action="interaction", payload=f"exit:anchor:{anchor_id}:30"))
+                    elif marker.marker_kind == "interactable":
+                        interactable_id = marker.marker_id.split(":", 1)[1]
+                        items.append(ContextMenuItem(label="Interactable...", action="noop"))
+                        items.append(ContextMenuItem(label="- Inspect (10 ticks)", action="interaction", payload=f"inspect:interactable:{interactable_id}:10"))
+                        items.append(ContextMenuItem(label="- Use (20 ticks)", action="interaction", payload=f"use:interactable:{interactable_id}:20"))
                 items.append(ContextMenuItem(label="Explore...", action="noop"))
                 items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
                 items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
@@ -1290,6 +1373,9 @@ def run_pygame_viewer(
                         elif item.action == "explore" and item.payload is not None:
                             action, duration_str = item.payload.split(":", 1)
                             controller.explore_intent(action, int(duration_str))
+                        elif item.action == "interaction" and item.payload is not None:
+                            interaction_type, target_kind, target_id, duration_str = item.payload.split(":", 3)
+                            controller.interaction_intent(interaction_type, target_kind, target_id, int(duration_str))
                 context_menu = None
 
         move_x, move_y = _current_input_vector()

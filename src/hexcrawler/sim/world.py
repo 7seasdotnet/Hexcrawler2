@@ -171,16 +171,229 @@ class RumorRecord:
         )
 
 
+def _normalize_coord_dict(coord: dict[str, Any], *, field_name: str) -> dict[str, int]:
+    if not isinstance(coord, dict):
+        raise ValueError(f"{field_name} must be an object")
+    if "x" in coord or "y" in coord:
+        if "x" not in coord or "y" not in coord:
+            raise ValueError(f"{field_name} requires x and y")
+        return {"x": int(coord["x"]), "y": int(coord["y"])}
+    if "q" in coord or "r" in coord:
+        if "q" not in coord or "r" not in coord:
+            raise ValueError(f"{field_name} requires q and r")
+        return {"q": int(coord["q"]), "r": int(coord["r"])}
+    raise ValueError(f"{field_name} requires either x/y or q/r")
+
+
+@dataclass
+class DoorRecord:
+    door_id: str
+    space_id: str
+    a: dict[str, int]
+    b: dict[str, int]
+    state: str
+    flags: dict[str, bool] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.door_id, str) or not self.door_id:
+            raise ValueError("door_id must be a non-empty string")
+        if not isinstance(self.space_id, str) or not self.space_id:
+            raise ValueError("space_id must be a non-empty string")
+        self.a = _normalize_coord_dict(self.a, field_name="door.a")
+        self.b = _normalize_coord_dict(self.b, field_name="door.b")
+        if self.state not in {"open", "closed"}:
+            raise ValueError("door state must be 'open' or 'closed'")
+        self.flags = {
+            "locked": bool(self.flags.get("locked", False)),
+            "blocked": bool(self.flags.get("blocked", False)),
+        }
+        _validate_json_value(self.metadata, field_name="door.metadata")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "door_id": self.door_id,
+            "space_id": self.space_id,
+            "a": dict(self.a),
+            "b": dict(self.b),
+            "state": self.state,
+            "flags": dict(self.flags),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DoorRecord":
+        return cls(
+            door_id=str(data["door_id"]),
+            space_id=str(data["space_id"]),
+            a=dict(data["a"]),
+            b=dict(data["b"]),
+            state=str(data["state"]),
+            flags=dict(data.get("flags", {})),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass
+class AnchorRecord:
+    anchor_id: str
+    space_id: str
+    coord: dict[str, int]
+    kind: str
+    target: dict[str, Any]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.anchor_id, str) or not self.anchor_id:
+            raise ValueError("anchor_id must be a non-empty string")
+        if not isinstance(self.space_id, str) or not self.space_id:
+            raise ValueError("space_id must be a non-empty string")
+        self.coord = _normalize_coord_dict(self.coord, field_name="anchor.coord")
+        if self.kind not in {"exit", "return", "transition"}:
+            raise ValueError("anchor kind must be one of exit|return|transition")
+        if not isinstance(self.target, dict):
+            raise ValueError("anchor.target must be an object")
+        target_type = str(self.target.get("type", ""))
+        if target_type not in {"space", "site"}:
+            raise ValueError("anchor.target.type must be space or site")
+        normalized_target: dict[str, Any] = {"type": target_type}
+        if target_type == "space":
+            space_id = self.target.get("space_id")
+            if not isinstance(space_id, str) or not space_id:
+                raise ValueError("anchor.target.space_id must be a non-empty string")
+            normalized_target["space_id"] = space_id
+        else:
+            site_id = self.target.get("site_id")
+            if not isinstance(site_id, str) or not site_id:
+                raise ValueError("anchor.target.site_id must be a non-empty string")
+            normalized_target["site_id"] = site_id
+            if isinstance(self.target.get("space_id"), str) and self.target.get("space_id"):
+                normalized_target["space_id"] = str(self.target["space_id"])
+        self.target = normalized_target
+        _validate_json_value(self.metadata, field_name="anchor.metadata")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "anchor_id": self.anchor_id,
+            "space_id": self.space_id,
+            "coord": dict(self.coord),
+            "kind": self.kind,
+            "target": dict(self.target),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AnchorRecord":
+        return cls(
+            anchor_id=str(data["anchor_id"]),
+            space_id=str(data["space_id"]),
+            coord=dict(data["coord"]),
+            kind=str(data["kind"]),
+            target=dict(data["target"]),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass
+class InteractableRecord:
+    interactable_id: str
+    space_id: str
+    coord: dict[str, int]
+    kind: str
+    state: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.interactable_id, str) or not self.interactable_id:
+            raise ValueError("interactable_id must be a non-empty string")
+        if not isinstance(self.space_id, str) or not self.space_id:
+            raise ValueError("space_id must be a non-empty string")
+        self.coord = _normalize_coord_dict(self.coord, field_name="interactable.coord")
+        if not isinstance(self.kind, str) or not self.kind:
+            raise ValueError("interactable kind must be a non-empty string")
+        if not isinstance(self.state, dict):
+            raise ValueError("interactable state must be an object")
+        _validate_json_value(self.state, field_name="interactable.state")
+        _validate_json_value(self.metadata, field_name="interactable.metadata")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "interactable_id": self.interactable_id,
+            "space_id": self.space_id,
+            "coord": dict(self.coord),
+            "kind": self.kind,
+            "state": dict(self.state),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "InteractableRecord":
+        return cls(
+            interactable_id=str(data["interactable_id"]),
+            space_id=str(data["space_id"]),
+            coord=dict(data["coord"]),
+            kind=str(data["kind"]),
+            state=dict(data.get("state", {})),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
 @dataclass
 class SpaceState:
     space_id: str
     topology_type: str
     topology_params: dict[str, Any] = field(default_factory=dict)
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
+    doors: dict[str, DoorRecord] = field(default_factory=dict)
+    anchors: dict[str, AnchorRecord] = field(default_factory=dict)
+    interactables: dict[str, InteractableRecord] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.topology_type == SQUARE_GRID_TOPOLOGY:
             self.topology_params = self._normalized_square_topology_params(self.topology_params)
+        self._normalize_space_records()
+
+    def _normalize_space_records(self) -> None:
+        normalized_doors: dict[str, DoorRecord] = {}
+        for door_id, record in self.doors.items():
+            normalized_id = str(door_id)
+            normalized = record if isinstance(record, DoorRecord) else DoorRecord.from_dict(dict(record))
+            if normalized.door_id != normalized_id:
+                raise ValueError("door record id mismatch")
+            if normalized.space_id != self.space_id:
+                raise ValueError("door record space_id mismatch")
+            if not self.is_valid_cell(normalized.a) or not self.is_valid_cell(normalized.b):
+                raise ValueError("door endpoints must reference valid cells")
+            normalized_doors[normalized_id] = normalized
+        self.doors = normalized_doors
+
+        normalized_anchors: dict[str, AnchorRecord] = {}
+        for anchor_id, record in self.anchors.items():
+            normalized_id = str(anchor_id)
+            normalized = record if isinstance(record, AnchorRecord) else AnchorRecord.from_dict(dict(record))
+            if normalized.anchor_id != normalized_id:
+                raise ValueError("anchor record id mismatch")
+            if normalized.space_id != self.space_id:
+                raise ValueError("anchor record space_id mismatch")
+            if not self.is_valid_cell(normalized.coord):
+                raise ValueError("anchor coord must reference a valid cell")
+            normalized_anchors[normalized_id] = normalized
+        self.anchors = normalized_anchors
+
+        normalized_interactables: dict[str, InteractableRecord] = {}
+        for interactable_id, record in self.interactables.items():
+            normalized_id = str(interactable_id)
+            normalized = (
+                record if isinstance(record, InteractableRecord) else InteractableRecord.from_dict(dict(record))
+            )
+            if normalized.interactable_id != normalized_id:
+                raise ValueError("interactable record id mismatch")
+            if normalized.space_id != self.space_id:
+                raise ValueError("interactable record space_id mismatch")
+            if not self.is_valid_cell(normalized.coord):
+                raise ValueError("interactable coord must reference a valid cell")
+            normalized_interactables[normalized_id] = normalized
+        self.interactables = normalized_interactables
 
     @staticmethod
     def _normalized_square_topology_params(topology_params: dict[str, Any]) -> dict[str, Any]:
@@ -242,12 +455,21 @@ class SpaceState:
         hex_rows = []
         for coord in sorted(self.hexes):
             hex_rows.append({"coord": coord.to_dict(), "record": self.hexes[coord].to_dict()})
-        return {
+        payload = {
             "space_id": self.space_id,
             "topology_type": self.topology_type,
             "topology_params": dict(self.topology_params),
             "hexes": hex_rows,
         }
+        if self.doors:
+            payload["doors"] = {record_id: self.doors[record_id].to_dict() for record_id in sorted(self.doors)}
+        if self.anchors:
+            payload["anchors"] = {record_id: self.anchors[record_id].to_dict() for record_id in sorted(self.anchors)}
+        if self.interactables:
+            payload["interactables"] = {
+                record_id: self.interactables[record_id].to_dict() for record_id in sorted(self.interactables)
+            }
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SpaceState":
@@ -260,6 +482,17 @@ class SpaceState:
             coord = HexCoord.from_dict(row["coord"])
             record = HexRecord.from_dict(row["record"])
             space.hexes[coord] = record
+        space.doors = {
+            str(door_id): DoorRecord.from_dict(dict(row)) for door_id, row in dict(data.get("doors", {})).items()
+        }
+        space.anchors = {
+            str(anchor_id): AnchorRecord.from_dict(dict(row)) for anchor_id, row in dict(data.get("anchors", {})).items()
+        }
+        space.interactables = {
+            str(interactable_id): InteractableRecord.from_dict(dict(row))
+            for interactable_id, row in dict(data.get("interactables", {})).items()
+        }
+        space._normalize_space_records()
         return space
 
 
