@@ -2,7 +2,7 @@
 
 ## Phase
 - **Current phase:** Phase 5R — Signal Occlusion / Door Attenuation Substrate.
-- **Next action:** Scope the smallest implementation slice for schema-only combat intent/outcome plumbing using the amended facing/targeting seam contract.
+- **Next action:** Scope the smallest implementation slice for schema-only combat intent/outcome plumbing using the amended facing/targeting seam contract plus CellRef/admissibility/multi-affected outcome refinements.
 - **Phase status:** ✅ Phase 5R complete: structural edge-occlusion ledger, deterministic door-driven occlusion updates, and occlusion-aware signal perception forensics are implemented with save/load + hash coverage.
 
 ## What Exists (folders / entry points)
@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Amended `docs/COMBAT_SEAM_DESIGN.md` to add authoritative facing-state contract requirements (serialized/hash-covered, topology-aware representation, movement-equivalent authority updates).
-- Extended the combat seam memo to support `attack_intent` targeting via entity, cell, or both; clarified deterministic consistency validation and outcome recording for cell-based resolution.
-- Documented called-shot defaults/forensics (`called_region` vs `region_hit`) and added deterministic weapon arc/attack-shape validation contract language without selecting mechanics math.
+- Docs-only refinement in `docs/COMBAT_SEAM_DESIGN.md`: introduced canonical `CellRef` for `target_cell` with topology-owned coordinate encoding and tick-`T` topology validation semantics.
+- Clarified validation vs resolution boundary for attack-shape seams: intake enforces admissibility of selected discriminator(s), while deterministic resolution computes actual affected results and records outcomes.
+- Extended forensic `combat_outcome` schema guidance with optional bounded `affected` entries for future sweeps/AoE while retaining `target_id`/`target_cell` as primary selected/aimed target fields.
 
 
 ## Troubleshooting
