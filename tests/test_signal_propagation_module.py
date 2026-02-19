@@ -175,6 +175,165 @@ def test_signal_expiry_filtering_in_perception() -> None:
     outcome = _outcomes(sim, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)[0]["params"]
     assert outcome["outcome"] == "completed"
     assert outcome["hits"] == []
+    assert outcome["sensitivity"] == 0
+    assert outcome["sensitivity_source"] == "default"
+    assert outcome["bonus"] == 0
+
+
+def test_signal_perception_hearing_stat_bonus_changes_hits_deterministically() -> None:
+    sim = _make_sim()
+    sim.state.entities["scout"].stats = {"hearing": 20}
+    sim.state.world.append_signal_record(
+        {
+            "signal_id": "far",
+            "tick_emitted": 0,
+            "space_id": "overworld",
+            "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 2, "r": -1}},
+            "channel": "sound",
+            "base_intensity": 0,
+            "falloff_model": "linear",
+            "max_radius": 4,
+            "ttl_ticks": 10,
+            "metadata": {},
+        }
+    )
+    sim.state.world.append_signal_record(
+        {
+            "signal_id": "near",
+            "tick_emitted": 0,
+            "space_id": "overworld",
+            "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 1, "r": 0}},
+            "channel": "sound",
+            "base_intensity": 0,
+            "falloff_model": "linear",
+            "max_radius": 4,
+            "ttl_ticks": 10,
+            "metadata": {},
+        }
+    )
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+            params={"channel": "sound", "radius": 4, "duration_ticks": 0},
+        )
+    )
+
+    sim.advance_ticks(1)
+    outcome = _outcomes(sim, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)[0]["params"]
+    assert outcome["sensitivity"] == 20
+    assert outcome["sensitivity_source"] == "hearing"
+    assert outcome["bonus"] == 2
+    assert [hit["signal_id"] for hit in outcome["hits"]] == ["near", "far"]
+    assert [hit["computed_strength"] for hit in outcome["hits"]] == [2, 2]
+
+
+def test_signal_perception_missing_stats_keeps_baseline_bonus_zero() -> None:
+    sim = _make_sim()
+    sim.state.world.append_signal_record(
+        {
+            "signal_id": "just_outside_baseline",
+            "tick_emitted": 0,
+            "space_id": "overworld",
+            "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 1, "r": 0}},
+            "channel": "sound",
+            "base_intensity": 0,
+            "falloff_model": "linear",
+            "max_radius": 4,
+            "ttl_ticks": 10,
+            "metadata": {},
+        }
+    )
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+            params={"channel": "sound", "radius": 4, "duration_ticks": 0},
+        )
+    )
+
+    sim.advance_ticks(1)
+    outcome = _outcomes(sim, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)[0]["params"]
+    assert outcome["hits"] == []
+    assert outcome["sensitivity"] == 0
+    assert outcome["sensitivity_source"] == "default"
+    assert outcome["bonus"] == 0
+
+
+def test_signal_perception_non_numeric_stat_falls_back_to_zero() -> None:
+    sim = _make_sim()
+    sim.state.entities["scout"].stats = {"hearing": "loud"}
+    sim.state.world.append_signal_record(
+        {
+            "signal_id": "just_outside_baseline",
+            "tick_emitted": 0,
+            "space_id": "overworld",
+            "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 1, "r": 0}},
+            "channel": "sound",
+            "base_intensity": 0,
+            "falloff_model": "linear",
+            "max_radius": 4,
+            "ttl_ticks": 10,
+            "metadata": {},
+        }
+    )
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+            params={"channel": "sound", "radius": 4, "duration_ticks": 0},
+        )
+    )
+
+    sim.advance_ticks(1)
+    outcome = _outcomes(sim, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)[0]["params"]
+    assert outcome["hits"] == []
+    assert outcome["sensitivity"] == 0
+    assert outcome["sensitivity_source"] == "hearing"
+    assert outcome["bonus"] == 0
+
+
+def test_signal_perception_save_load_mid_delay_preserves_stat_fields() -> None:
+    sim = _make_sim()
+    sim.state.entities["scout"].stats = {"perception": 30}
+    sim.state.world.append_signal_record(
+        {
+            "signal_id": "far",
+            "tick_emitted": 0,
+            "space_id": "overworld",
+            "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 2, "r": -1}},
+            "channel": "sound",
+            "base_intensity": 0,
+            "falloff_model": "linear",
+            "max_radius": 4,
+            "ttl_ticks": 10,
+            "metadata": {},
+        }
+    )
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+            params={"channel": "sound", "radius": 4, "duration_ticks": 3},
+        )
+    )
+
+    sim.advance_ticks(1)
+    loaded = Simulation.from_simulation_payload(sim.simulation_payload())
+    loaded.register_rule_module(SignalPropagationModule())
+    loaded.advance_ticks(4)
+
+    outcomes = _outcomes(loaded, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)
+    completed = [entry["params"] for entry in outcomes if entry["params"]["action_uid"] == "0:0" and entry["params"]["outcome"] == "completed"]
+    assert len(completed) == 1
+    assert completed[0]["sensitivity"] == 30
+    assert completed[0]["sensitivity_source"] == "perception"
+    assert completed[0]["bonus"] == 3
+    assert completed[0]["hits"][0]["signal_id"] == "far"
 
 
 def test_signal_replay_hash_identity() -> None:
@@ -201,5 +360,41 @@ def test_signal_replay_hash_identity() -> None:
 
     sim_a.advance_ticks(8)
     sim_b.advance_ticks(8)
+
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
+
+
+def test_signal_replay_hash_identity_with_stat_driven_perception() -> None:
+    sim_a = _make_sim(seed=911)
+    sim_b = _make_sim(seed=911)
+    sim_a.state.entities["scout"].stats = {"hearing": 25}
+    sim_b.state.entities["scout"].stats = {"hearing": 25}
+
+    payload = {
+        "signal_id": "far",
+        "tick_emitted": 0,
+        "space_id": "overworld",
+        "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 2, "r": -1}},
+        "channel": "sound",
+        "base_intensity": 0,
+        "falloff_model": "linear",
+        "max_radius": 4,
+        "ttl_ticks": 10,
+        "metadata": {},
+    }
+    sim_a.state.world.append_signal_record(payload)
+    sim_b.state.world.append_signal_record(payload)
+
+    command = SimCommand(
+        tick=2,
+        entity_id="scout",
+        command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+        params={"channel": "sound", "radius": 4, "duration_ticks": 1},
+    )
+    sim_a.append_command(command)
+    sim_b.append_command(command)
+
+    sim_a.advance_ticks(6)
+    sim_b.advance_ticks(6)
 
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
