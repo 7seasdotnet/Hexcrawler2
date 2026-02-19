@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5Q — Substrate Integrity Audit (hardening; no new features).
-- **Next action:** Phase 5R — Occlusion/doors attenuation substrate (placeholder only; no implementation yet).
-- **Phase status:** ✅ Phase 5Q hardening pass complete (bounded ledgers, deterministic ordering guards, and save/load validation tightened across time/stats/signals/interaction substrates).
+- **Current phase:** Phase 5R — Signal Occlusion / Door Attenuation Substrate.
+- **Next action:** Phase 5S — Continue substrate hardening around signal edge-cases and migration guards.
+- **Phase status:** ✅ Phase 5R complete: structural edge-occlusion ledger, deterministic door-driven occlusion updates, and occlusion-aware signal perception forensics are implemented with save/load + hash coverage.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Hardened substrate boundedness and deterministic eviction: `executed_action_uids` ledgers for `entity_stats`, `interaction`, and `signal_propagation` are now capped with deterministic FIFO retention; topology distance helpers now safely return `None` for malformed/mismatched coordinates.
-- Tightened load-time validation and back-compat: simulation time payload integers are strictly validated, and `world.signals` now validates canonical `SignalRecord` fields while preserving legacy signal payload compatibility.
-- Added high-value integration and regression tests for stats→perception save/load exactly-once behavior + hash stability, interaction/signals coexistence stability in non-overworld space, bounded ledger enforcement, malformed signal/time payload rejection, and deterministic invalid-intent failure behavior.
+- Added hash-covered bounded `world.structure_occlusion` edge ledger with canonical space-aware edge keys, deterministic FIFO truncation, load-time normalization, and save/load round-trip support.
+- Extended door interaction mutation path so open/close/toggle updates the associated structural occlusion edge deterministically through the same authoritative command/event pipeline.
+- Extended deterministic signal perception to use bounded topology-aware path cost (`step_count + occlusion_cost`) and emit occlusion forensic fields (`occlusion_cost`, `step_count`, `effective_path_cost`) in perception outcomes.
 
 
 ## Troubleshooting

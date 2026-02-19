@@ -17,7 +17,7 @@ from hexcrawler.sim.signals import (
     SignalPropagationModule,
     distance_between_locations,
 )
-from hexcrawler.sim.world import AnchorRecord, DoorRecord, HexCoord, HexRecord, InteractableRecord, MAX_SIGNALS, SpaceState, WorldState
+from hexcrawler.sim.world import AnchorRecord, DoorRecord, HexCoord, HexRecord, InteractableRecord, MAX_OCCLUSION_EDGES, MAX_SIGNALS, SpaceState, WorldState
 
 
 def _build_world() -> WorldState:
@@ -326,3 +326,122 @@ def test_world_signal_payload_load_validation_and_fifo_truncation() -> None:
     ]
     with pytest.raises(ValueError, match="signal.ttl_ticks"):
         WorldState.from_dict(invalid_payload)
+
+
+def test_world_structure_occlusion_payload_round_trip_and_fifo_bound() -> None:
+    world = _build_world()
+    for index in range(MAX_OCCLUSION_EDGES + 3):
+        world.set_structure_occlusion_edge(
+            space_id="dungeon:test",
+            cell_a={"x": index, "y": 0},
+            cell_b={"x": index + 1, "y": 0},
+            occlusion_value=1,
+        )
+    payload = world.to_dict()
+    restored = WorldState.from_dict(payload)
+    assert len(restored.structure_occlusion) == MAX_OCCLUSION_EDGES
+
+
+def test_world_hash_changes_when_structure_occlusion_changes() -> None:
+    sim = _make_sim(seed=401)
+    sim.register_rule_module(SignalPropagationModule())
+    before = simulation_hash(sim)
+    sim.state.world.set_structure_occlusion_edge(
+        space_id="dungeon:test",
+        cell_a={"x": 1, "y": 1},
+        cell_b={"x": 2, "y": 1},
+        occlusion_value=5,
+    )
+    after = simulation_hash(sim)
+    assert before != after
+
+
+def test_door_toggle_updates_structure_occlusion_deterministically() -> None:
+    sim = _make_sim(seed=402)
+    sim.register_rule_module(InteractionExecutionModule())
+    scout = sim.state.entities["scout"]
+    scout.space_id = "dungeon:test"
+    scout.position_x = 1.0
+    scout.position_y = 1.0
+
+    initial = sim.state.world.get_structure_occlusion_value(
+        space_id="dungeon:test",
+        cell_a={"x": 1, "y": 1},
+        cell_b={"x": 2, "y": 1},
+    )
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type="interaction_intent",
+            params={"interaction_type": "open", "target": {"kind": "door", "id": "door:1"}, "duration_ticks": 0},
+        )
+    )
+    sim.advance_ticks(1)
+    opened = sim.state.world.get_structure_occlusion_value(
+        space_id="dungeon:test",
+        cell_a={"x": 1, "y": 1},
+        cell_b={"x": 2, "y": 1},
+    )
+    assert initial == 1
+    assert opened == 0
+
+
+def test_structure_occlusion_edge_rejects_topology_mismatch() -> None:
+    world = _build_world()
+    with pytest.raises(ValueError, match="same topology keys"):
+        world.set_structure_occlusion_edge(
+            space_id="dungeon:test",
+            cell_a={"q": 0, "r": 0},
+            cell_b={"x": 0, "y": 1},
+            occlusion_value=1,
+        )
+
+
+def test_door_toggle_changes_signal_perception_strength_deterministically() -> None:
+    def run(open_first: bool) -> int:
+        sim = _make_sim(seed=403)
+        sim.register_rule_module(InteractionExecutionModule())
+        sim.register_rule_module(SignalPropagationModule())
+        scout = sim.state.entities["scout"]
+        scout.space_id = "dungeon:test"
+        scout.position_x = 2.0
+        scout.position_y = 1.0
+        sim.state.world.append_signal_record(
+            {
+                "signal_id": "door-sig",
+                "tick_emitted": 0,
+                "space_id": "dungeon:test",
+                "origin": {"space_id": "dungeon:test", "topology_type": "square_grid", "coord": {"x": 1, "y": 1}},
+                "channel": "sound",
+                "base_intensity": 6,
+                "falloff_model": "linear",
+                "max_radius": 4,
+                "ttl_ticks": 10,
+                "metadata": {},
+            }
+        )
+        if open_first:
+            sim.append_command(
+                SimCommand(
+                    tick=0,
+                    entity_id="scout",
+                    command_type="interaction_intent",
+                    params={"interaction_type": "open", "target": {"kind": "door", "id": "door:1"}, "duration_ticks": 0},
+                )
+            )
+        sim.append_command(
+            SimCommand(
+                tick=0,
+                entity_id="scout",
+                command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+                params={"channel": "sound", "radius": 4, "duration_ticks": 0},
+            )
+        )
+        sim.advance_ticks(1)
+        hits = _events(sim, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)[0]["params"]["hits"]
+        return int(hits[0]["computed_strength"]) if hits else 0
+
+    closed_strength = run(open_first=False)
+    open_strength = run(open_first=True)
+    assert open_strength > closed_strength

@@ -398,3 +398,68 @@ def test_signal_replay_hash_identity_with_stat_driven_perception() -> None:
     sim_b.advance_ticks(6)
 
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
+
+
+def test_signal_occlusion_path_cost_reduces_strength_deterministically() -> None:
+    sim = _make_sim(seed=123)
+    signal = SignalRecord(
+        signal_id="sig-occ",
+        tick_emitted=0,
+        space_id="overworld",
+        origin=LocationRef(space_id="overworld", topology_type=OVERWORLD_HEX_TOPOLOGY, coord={"q": 0, "r": 0}),
+        channel="sound",
+        base_intensity=8,
+        falloff_model="linear",
+        max_radius=3,
+        ttl_ticks=10,
+        metadata={},
+    )
+    listener = LocationRef(space_id="overworld", topology_type=OVERWORLD_HEX_TOPOLOGY, coord={"q": 1, "r": 0})
+    baseline = compute_signal_strength(signal, listener, current_tick=0, world=sim.state.world)
+    sim.state.world.set_structure_occlusion_edge(
+        space_id="overworld",
+        cell_a={"q": 0, "r": 0},
+        cell_b={"q": 1, "r": 0},
+        occlusion_value=3,
+    )
+    attenuated = compute_signal_strength(signal, listener, current_tick=0, world=sim.state.world)
+    assert baseline == 7
+    assert attenuated == 6
+
+
+def test_signal_perception_hits_include_occlusion_forensics() -> None:
+    sim = _make_sim(seed=124)
+    sim.state.entities["scout"] = EntityState.from_hex(entity_id="scout", hex_coord=HexCoord(1, 0))
+    sim.state.world.append_signal_record(
+        {
+            "signal_id": "sig-occ",
+            "tick_emitted": 0,
+            "space_id": "overworld",
+            "origin": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+            "channel": "sound",
+            "base_intensity": 8,
+            "falloff_model": "linear",
+            "max_radius": 4,
+            "ttl_ticks": 10,
+            "metadata": {},
+        }
+    )
+    sim.state.world.set_structure_occlusion_edge(
+        space_id="overworld",
+        cell_a={"q": 0, "r": 0},
+        cell_b={"q": 1, "r": 0},
+        occlusion_value=1,
+    )
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type=PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE,
+            params={"channel": "sound", "radius": 4, "duration_ticks": 0},
+        )
+    )
+    sim.advance_ticks(1)
+    hit = _outcomes(sim, SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE)[0]["params"]["hits"][0]
+    assert hit["step_count"] == 1
+    assert hit["occlusion_cost"] == 1
+    assert hit["effective_path_cost"] == 2

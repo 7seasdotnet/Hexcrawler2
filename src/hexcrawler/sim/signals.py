@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import copy
+import heapq
 from dataclasses import dataclass
 from typing import Any
 
 from hexcrawler.sim.core import SimCommand, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import HexCoord
+from hexcrawler.sim.world import HexCoord, WorldState
 
 EMIT_SIGNAL_INTENT_COMMAND_TYPE = "emit_signal_intent"
 PERCEIVE_SIGNAL_INTENT_COMMAND_TYPE = "perceive_signal_intent"
@@ -78,18 +79,121 @@ def distance_between_locations(a: LocationRef, b: LocationRef) -> int | None:
     return None
 
 
-def compute_signal_strength(signal: SignalRecord, listener: LocationRef, current_tick: int) -> int:
+def _coord_key(topology_type: str, coord: dict[str, Any]) -> tuple[int, int] | None:
+    try:
+        if topology_type == OVERWORLD_HEX_TOPOLOGY:
+            return (int(coord["q"]), int(coord["r"]))
+        if topology_type == SQUARE_GRID_TOPOLOGY:
+            return (int(coord["x"]), int(coord["y"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _coord_from_key(topology_type: str, key: tuple[int, int]) -> dict[str, int]:
+    if topology_type == OVERWORLD_HEX_TOPOLOGY:
+        return {"q": int(key[0]), "r": int(key[1])}
+    return {"x": int(key[0]), "y": int(key[1])}
+
+
+def _neighbor_keys(topology_type: str, key: tuple[int, int]) -> list[tuple[int, int]]:
+    a, b = key
+    if topology_type == OVERWORLD_HEX_TOPOLOGY:
+        return [
+            (a + 1, b),
+            (a + 1, b - 1),
+            (a, b - 1),
+            (a - 1, b),
+            (a - 1, b + 1),
+            (a, b + 1),
+        ]
+    if topology_type == SQUARE_GRID_TOPOLOGY:
+        return [
+            (a + 1, b),
+            (a - 1, b),
+            (a, b + 1),
+            (a, b - 1),
+        ]
+    return []
+
+
+def compute_signal_path_metrics(
+    signal: SignalRecord,
+    listener: LocationRef,
+    *,
+    world: WorldState,
+    max_steps: int,
+) -> dict[str, int] | None:
+    if max_steps < 0:
+        return None
+    if signal.origin.space_id != listener.space_id or signal.origin.topology_type != listener.topology_type:
+        return None
+
+    topology_type = signal.origin.topology_type
+    origin_key = _coord_key(topology_type, signal.origin.coord)
+    listener_key = _coord_key(topology_type, listener.coord)
+    if origin_key is None or listener_key is None:
+        return None
+
+    queue: list[tuple[int, int, tuple[int, int]]] = [(0, 0, origin_key)]
+    best: dict[tuple[int, int], int] = {origin_key: 0}
+
+    while queue:
+        total_cost, step_count, current = heapq.heappop(queue)
+        if total_cost != best.get(current):
+            continue
+        if current == listener_key:
+            return {
+                "occlusion_cost": int(total_cost - step_count),
+                "step_count": int(step_count),
+                "effective_path_cost": int(total_cost),
+            }
+        if step_count >= max_steps:
+            continue
+
+        current_coord = _coord_from_key(topology_type, current)
+        for neighbor in _neighbor_keys(topology_type, current):
+            next_step_count = step_count + 1
+            if next_step_count > max_steps:
+                continue
+            neighbor_coord = _coord_from_key(topology_type, neighbor)
+            occlusion = world.get_structure_occlusion_value(
+                space_id=signal.space_id,
+                cell_a=current_coord,
+                cell_b=neighbor_coord,
+            )
+            next_total = next_step_count + occlusion + (total_cost - step_count)
+            best_total = best.get(neighbor)
+            if best_total is not None and next_total >= best_total:
+                continue
+            best[neighbor] = next_total
+            heapq.heappush(queue, (next_total, next_step_count, neighbor))
+    return None
+
+
+def compute_signal_strength(
+    signal: SignalRecord,
+    listener: LocationRef,
+    current_tick: int,
+    *,
+    world: WorldState | None = None,
+) -> int:
     expires_tick = signal.tick_emitted + signal.ttl_ticks
     if current_tick > expires_tick:
-        return 0
-
-    distance = distance_between_locations(signal.origin, listener)
-    if distance is None or distance > signal.max_radius:
         return 0
 
     if signal.falloff_model != "linear":
         return 0
 
+    if world is not None:
+        metrics = compute_signal_path_metrics(signal, listener, world=world, max_steps=signal.max_radius)
+        if metrics is None:
+            return 0
+        return max(0, signal.base_intensity - int(metrics["effective_path_cost"]))
+
+    distance = distance_between_locations(signal.origin, listener)
+    if distance is None or distance > signal.max_radius:
+        return 0
     return max(0, signal.base_intensity - distance)
 
 
@@ -274,22 +378,33 @@ class SignalPropagationModule(RuleModule):
             signal = self._signal_from_dict(record)
             if signal is None or signal.channel != channel or signal.space_id != listener.space_id:
                 continue
-            distance = distance_between_locations(signal.origin, listener)
-            if distance is None or distance > int(radius):
+            metrics = compute_signal_path_metrics(
+                signal,
+                listener,
+                world=sim.state.world,
+                max_steps=min(signal.max_radius, int(radius)),
+            )
+            if metrics is None:
                 continue
-            strength = compute_signal_strength(signal, listener, event.tick) + bonus
+            effective_path_cost = int(metrics["effective_path_cost"])
+            if effective_path_cost > int(radius):
+                continue
+            strength = compute_signal_strength(signal, listener, event.tick, world=sim.state.world) + bonus
             if strength <= 0:
                 continue
             hits.append(
                 {
                     "signal_id": signal.signal_id,
-                    "distance": distance,
+                    "distance": int(metrics["step_count"]),
+                    "step_count": int(metrics["step_count"]),
+                    "occlusion_cost": int(metrics["occlusion_cost"]),
+                    "effective_path_cost": effective_path_cost,
                     "computed_strength": strength,
                     "age_ticks": event.tick - signal.tick_emitted,
                 }
             )
 
-        hits.sort(key=lambda entry: (int(entry["distance"]), str(entry["signal_id"])))
+        hits.sort(key=lambda entry: (int(entry["effective_path_cost"]), int(entry["step_count"]), str(entry["signal_id"])))
         self._mark_executed(sim, "signal_perception", action_uid)
         self._schedule_perceive_outcome(
             sim,

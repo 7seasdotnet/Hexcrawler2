@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,7 @@ DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
 DEFAULT_OVERWORLD_SPACE_ID = "overworld"
 SQUARE_GRID_TOPOLOGY = "square_grid"
 MAX_SIGNALS = 256
+MAX_OCCLUSION_EDGES = 2048
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -101,6 +103,48 @@ def _normalize_signal_record(value: Any) -> dict[str, Any]:
         "max_radius": _require_non_negative_int(value.get("max_radius"), field_name="signal.max_radius"),
         "ttl_ticks": _require_non_negative_int(value.get("ttl_ticks"), field_name="signal.ttl_ticks"),
         "metadata": dict(metadata),
+    }
+
+
+def _coord_sort_key(coord: dict[str, int]) -> tuple[int, int, int]:
+    if "q" in coord and "r" in coord:
+        return (0, int(coord["q"]), int(coord["r"]))
+    if "x" in coord and "y" in coord:
+        return (1, int(coord["x"]), int(coord["y"]))
+    raise ValueError("coord must contain q/r or x/y")
+
+
+def _canonicalize_edge_cells(cell_a: dict[str, Any], cell_b: dict[str, Any]) -> tuple[dict[str, int], dict[str, int]]:
+    normalized_a = _normalize_coord_dict(dict(cell_a), field_name="structure_occlusion.cell_a")
+    normalized_b = _normalize_coord_dict(dict(cell_b), field_name="structure_occlusion.cell_b")
+    if set(normalized_a.keys()) != set(normalized_b.keys()):
+        raise ValueError("structure_occlusion edge coords must share the same topology keys")
+    if _coord_sort_key(normalized_b) < _coord_sort_key(normalized_a):
+        return normalized_b, normalized_a
+    return normalized_a, normalized_b
+
+
+def canonical_occlusion_edge_key(space_id: str, cell_a: dict[str, Any], cell_b: dict[str, Any]) -> str:
+    normalized_a, normalized_b = _canonicalize_edge_cells(cell_a, cell_b)
+    if not isinstance(space_id, str) or not space_id:
+        raise ValueError("structure_occlusion.space_id must be a non-empty string")
+    payload = {"space_id": space_id, "cell_a": normalized_a, "cell_b": normalized_b}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _normalize_occlusion_edge_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("structure_occlusion entry must be an object")
+    space_id = value.get("space_id")
+    if not isinstance(space_id, str) or not space_id:
+        raise ValueError("structure_occlusion.space_id must be a non-empty string")
+    cell_a, cell_b = _canonicalize_edge_cells(value.get("cell_a", {}), value.get("cell_b", {}))
+    occlusion_value = _require_non_negative_int(value.get("occlusion_value"), field_name="structure_occlusion.occlusion_value")
+    return {
+        "space_id": space_id,
+        "cell_a": cell_a,
+        "cell_b": cell_b,
+        "occlusion_value": occlusion_value,
     }
 
 def _build_default_hex_record(rng_worldgen: random.Random) -> HexRecord:
@@ -705,6 +749,7 @@ class WorldState:
     topology_params: dict[str, int] = field(default_factory=dict)
     spaces: dict[str, SpaceState] = field(default_factory=dict)
     signals: list[dict[str, Any]] = field(default_factory=list)
+    structure_occlusion: list[dict[str, Any]] = field(default_factory=list)
     tracks: list[dict[str, Any]] = field(default_factory=list)
     spawn_descriptors: list[dict[str, Any]] = field(default_factory=list)
     rumors: list[dict[str, Any]] = field(default_factory=list)
@@ -719,6 +764,7 @@ class WorldState:
             self.hexes = overworld_space.hexes
             self.topology_type = overworld_space.topology_type
             self.topology_params = dict(overworld_space.topology_params)
+            self._ensure_closed_door_occlusion_defaults()
             return
         self.spaces[DEFAULT_OVERWORLD_SPACE_ID] = SpaceState(
             space_id=DEFAULT_OVERWORLD_SPACE_ID,
@@ -726,6 +772,7 @@ class WorldState:
             topology_params=dict(self.topology_params),
             hexes=self.hexes,
         )
+        self._ensure_closed_door_occlusion_defaults()
 
     @classmethod
     def create_with_topology(
@@ -809,6 +856,15 @@ class WorldState:
                 (dict(record) for record in self.signals),
                 key=lambda record: str(record.get("signal_id", record.get("signal_uid", ""))),
             )
+        if self.structure_occlusion:
+            payload["structure_occlusion"] = sorted(
+                (dict(record) for record in self.structure_occlusion),
+                key=lambda record: canonical_occlusion_edge_key(
+                    str(record.get("space_id", "")),
+                    dict(record.get("cell_a", {})),
+                    dict(record.get("cell_b", {})),
+                ),
+            )
         if self.tracks:
             payload["tracks"] = sorted(
                 (dict(record) for record in self.tracks),
@@ -870,6 +926,14 @@ class WorldState:
         world.signals = [_normalize_signal_record(row) for row in raw_signals]
         if len(world.signals) > MAX_SIGNALS:
             world.signals = world.signals[-MAX_SIGNALS:]
+
+        raw_structure_occlusion = data.get("structure_occlusion", [])
+        if not isinstance(raw_structure_occlusion, list):
+            raise ValueError("structure_occlusion must be a list")
+        world.structure_occlusion = [_normalize_occlusion_edge_record(row) for row in raw_structure_occlusion]
+        if len(world.structure_occlusion) > MAX_OCCLUSION_EDGES:
+            world.structure_occlusion = world.structure_occlusion[-MAX_OCCLUSION_EDGES:]
+        world._ensure_closed_door_occlusion_defaults()
 
         raw_tracks = data.get("tracks", [])
         if not isinstance(raw_tracks, list):
@@ -941,6 +1005,55 @@ class WorldState:
         self.signals.append(_normalize_signal_record(record))
         if len(self.signals) > MAX_SIGNALS:
             del self.signals[: len(self.signals) - MAX_SIGNALS]
+
+    def get_structure_occlusion_value(self, *, space_id: str, cell_a: dict[str, Any], cell_b: dict[str, Any]) -> int:
+        edge_key = canonical_occlusion_edge_key(space_id, cell_a, cell_b)
+        for record in self.structure_occlusion:
+            if canonical_occlusion_edge_key(record["space_id"], record["cell_a"], record["cell_b"]) == edge_key:
+                return int(record["occlusion_value"])
+        return 0
+
+    def set_structure_occlusion_edge(self, *, space_id: str, cell_a: dict[str, Any], cell_b: dict[str, Any], occlusion_value: int) -> None:
+        normalized = _normalize_occlusion_edge_record(
+            {
+                "space_id": space_id,
+                "cell_a": cell_a,
+                "cell_b": cell_b,
+                "occlusion_value": occlusion_value,
+            }
+        )
+        edge_key = canonical_occlusion_edge_key(normalized["space_id"], normalized["cell_a"], normalized["cell_b"])
+        for index, record in enumerate(self.structure_occlusion):
+            existing_key = canonical_occlusion_edge_key(record["space_id"], record["cell_a"], record["cell_b"])
+            if existing_key != edge_key:
+                continue
+            if normalized["occlusion_value"] <= 0:
+                del self.structure_occlusion[index]
+                return
+            self.structure_occlusion[index] = normalized
+            return
+        if normalized["occlusion_value"] <= 0:
+            return
+        self.structure_occlusion.append(normalized)
+        if len(self.structure_occlusion) > MAX_OCCLUSION_EDGES:
+            del self.structure_occlusion[: len(self.structure_occlusion) - MAX_OCCLUSION_EDGES]
+
+    def _ensure_closed_door_occlusion_defaults(self) -> None:
+        for space_id in sorted(self.spaces):
+            space = self.spaces[space_id]
+            for door_id in sorted(space.doors):
+                door = space.doors[door_id]
+                if door.state != "closed":
+                    continue
+                edge_value = self.get_structure_occlusion_value(space_id=space_id, cell_a=door.a, cell_b=door.b)
+                if edge_value > 0:
+                    continue
+                self.set_structure_occlusion_edge(
+                    space_id=space_id,
+                    cell_a=door.a,
+                    cell_b=door.b,
+                    occlusion_value=1,
+                )
 
     def upsert_track(self, record: dict[str, Any]) -> bool:
         track_uid = str(record["track_uid"])

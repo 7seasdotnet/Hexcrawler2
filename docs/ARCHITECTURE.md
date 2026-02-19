@@ -236,3 +236,12 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Workflow:** Build runtime save from template: `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/basic_map.json saves/sample_save.json --seed 123 --force --print-summary`.
 - **Workflow:** Run pygame viewer from map template flow: `python run_game.py`.
 - **Workflow:** Run replay forensics on canonical save: `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/sample_save.json --ticks 200`.
+
+## 13) Signal Structural Occlusion Contract (Phase 5R)
+- **Purpose:** Preserve deterministic, substrate-only attenuation from structural barriers without introducing stealth/AI/probabilistic semantics.
+- **Ledger Contract:** World state carries bounded `world.structure_occlusion` edge records (`space_id`, `cell_a`, `cell_b`, `occlusion_value`) with canonicalized edge ordering and hash coverage through canonical world serialization.
+- **Boundedness Contract:** Occlusion ledger storage is capped (`MAX_OCCLUSION_EDGES`) with deterministic FIFO truncation.
+- **Door Integration Contract:** Structural door state mutations (`open`/`close`/`toggle`) update matching occlusion edges through the authoritative interaction command/event seam only.
+- **Propagation Contract:** Signal perception uses deterministic bounded topology-aware path evaluation within signal radius and computes `effective_path_cost = step_count + occlusion_cost`.
+- **Forensics Contract:** Perception outcomes may include `step_count`, `occlusion_cost`, and `effective_path_cost` as deterministic JSON-safe values.
+- **Phase Boundary (Hard):** No AI reaction, stealth modeling, probabilistic checks, combat branching, or presentation-side mutation paths are introduced by this contract.
