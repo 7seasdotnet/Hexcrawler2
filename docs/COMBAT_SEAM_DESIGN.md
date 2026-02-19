@@ -35,6 +35,7 @@ Minimal JSON-safe payload:
   "intent": "attack_intent",
   "attacker_id": "entity:...",
   "target_id": "entity:...",
+  "target_cell": {"space_id": "overworld", "coord": [0, 0]},
   "mode": "melee",
   "weapon_ref": "item:...",
   "target_region": null,
@@ -44,21 +45,37 @@ Minimal JSON-safe payload:
 
 Required fields:
 - `attacker_id`
-- `target_id`
 - `mode` (string enum owned by rules/content, e.g. `melee`, `ranged`)
 
 Optional fields:
+- `target_id` (nullable only when `target_cell` is provided)
+- `target_cell` (nullable location payload; seam supports cell-only and combined targeting)
 - `weapon_ref`
-- `target_region` (nullable; seam support only)
+- `target_region` (nullable called-shot request; defaults to `torso`/center-mass when omitted)
 - `tags` (array of strings)
+
+Targeting forms accepted by seam:
+- `A)` entity target only (`target_id` set, `target_cell` null)
+- `B)` cell target only (`target_cell` set, `target_id` null)
+- `C)` both entity + cell (`target_id` and `target_cell` set)
 
 Validation contract at intake (deterministic pass/fail):
 - Attacker entity exists.
-- Target entity exists.
-- Both entities are in the same `space_id`.
+- At least one targeting discriminator is present (`target_id` or `target_cell`).
+- If `target_id` is present, target entity exists.
+- If `target_cell` is present, cell payload is structurally valid for the space/topology.
+- If both `target_id` and `target_cell` are present, they must be consistent at tick `T` (target entity occupies target cell) or the intent is rejected deterministically.
+- If `target_id` is present, attacker and target are in the same `space_id`.
+- If only `target_cell` is present, attacker and target cell must be in the same `space_id`.
 - For melee-tagged modes, adjacency/topology reach check passes.
+- Selected target discriminator (entity or cell) is inside the deterministic legal affected set at tick `T` for attacker position + facing + weapon/mode attack shape contract.
 - Actor eligibility check passes (alive/present/not otherwise disqualified by serialized state).
 - Unknown optional fields are ignored deterministically or rejected via schema policy (decision deferred to command schema policy, not combat logic).
+
+Called-shot contract:
+- `target_region` is a requested called-shot region, not a guaranteed outcome.
+- If `target_region` is omitted/null, called shot defaults to `torso` (center-mass label).
+- Region taxonomy remains content/rules-owned and deferred at seam level.
 
 Execution contract:
 - Intent is accepted/rejected deterministically at ingest.
@@ -74,7 +91,10 @@ Forensic `combat_outcome` record (minimum):
   "tick": 123,
   "attacker_id": "entity:...",
   "target_id": "entity:...",
+  "target_cell": {"space_id": "overworld", "coord": [0, 0]},
   "mode": "melee",
+  "called_region": "torso",
+  "region_hit": "arm",
   "applied": true,
   "reason": "resolved",
   "wound_deltas": [],
@@ -86,6 +106,9 @@ Forensic `combat_outcome` record (minimum):
 - `wound_deltas` is a structural payload for future wound application evidence.
 - `roll_trace` is a forensic list of deterministic random outputs (when RNG is used).
 - `reason` includes deterministic non-apply outcomes (`invalid_target`, `out_of_range`, `ineligible`, `cooldown_blocked`, etc.).
+- `called_region` records requested region after defaulting logic (`torso` when omitted/null).
+- `region_hit` records deterministic actual impacted region (nullable when no hit is applied).
+- Optional deterministic redirect rationale may be included via outcome metadata (e.g., `redirected_by_rules`), with taxonomy deferred.
 
 ### `defend_intent` (optional seam, deferred)
 
@@ -137,6 +160,15 @@ Execution contract:
 - The gate is read/written only through deterministic simulation execution.
 - Eligibility at tick `T` uses this gate (`T >= gate_value` semantics, exact comparator deferred but fixed in implementation contract).
 
+### Authoritative facing state (required for arcs)
+- Each entity carries authoritative `facing` state as part of serialized entity state.
+- Facing is hash-covered by standard canonical serialization of entity payloads.
+- Facing updates are accepted only through authoritative simulation commands/intents (same authority class as movement mutations).
+- Representation is topology-dependent:
+  - `overworld_hex`: 6 discrete directions.
+  - `square_grid`: represented as an integer direction token whose 4-way vs 8-way interpretation is deferred to topology rules.
+- Facing is required input for directional attacks, weapon arcs, and attack-shape validation.
+
 ### Impairment interaction
 - Wounds and related impairments may:
   - increase cooldown duration,
@@ -181,6 +213,7 @@ Each entity must support a bounded wound ledger:
 - Wound mutations are deterministic and replay/save-load stable.
 - Wounds persist until explicit deterministic healing/removal logic mutates ledger state.
 - Overflow handling at `MAX_WOUNDS` is deterministic and explicit (e.g., FIFO eviction, merge, or rejection; policy deferred but must be fixed and tested once chosen).
+- Combat outcomes must preserve called-shot forensic fields: requested `called_region` and actual `region_hit` (both nullable strings in schema), with deterministic redirection reason optional.
 
 ### Primary injury model statement
 - HP (if present) is not the primary injury model.
@@ -230,6 +263,13 @@ Each entity must support a bounded wound ledger:
 - Cross-space combat is invalid unless future explicit bridge semantics are added.
 - LOS specifics are deferred.
 
+### Weapon arc / attack-shape seam contract
+- Weapons may define deterministic attack shapes in content/rules (`arc`, `cone`, `line`, `sweep`, etc.; taxonomy deferred).
+- At tick `T`, legal affected targets are derived deterministically from attacker position + authoritative facing + weapon/mode reference + topology rules.
+- Engine seam enforces deterministic validation that chosen entity/cell target lies within that legal set before application.
+- Cell-only targeting is permitted; resolution may deterministically affect an entity in that cell or none, and outcome records what was affected.
+- LOS/cover coupling is explicitly deferred, but seam choices here must not lock out future LOS/cover integration.
+
 ### Doors/interactions
 - Combat does not bypass deterministic door/interactable constraints.
 - No privileged combat path may mutate door/interactable state outside command/event seams.
@@ -273,6 +313,7 @@ Lock-out constraints reviewed: OK.
 ## 9) Deferred Decisions
 
 Explicitly deferred in this memo:
+- Square-grid facing interpretation (4-way vs 8-way).
 - Exact wound taxonomy.
 - Armor math and threshold formulas.
 - Damage math and penetration formulas.
@@ -282,6 +323,7 @@ Explicitly deferred in this memo:
 - Friendly-fire policy.
 - Multi-attacker coordination details.
 - Ranged LOS/cover algorithm.
+- Weapon attack-shape taxonomy and per-weapon parameterization details (owned by content/rules).
 - Exact overflow policy at `MAX_WOUNDS`.
 - Exact schema behavior for unknown optional intent fields (ignore vs strict reject), subject to global schema policy.
 
