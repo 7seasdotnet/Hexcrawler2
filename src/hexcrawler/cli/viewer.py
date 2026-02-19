@@ -13,7 +13,7 @@ class AsciiViewer:
 
     def render(self, sim: Simulation) -> str:
         lines: list[str] = []
-        lines.append(f"tick={sim.state.tick} day={sim.state.day}")
+        lines.append(f"tick={sim.state.tick} day={sim.get_day_index()}")
 
         coords = sorted(sim.state.world.hexes.keys(), key=lambda c: (c.r, c.q))
         if not coords:

@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5L — Site/Dungeon Interaction Hooks (structural + time seam).
-- **Next action:** Phase 5M — Calendar/stats/perception seam (structural, no domain semantics).
-- **Phase status:** ✅ Phase 5L scaffold complete (deterministic site/dungeon interaction intents schedule execution and emit structural outcomes).
+- **Current phase:** Phase 5M — Calendar / Time-of-Day Substrate (structural).
+- **Next action:** Phase 5N — Perception/Noise emission substrate (structural, no gameplay semantics).
+- **Phase status:** ✅ Phase 5M scaffold complete (deterministic serialized calendar/time substrate derived from authoritative tick state).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -30,6 +30,7 @@
   - Space interaction substrate for non-overworld spaces: deterministic canonical `SpaceState.doors` / `SpaceState.anchors` / `SpaceState.interactables` records with strict JSON-safe structural validation, back-compat defaults, and hash coverage through world serialization.
   - Deterministic `interaction_intent` command seam via `InteractionExecutionModule`: validates intent/target/duration, schedules `interaction_execute`, enforces idempotence using serialized `rules_state["interaction"].executed_action_uids`, applies structural door/anchor/interactable mutations only, and emits deterministic forensic `interaction_outcome` events.
   - Deterministic selection command substrate: `set_selected_entity` / `clear_selected_entity`, with serialized/hash-covered selection storage on the command owner entity when present (fallback on simulation state), save/load round-trip support, and replay stability.
+  - Deterministic calendar/time substrate on `SimulationState.time` (`ticks_per_day`, `epoch_tick`) with derived read-only APIs (`get_ticks_per_day`, `get_day_index`, `get_tick_in_day`, `get_time_of_day_fraction`), save/load back-compat defaults, schema validation, and simulation hash coverage.
   - Stackable inventory substrate: `world.containers` persistence, per-entity `inventory_container_id` linkage, deterministic container serialization/hash coverage, and load-time referential validation for entity inventory containers.
   - Deterministic `inventory_intent` command seam (`transfer`/`drop`/`pickup`/`consume`/`spawn`) with single authoritative apply path, no-negative enforcement, deterministic `action_uid` (`tick:command_index`), and serialized idempotence ledger in `rules_state["inventory_ledger"].applied_action_uids`.
   - Deterministic forensic `inventory_outcome` event-trace entries for every intent (`applied`, `already_applied`, `insufficient_quantity`, `unknown_item`, `unknown_container`, `invalid_quantity`, `unsupported_reason`) and deterministic failure handling.
@@ -213,7 +214,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Fixed SpawnMaterialization to support square_grid spawn descriptors and skip unsupported topologies without crashing; added regression tests.
+- Added a serialized, hash-covered calendar/time substrate (`simulation_state.time`) with deterministic derivation from authoritative tick state and back-compat load defaults.
+- Added read-only simulation time helper APIs and updated viewer/CLI displays to consume derived day/time values without mutating simulation state.
+- Added deterministic boundary/save-load/hash tests for calendar derivation and time-model stability.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

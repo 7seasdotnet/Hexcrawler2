@@ -69,7 +69,7 @@ def _print_header(save_payload: dict[str, object], simulation: Simulation) -> No
         "header "
         f"schema_version={save_payload.get('schema_version')} "
         f"tick={simulation.state.tick} "
-        f"day={simulation.state.day} "
+        f"day={simulation.get_day_index()} "
         f"entity_count={len(simulation.state.entities)} "
         f"input_log_length={len(simulation.input_log)}"
     )

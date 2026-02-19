@@ -14,7 +14,7 @@ from typing import Any
 
 from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
-from hexcrawler.sim.core import EntityState, SimCommand, Simulation, TICKS_PER_DAY
+from hexcrawler.sim.core import EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
@@ -705,7 +705,15 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, s
         coord_text = f"x={math.floor(entity.position_x)},y={math.floor(entity.position_y)}"
     else:
         coord_text = f"q={entity.hex_coord.q},r={entity.hex_coord.r}"
-    context_line = f"space={entity.space_id} | {coord_text} | tick={sim.state.tick} | day={sim.state.tick // TICKS_PER_DAY}"
+    ticks_per_day = sim.get_ticks_per_day()
+    day_display = sim.get_day_index() + 1
+    tick_in_day = sim.get_tick_in_day()
+    hours = (tick_in_day * 24) // ticks_per_day
+    minutes = ((tick_in_day * 24 * 60) // ticks_per_day) % 60
+    context_line = (
+        f"space={entity.space_id} | {coord_text} | tick={sim.state.tick} | "
+        f"day={day_display} | time={hours:02d}:{minutes:02d}"
+    )
     lines = [
         context_line,
         "WASD move | RMB menu | F5 save | F9 load | ESC quit",

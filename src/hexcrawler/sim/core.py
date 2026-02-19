@@ -66,6 +66,35 @@ def _json_list_to_tuple(value: Any) -> Any:
 
 
 @dataclass
+class SimulationTimeState:
+    ticks_per_day: int = TICKS_PER_DAY
+    epoch_tick: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ticks_per_day, int) or self.ticks_per_day <= 0:
+            raise ValueError("time.ticks_per_day must be an integer > 0")
+        if not isinstance(self.epoch_tick, int):
+            raise ValueError("time.epoch_tick must be an integer")
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "ticks_per_day": self.ticks_per_day,
+            "epoch_tick": self.epoch_tick,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "SimulationTimeState":
+        if payload is None:
+            return cls()
+        if not isinstance(payload, dict):
+            raise ValueError("simulation_state.time must be an object")
+        return cls(
+            ticks_per_day=int(payload.get("ticks_per_day", TICKS_PER_DAY)),
+            epoch_tick=int(payload.get("epoch_tick", 0)),
+        )
+
+
+@dataclass
 class SimCommand:
     tick: int
     command_type: str
@@ -186,10 +215,11 @@ class SimulationState:
     rules_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     event_trace: list[dict[str, Any]] = field(default_factory=list)
     selected_entity_id: str | None = None
+    time: SimulationTimeState = field(default_factory=SimulationTimeState)
 
     @property
     def day(self) -> int:
-        return self.tick // TICKS_PER_DAY
+        return (self.tick - self.time.epoch_tick) // self.time.ticks_per_day
 
 
 class Simulation:
@@ -321,7 +351,19 @@ class Simulation:
             self._tick_once()
 
     def advance_days(self, days: int) -> None:
-        self.advance_ticks(days * TICKS_PER_DAY)
+        self.advance_ticks(days * self.get_ticks_per_day())
+
+    def get_ticks_per_day(self) -> int:
+        return self.state.time.ticks_per_day
+
+    def get_day_index(self) -> int:
+        return (self.state.tick - self.state.time.epoch_tick) // self.state.time.ticks_per_day
+
+    def get_tick_in_day(self) -> int:
+        return (self.state.tick - self.state.time.epoch_tick) % self.state.time.ticks_per_day
+
+    def get_time_of_day_fraction(self) -> float:
+        return self.get_tick_in_day() / self.state.time.ticks_per_day
 
     def rng_state_payload(self) -> dict[str, Any]:
         stream_states = {
@@ -398,6 +440,7 @@ class Simulation:
             "seed": self.seed,
             "master_seed": self.master_seed,
             "tick": self.state.tick,
+            "time": self.state.time.to_dict(),
             "next_event_counter": self._next_event_counter,
             "rng_state": self.rng_state_payload(),
             "rules_state": dict(sorted(self.state.rules_state.items())),
@@ -435,6 +478,7 @@ class Simulation:
         sim = cls(world=WorldState.from_dict(payload["world"]), seed=int(payload["seed"]))
         sim.master_seed = int(payload.get("master_seed", payload["seed"]))
         sim.state.tick = int(payload["tick"])
+        sim.state.time = SimulationTimeState.from_dict(payload.get("time"))
         sim._next_event_counter = int(payload.get("next_event_counter", 1))
 
         raw_rules_state = payload.get("rules_state", {})

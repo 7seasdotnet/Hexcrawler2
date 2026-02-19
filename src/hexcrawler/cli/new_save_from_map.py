@@ -67,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"hex_count={len(world.hexes)} "
                 f"entity_count={len(simulation.state.entities)} "
                 f"tick={simulation.state.tick} "
-                f"day={simulation.state.day}"
+                f"day={simulation.get_day_index()}"
             )
 
         print(
