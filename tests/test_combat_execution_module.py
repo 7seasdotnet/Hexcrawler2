@@ -42,8 +42,8 @@ def test_attack_intent_has_no_authoritative_effect_before_tick_executes() -> Non
 
 def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> None:
     sim = _build_sim()
-    sim.append_command(_attack_command(tick=0, target_cell={"space_id": "overworld", "coord": [1, 0]}))
-    sim.append_command(_attack_command(tick=1, target_id=None, target_cell={"space_id": "overworld", "coord": [0, 0]}))
+    sim.append_command(_attack_command(tick=0, target_cell={"space_id": "overworld", "coord": {"q": 1, "r": 0}}))
+    sim.append_command(_attack_command(tick=1, target_id=None, target_cell={"space_id": "overworld", "coord": {"q": 0, "r": 0}}))
 
     sim.advance_ticks(3)
 
@@ -74,7 +74,7 @@ def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
 def test_combat_state_round_trip_and_hash_is_stable() -> None:
     script = [
         _attack_command(tick=0),
-        _attack_command(tick=1, target_cell={"space_id": "overworld", "coord": [0, 0]}),
+        _attack_command(tick=1, target_cell={"space_id": "overworld", "coord": {"q": 0, "r": 0}}),
     ]
 
     sim_a = _build_sim()
@@ -138,3 +138,36 @@ def test_absent_vs_explicit_default_entity_fields_have_matching_hash() -> None:
     assert implicit.state.entities["attacker"].cooldown_until_tick == 0
     assert implicit.state.entities["attacker"].wounds == []
     assert simulation_hash(implicit) == simulation_hash(explicit)
+
+
+def test_called_region_defaults_to_canonical_torso_for_omitted_and_null_target_region() -> None:
+    sim = _build_sim()
+    omitted = _attack_command(tick=0)
+    explicit_null = _attack_command(tick=1)
+    explicit_null.params["target_region"] = None
+
+    sim.append_command(omitted)
+    sim.append_command(explicit_null)
+    sim.advance_ticks(3)
+
+    first, second = sim.state.combat_log
+    assert first["applied"] is True
+    assert second["applied"] is True
+    assert first["called_region"] == "torso"
+    assert second["called_region"] == "torso"
+    assert first["region_hit"] == "torso"
+    assert second["region_hit"] == "torso"
+
+    restored = Simulation.from_simulation_payload(sim.simulation_payload())
+    assert restored.state.combat_log == sim.state.combat_log
+
+
+def test_target_cell_coord_validation_is_topology_owned_not_generic_length_check() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": "overworld", "coord": [0, 0, 0]}))
+
+    sim.advance_ticks(2)
+
+    outcome = sim.state.combat_log[0]
+    assert outcome["applied"] is False
+    assert outcome["reason"] == "invalid_target_cell_coord_for_space"
