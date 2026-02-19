@@ -9,6 +9,7 @@ from hexcrawler.sim.rules import RuleModule
 ENTITY_STAT_INTENT_COMMAND_TYPE = "entity_stat_intent"
 ENTITY_STAT_EXECUTE_EVENT_TYPE = "entity_stat_execute"
 ENTITY_STAT_OUTCOME_EVENT_TYPE = "entity_stat_outcome"
+MAX_EXECUTED_ACTION_UIDS = 2048
 
 
 class EntityStatsExecutionModule(RuleModule):
@@ -109,7 +110,7 @@ class EntityStatsExecutionModule(RuleModule):
         key_value = str(key) if isinstance(key, str) else ""
 
         state = self._rules_state(sim)
-        executed = set(state[self._STATE_EXECUTED_ACTION_UIDS])
+        executed = list(state[self._STATE_EXECUTED_ACTION_UIDS])
 
         if action_uid in executed:
             self._append_outcome(
@@ -141,8 +142,8 @@ class EntityStatsExecutionModule(RuleModule):
                 details={"reason": "invalid_execute_payload"},
             )
             if action_uid:
-                executed.add(action_uid)
-                state[self._STATE_EXECUTED_ACTION_UIDS] = sorted(executed)
+                executed.append(action_uid)
+                state[self._STATE_EXECUTED_ACTION_UIDS] = _normalize_uid_fifo(executed)
                 sim.set_rules_state(self.name, state)
             return
 
@@ -157,8 +158,8 @@ class EntityStatsExecutionModule(RuleModule):
                 outcome="unknown_entity",
                 details={},
             )
-            executed.add(action_uid)
-            state[self._STATE_EXECUTED_ACTION_UIDS] = sorted(executed)
+            executed.append(action_uid)
+            state[self._STATE_EXECUTED_ACTION_UIDS] = _normalize_uid_fifo(executed)
             sim.set_rules_state(self.name, state)
             return
 
@@ -183,14 +184,14 @@ class EntityStatsExecutionModule(RuleModule):
                 outcome="invalid_params",
                 details={"reason": str(exc)},
             )
-            executed.add(action_uid)
-            state[self._STATE_EXECUTED_ACTION_UIDS] = sorted(executed)
+            executed.append(action_uid)
+            state[self._STATE_EXECUTED_ACTION_UIDS] = _normalize_uid_fifo(executed)
             sim.set_rules_state(self.name, state)
             return
 
         entity.stats = updated_stats
-        executed.add(action_uid)
-        state[self._STATE_EXECUTED_ACTION_UIDS] = sorted(executed)
+        executed.append(action_uid)
+        state[self._STATE_EXECUTED_ACTION_UIDS] = _normalize_uid_fifo(executed)
         sim.set_rules_state(self.name, state)
         self._append_outcome(
             sim,
@@ -208,7 +209,7 @@ class EntityStatsExecutionModule(RuleModule):
         executed = state.get(self._STATE_EXECUTED_ACTION_UIDS, [])
         if not isinstance(executed, list):
             raise ValueError("entity_stats.rules_state.executed_action_uids must be a list")
-        return {self._STATE_EXECUTED_ACTION_UIDS: sorted({str(uid) for uid in executed if isinstance(uid, str) and uid})}
+        return {self._STATE_EXECUTED_ACTION_UIDS: _normalize_uid_fifo(executed)}
 
     def _append_outcome(
         self,
@@ -235,3 +236,17 @@ class EntityStatsExecutionModule(RuleModule):
                 "details": copy.deepcopy(details),
             },
         )
+
+
+def _normalize_uid_fifo(values: Any) -> list[str]:
+    iterable = values if isinstance(values, list) else list(values) if isinstance(values, set) else []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for uid in iterable:
+        if not isinstance(uid, str) or not uid or uid in seen:
+            continue
+        seen.add(uid)
+        ordered.append(uid)
+    if len(ordered) > MAX_EXECUTED_ACTION_UIDS:
+        ordered = ordered[-MAX_EXECUTED_ACTION_UIDS:]
+    return ordered

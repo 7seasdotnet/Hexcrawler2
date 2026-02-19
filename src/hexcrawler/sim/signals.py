@@ -17,6 +17,7 @@ SIGNAL_EMIT_OUTCOME_EVENT_TYPE = "signal_emit_outcome"
 SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE = "signal_perception_outcome"
 MAX_SENSITIVITY = 100
 SENSITIVITY_BONUS_DIVISOR = 10
+MAX_EXECUTED_ACTION_UIDS = 2048
 
 
 @dataclass(frozen=True)
@@ -54,18 +55,24 @@ def distance_between_locations(a: LocationRef, b: LocationRef) -> int | None:
         return None
 
     if a.topology_type == OVERWORLD_HEX_TOPOLOGY:
-        hex_a = HexCoord.from_dict(a.coord)
-        hex_b = HexCoord.from_dict(b.coord)
+        try:
+            hex_a = HexCoord.from_dict(a.coord)
+            hex_b = HexCoord.from_dict(b.coord)
+        except (KeyError, TypeError, ValueError):
+            return None
         dq = hex_a.q - hex_b.q
         dr = hex_a.r - hex_b.r
         ds = (hex_a.q + hex_a.r) - (hex_b.q + hex_b.r)
         return int((abs(dq) + abs(dr) + abs(ds)) / 2)
 
     if a.topology_type == SQUARE_GRID_TOPOLOGY:
-        ax = int(a.coord["x"])
-        ay = int(a.coord["y"])
-        bx = int(b.coord["x"])
-        by = int(b.coord["y"])
+        try:
+            ax = int(a.coord["x"])
+            ay = int(a.coord["y"])
+            bx = int(b.coord["x"])
+            by = int(b.coord["y"])
+        except (KeyError, TypeError, ValueError):
+            return None
         return abs(ax - bx) + abs(ay - by)
 
     return None
@@ -306,7 +313,7 @@ class SignalPropagationModule(RuleModule):
         executed = state.get("executed_action_uids", [])
         if not isinstance(executed, list):
             raise ValueError(f"{self.name}.{key}.executed_action_uids must be a list")
-        normalized = sorted({str(uid) for uid in executed if isinstance(uid, str) and uid})
+        normalized = _normalize_uid_fifo(executed)
         state["executed_action_uids"] = normalized
         root[key] = state
         sim.set_rules_state(self.name, root)
@@ -322,7 +329,7 @@ class SignalPropagationModule(RuleModule):
         executed = bucket.get("executed_action_uids", [])
         if not isinstance(executed, list):
             executed = []
-        deduped = sorted({str(uid) for uid in executed if isinstance(uid, str) and uid} | {action_uid})
+        deduped = _normalize_uid_fifo([*executed, action_uid])
         bucket["executed_action_uids"] = deduped
         root[key] = bucket
         sim.set_rules_state(self.name, root)
@@ -402,3 +409,18 @@ class SignalPropagationModule(RuleModule):
 
     def _is_non_negative_int(self, *values: Any) -> bool:
         return all(isinstance(value, int) and value >= 0 for value in values)
+
+
+def _normalize_uid_fifo(values: Any) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(values, list):
+        return []
+    for raw in values:
+        if not isinstance(raw, str) or not raw or raw in seen:
+            continue
+        seen.add(raw)
+        ordered.append(raw)
+    if len(ordered) > MAX_EXECUTED_ACTION_UIDS:
+        ordered = ordered[-MAX_EXECUTED_ACTION_UIDS:]
+    return ordered

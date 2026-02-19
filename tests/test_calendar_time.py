@@ -90,3 +90,25 @@ def test_calendar_contributes_to_deterministic_simulation_hash() -> None:
 
     sim_b.state.time.epoch_tick = 8
     assert simulation_hash(sim_a) != simulation_hash(sim_b)
+
+
+def test_calendar_load_rejects_invalid_time_payload() -> None:
+    world = load_world_json("content/examples/basic_map.json")
+    sim = Simulation(world=world, seed=15)
+    payload = sim.simulation_payload()
+
+    payload_bad_ticks = dict(payload)
+    payload_bad_ticks["time"] = {"ticks_per_day": 0, "epoch_tick": 0}
+    try:
+        Simulation.from_simulation_payload(payload_bad_ticks)
+        raise AssertionError("expected ValueError for invalid ticks_per_day")
+    except ValueError as exc:
+        assert "time.ticks_per_day" in str(exc)
+
+    payload_bad_epoch = dict(payload)
+    payload_bad_epoch["time"] = {"ticks_per_day": 240, "epoch_tick": True}
+    try:
+        Simulation.from_simulation_payload(payload_bad_epoch)
+        raise AssertionError("expected ValueError for invalid epoch_tick")
+    except ValueError as exc:
+        assert "time.epoch_tick" in str(exc)
