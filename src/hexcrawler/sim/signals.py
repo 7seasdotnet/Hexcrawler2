@@ -15,6 +15,8 @@ SIGNAL_EMIT_EXECUTE_EVENT_TYPE = "signal_emit_execute"
 SIGNAL_PERCEIVE_EXECUTE_EVENT_TYPE = "perceive_signal_execute"
 SIGNAL_EMIT_OUTCOME_EVENT_TYPE = "signal_emit_outcome"
 SIGNAL_PERCEIVE_OUTCOME_EVENT_TYPE = "signal_perception_outcome"
+MAX_SENSITIVITY = 100
+SENSITIVITY_BONUS_DIVISOR = 10
 
 
 @dataclass(frozen=True)
@@ -84,10 +86,39 @@ def compute_signal_strength(signal: SignalRecord, listener: LocationRef, current
     return max(0, signal.base_intensity - distance)
 
 
+def parse_numeric_stat(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 class SignalPropagationModule(RuleModule):
     name = "signal_propagation"
 
     _ALLOWED_CHANNELS = {"sound"}
+
+    def _resolve_sensitivity(self, sim: Simulation, entity_id: str, channel: str) -> tuple[int, str, int]:
+        entity = sim.state.entities[entity_id]
+        stats = entity.stats if isinstance(entity.stats, dict) else {}
+
+        source = "default"
+        raw_value: Any = None
+        if channel == "sound" and "hearing" in stats:
+            source = "hearing"
+            raw_value = stats.get("hearing")
+        elif "perception" in stats:
+            source = "perception"
+            raw_value = stats.get("perception")
+
+        numeric = parse_numeric_stat(raw_value)
+        if numeric is None:
+            sensitivity = 0
+        else:
+            sensitivity = max(0, min(MAX_SENSITIVITY, int(numeric)))
+        bonus = sensitivity // SENSITIVITY_BONUS_DIVISOR
+        return sensitivity, source, bonus
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
         if command.command_type == EMIT_SIGNAL_INTENT_COMMAND_TYPE:
@@ -230,6 +261,7 @@ class SignalPropagationModule(RuleModule):
             return
 
         listener = self._entity_location(sim, entity_id)
+        sensitivity, sensitivity_source, bonus = self._resolve_sensitivity(sim, entity_id=entity_id, channel=channel)
         hits: list[dict[str, int | str]] = []
         for record in sim.state.world.signals:
             signal = self._signal_from_dict(record)
@@ -238,7 +270,7 @@ class SignalPropagationModule(RuleModule):
             distance = distance_between_locations(signal.origin, listener)
             if distance is None or distance > int(radius):
                 continue
-            strength = compute_signal_strength(signal, listener, event.tick)
+            strength = compute_signal_strength(signal, listener, event.tick) + bonus
             if strength <= 0:
                 continue
             hits.append(
@@ -250,9 +282,21 @@ class SignalPropagationModule(RuleModule):
                 }
             )
 
-        hits.sort(key=lambda entry: (str(entry["signal_id"]), int(entry["distance"])))
+        hits.sort(key=lambda entry: (int(entry["distance"]), str(entry["signal_id"])))
         self._mark_executed(sim, "signal_perception", action_uid)
-        self._schedule_perceive_outcome(sim, tick=event.tick, action_uid=action_uid, entity_id=entity_id, channel=channel, radius=radius, outcome="completed", hits=hits)
+        self._schedule_perceive_outcome(
+            sim,
+            tick=event.tick,
+            action_uid=action_uid,
+            entity_id=entity_id,
+            channel=channel,
+            radius=radius,
+            outcome="completed",
+            hits=hits,
+            sensitivity=sensitivity,
+            sensitivity_source=sensitivity_source,
+            bonus=bonus,
+        )
 
     def _rules_state(self, sim: Simulation, key: str) -> dict[str, Any]:
         root = sim.get_rules_state(self.name)
@@ -307,6 +351,9 @@ class SignalPropagationModule(RuleModule):
         radius: Any,
         outcome: str,
         hits: list[dict[str, Any]],
+        sensitivity: int = 0,
+        sensitivity_source: str = "default",
+        bonus: int = 0,
     ) -> None:
         sim.schedule_event_at(
             tick=tick,
@@ -319,6 +366,9 @@ class SignalPropagationModule(RuleModule):
                 "radius": int(radius) if isinstance(radius, int) and radius >= 0 else 0,
                 "outcome": outcome,
                 "hits": copy.deepcopy(hits),
+                "sensitivity": int(sensitivity),
+                "sensitivity_source": sensitivity_source if isinstance(sensitivity_source, str) else "default",
+                "bonus": int(bonus),
             },
         )
 
