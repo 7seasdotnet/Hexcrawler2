@@ -34,6 +34,75 @@ def _validate_json_value(value: Any, *, field_name: str) -> None:
     raise ValueError(f"{field_name} must contain only canonical JSON primitives")
 
 
+
+
+def _require_non_negative_int(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must be >= 0")
+    return value
+
+
+def _normalize_signal_origin(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("signal.origin must be an object")
+    space_id = value.get("space_id")
+    topology_type = value.get("topology_type")
+    coord = value.get("coord")
+    if not isinstance(space_id, str) or not space_id:
+        raise ValueError("signal.origin.space_id must be a non-empty string")
+    if not isinstance(topology_type, str) or not topology_type:
+        raise ValueError("signal.origin.topology_type must be a non-empty string")
+    if not isinstance(coord, dict):
+        raise ValueError("signal.origin.coord must be an object")
+    normalized_coord: dict[str, int] = {}
+    for key, raw in coord.items():
+        if not isinstance(key, str):
+            raise ValueError("signal.origin.coord keys must be strings")
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise ValueError(f"signal.origin.coord[{key}] must be an integer")
+        normalized_coord[key] = raw
+    return {"space_id": space_id, "topology_type": topology_type, "coord": normalized_coord}
+
+
+def _normalize_signal_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("signal record must be an object")
+
+    if "signal_id" not in value:
+        _validate_json_value(value, field_name="signal")
+        return dict(value)
+
+    signal_id = value.get("signal_id")
+    space_id = value.get("space_id")
+    channel = value.get("channel")
+    falloff_model = value.get("falloff_model")
+    if not isinstance(signal_id, str) or not signal_id:
+        raise ValueError("signal.signal_id must be a non-empty string")
+    if not isinstance(space_id, str) or not space_id:
+        raise ValueError("signal.space_id must be a non-empty string")
+    if not isinstance(channel, str) or not channel:
+        raise ValueError("signal.channel must be a non-empty string")
+    if not isinstance(falloff_model, str) or not falloff_model:
+        raise ValueError("signal.falloff_model must be a non-empty string")
+    metadata = value.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("signal.metadata must be an object")
+    _validate_json_value(metadata, field_name="signal.metadata")
+    return {
+        "signal_id": signal_id,
+        "tick_emitted": _require_non_negative_int(value.get("tick_emitted"), field_name="signal.tick_emitted"),
+        "space_id": space_id,
+        "origin": _normalize_signal_origin(value.get("origin")),
+        "channel": channel,
+        "base_intensity": _require_non_negative_int(value.get("base_intensity"), field_name="signal.base_intensity"),
+        "falloff_model": falloff_model,
+        "max_radius": _require_non_negative_int(value.get("max_radius"), field_name="signal.max_radius"),
+        "ttl_ticks": _require_non_negative_int(value.get("ttl_ticks"), field_name="signal.ttl_ticks"),
+        "metadata": dict(metadata),
+    }
+
 def _build_default_hex_record(rng_worldgen: random.Random) -> HexRecord:
     return HexRecord(terrain_type=rng_worldgen.choice(DEFAULT_TERRAIN_OPTIONS))
 
@@ -798,7 +867,9 @@ class WorldState:
         raw_signals = data.get("signals", [])
         if not isinstance(raw_signals, list):
             raise ValueError("signals must be a list")
-        world.signals = [dict(row) for row in raw_signals]
+        world.signals = [_normalize_signal_record(row) for row in raw_signals]
+        if len(world.signals) > MAX_SIGNALS:
+            world.signals = world.signals[-MAX_SIGNALS:]
 
         raw_tracks = data.get("tracks", [])
         if not isinstance(raw_tracks, list):
@@ -867,7 +938,7 @@ class WorldState:
         return True
 
     def append_signal_record(self, record: dict[str, Any]) -> None:
-        self.signals.append(dict(record))
+        self.signals.append(_normalize_signal_record(record))
         if len(self.signals) > MAX_SIGNALS:
             del self.signals[: len(self.signals) - MAX_SIGNALS]
 

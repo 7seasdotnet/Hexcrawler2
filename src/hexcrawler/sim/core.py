@@ -59,6 +59,14 @@ def _validate_json_value(value: Any, *, field_name: str) -> None:
         return
     raise ValueError(f"{field_name} must contain only canonical JSON primitives")
 
+
+def _require_int(value: Any, *, field_name: str, minimum: int | None = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{field_name} must be >= {minimum}")
+    return value
+
 def _json_list_to_tuple(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_json_list_to_tuple(item) for item in value)
@@ -126,8 +134,8 @@ class SimulationTimeState:
         if not isinstance(payload, dict):
             raise ValueError("simulation_state.time must be an object")
         return cls(
-            ticks_per_day=int(payload.get("ticks_per_day", TICKS_PER_DAY)),
-            epoch_tick=int(payload.get("epoch_tick", 0)),
+            ticks_per_day=_require_int(payload.get("ticks_per_day", TICKS_PER_DAY), field_name="time.ticks_per_day", minimum=1),
+            epoch_tick=_require_int(payload.get("epoch_tick", 0), field_name="time.epoch_tick"),
         )
 
 

@@ -1,9 +1,9 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5P — Stat-Driven Perception Integration (structural).
+- **Current phase:** Phase 5Q — Substrate Integrity Audit (hardening; no new features).
 - **Next action:** Phase 5R — Occlusion/doors attenuation substrate (placeholder only; no implementation yet).
-- **Phase status:** ✅ Phase 5P complete (deterministic stat-driven perception sensitivity integrated into the signal perception substrate with forensic outcome fields).
+- **Phase status:** ✅ Phase 5Q hardening pass complete (bounded ledgers, deterministic ordering guards, and save/load validation tightened across time/stats/signals/interaction substrates).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -219,9 +219,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Integrated deterministic stat-driven perception sensitivity into `SignalPropagationModule` using minimal stat-key conventions (`hearing` for `sound`, fallback to `perception`, else default `0`) with bounded bonus math and no RNG.
-- Extended `signal_perception_outcome` forensic payloads with `sensitivity`, `sensitivity_source`, and `bonus`, and made perception hit ordering stable by `distance` then `signal_id`.
-- Added focused tests for stat-influenced perception outcomes, missing/non-numeric stat fallback behavior, save/load idempotence with delayed perception, and replay-hash identity under stat-driven perception.
+- Hardened substrate boundedness and deterministic eviction: `executed_action_uids` ledgers for `entity_stats`, `interaction`, and `signal_propagation` are now capped with deterministic FIFO retention; topology distance helpers now safely return `None` for malformed/mismatched coordinates.
+- Tightened load-time validation and back-compat: simulation time payload integers are strictly validated, and `world.signals` now validates canonical `SignalRecord` fields while preserving legacy signal payload compatibility.
+- Added high-value integration and regression tests for stats→perception save/load exactly-once behavior + hash stability, interaction/signals coexistence stability in non-overworld space, bounded ledger enforcement, malformed signal/time payload rejection, and deterministic invalid-intent failure behavior.
 
 
 ## Troubleshooting

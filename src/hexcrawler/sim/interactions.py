@@ -11,6 +11,7 @@ from hexcrawler.sim.rules import RuleModule
 INTERACTION_INTENT_COMMAND_TYPE = "interaction_intent"
 INTERACTION_EXECUTE_EVENT_TYPE = "interaction_execute"
 INTERACTION_OUTCOME_EVENT_TYPE = "interaction_outcome"
+MAX_EXECUTED_ACTION_UIDS = 2048
 
 
 class InteractionExecutionModule(RuleModule):
@@ -112,7 +113,7 @@ class InteractionExecutionModule(RuleModule):
         normalized_target = self._normalize_target(target)
 
         state = self._rules_state(sim)
-        executed = set(state[self._STATE_EXECUTED_ACTION_UIDS])
+        executed = list(state[self._STATE_EXECUTED_ACTION_UIDS])
 
         location = self._entity_location(sim, entity_id=entity_id) if entity_id is not None and entity_id in sim.state.entities else None
 
@@ -230,8 +231,8 @@ class InteractionExecutionModule(RuleModule):
                                     )
                                     outcome = "applied"
 
-        executed.add(action_uid)
-        state[self._STATE_EXECUTED_ACTION_UIDS] = sorted(uid for uid in executed if uid)
+        executed.append(action_uid)
+        state[self._STATE_EXECUTED_ACTION_UIDS] = _normalize_uid_fifo(executed)
         sim.set_rules_state(self.name, state)
 
         self._schedule_outcome(
@@ -251,7 +252,7 @@ class InteractionExecutionModule(RuleModule):
         executed = state.get(self._STATE_EXECUTED_ACTION_UIDS, [])
         if not isinstance(executed, list):
             raise ValueError("interaction.rules_state.executed_action_uids must be a list")
-        return {self._STATE_EXECUTED_ACTION_UIDS: sorted({str(uid) for uid in executed if isinstance(uid, str) and uid})}
+        return {self._STATE_EXECUTED_ACTION_UIDS: _normalize_uid_fifo(executed)}
 
     def _normalize_target(self, payload: Any) -> dict[str, str] | None:
         if not isinstance(payload, dict):
@@ -300,3 +301,17 @@ class InteractionExecutionModule(RuleModule):
                 coord={"x": math.floor(entity.position_x), "y": math.floor(entity.position_y)},
             )
         return LocationRef(space_id=entity.space_id, topology_type=OVERWORLD_HEX_TOPOLOGY, coord=entity.hex_coord.to_dict())
+
+
+def _normalize_uid_fifo(values: Any) -> list[str]:
+    iterable = values if isinstance(values, list) else list(values) if isinstance(values, set) else []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for uid in iterable:
+        if not isinstance(uid, str) or not uid or uid in seen:
+            continue
+        seen.add(uid)
+        ordered.append(uid)
+    if len(ordered) > MAX_EXECUTED_ACTION_UIDS:
+        ordered = ordered[-MAX_EXECUTED_ACTION_UIDS:]
+    return ordered
