@@ -25,6 +25,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE, ExplorationExecutionModule
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
@@ -169,6 +170,16 @@ class SimulationController:
                 entity_id=self.entity_id,
                 command_type="enter_site",
                 params={"site_id": site_id},
+            )
+        )
+
+    def explore_intent(self, action: str, duration_ticks: int) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="explore_intent",
+                params={"action": action, "duration_ticks": duration_ticks},
             )
         )
 
@@ -707,10 +718,14 @@ def _draw_encounter_debug_panel(
     ])
     encounter_rows = recent_signals + recent_tracks + recent_spawns
 
-    filtered_trace = [entry for entry in sim.get_event_trace() if entry.get("event_type") == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
+    filtered_trace = [
+        entry
+        for entry in sim.get_event_trace()
+        if entry.get("event_type") in {ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE, EXPLORATION_OUTCOME_EVENT_TYPE}
+    ]
     outcome_rows = _section_entries([
         (
-            f"tick={entry.get('tick', '?')} action_uid={params.get('action_uid', '?')} action={params.get('action_type', '?')} "
+            f"tick={entry.get('tick', '?')} action_uid={params.get('action_uid', '?')} action={params.get('action_type', params.get('action', '?'))} "
             f"outcome={params.get('outcome', '?')} template={params.get('template_id', '-') or '-'}"
         )
         for entry in filtered_trace
@@ -980,6 +995,14 @@ def _register_supply_module(sim: Simulation) -> None:
         return
     sim.register_rule_module(SupplyConsumptionModule())
 
+
+
+def _register_exploration_module(sim: Simulation) -> None:
+    if sim.get_rule_module(ExplorationExecutionModule.name) is not None:
+        return
+    sim.register_rule_module(ExplorationExecutionModule())
+
+
 def _register_encounter_modules(sim: Simulation) -> None:
     if sim.get_rule_module(EncounterCheckModule.name) is not None:
         return
@@ -997,6 +1020,7 @@ def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulat
     if with_encounters:
         _register_encounter_modules(sim)
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
+    _register_exploration_module(sim)
     _register_supply_module(sim)
     return sim
 
@@ -1008,6 +1032,7 @@ def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulat
         _register_encounter_modules(sim)
     if PLAYER_ID not in sim.state.entities:
         sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
+    _register_exploration_module(sim)
     if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
         _register_supply_module(sim)
     print(
@@ -1141,6 +1166,10 @@ def run_pygame_viewer(
                         if site is not None and site.entrance is not None:
                             site_label = site.name if site.name else site.site_id
                             items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+                items.append(ContextMenuItem(label="Explore...", action="noop"))
+                items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
+                items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
+                items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
             else:
                 world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center)
@@ -1155,6 +1184,10 @@ def run_pygame_viewer(
                             items.append(ContextMenuItem(label=f"- {site.site_id} ({site.site_type})", action="noop"))
                             if site.entrance is not None:
                                 items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+                    items.append(ContextMenuItem(label="Explore...", action="noop"))
+                    items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
+                    items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
+                    items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
                     items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
         items.extend(build_recent_save_items())
         if not items:
@@ -1254,6 +1287,9 @@ def run_pygame_viewer(
                             load_simulation_from_path(item.payload)
                         elif item.action == "enter_site" and item.payload is not None:
                             controller.enter_site(item.payload)
+                        elif item.action == "explore" and item.payload is not None:
+                            action, duration_str = item.payload.split(":", 1)
+                            controller.explore_intent(action, int(duration_str))
                 context_menu = None
 
         move_x, move_y = _current_input_vector()
