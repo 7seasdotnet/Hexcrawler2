@@ -139,3 +139,36 @@ def test_entity_stat_remove_operation() -> None:
     sim.advance_ticks(3)
 
     assert "faction" not in sim.get_entity_stats("scout")
+
+
+def test_entity_stats_hash_equivalence_missing_vs_empty_payload() -> None:
+    base_sim = _make_sim(seed=1337)
+    payload = base_sim.simulation_payload()
+
+    payload_missing = dict(payload)
+    payload_missing["entities"] = [dict(row) for row in payload["entities"]]
+    payload_missing["entities"][0].pop("stats", None)
+
+    payload_empty = dict(payload)
+    payload_empty["entities"] = [dict(row) for row in payload["entities"]]
+    payload_empty["entities"][0]["stats"] = {}
+
+    sim_missing = Simulation.from_simulation_payload(payload_missing)
+    sim_empty = Simulation.from_simulation_payload(payload_empty)
+
+    assert sim_missing.get_entity_stats("scout") == {}
+    assert sim_empty.get_entity_stats("scout") == {}
+    assert simulation_hash(sim_missing) == simulation_hash(sim_empty)
+
+
+def test_entity_stats_empty_dict_persists_across_save_load() -> None:
+    sim = _make_sim(seed=204)
+    payload = sim.simulation_payload()
+
+    assert payload["entities"][0]["stats"] == {}
+
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded_payload = loaded.simulation_payload()
+
+    assert loaded.get_entity_stats("scout") == {}
+    assert loaded_payload["entities"][0]["stats"] == {}

@@ -216,9 +216,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added optional serialized/hash-covered `entity.stats` on entities with strict key/value validation and deterministic stat patch helpers (`get_entity_stats`, `get_entity_stat`, `apply_stat_patch`).
-- Added `EntityStatsExecutionModule` with `entity_stat_intent` -> `entity_stat_execute` -> `entity_stat_outcome` deterministic command/event seam, including delayed execution and idempotence ledger in serialized `rules_state`.
-- Added deterministic tests for stat mutation, save/load idempotence, replay/hash identity, invalid-parameter safety, and remove semantics.
+- Canonicalized `entity.stats` to always exist as `{}` in-memory and in save payloads when omitted by legacy data, with strict dict/string-key validation unchanged.
+- Updated deterministic simulation hashing to always include `entity.stats` (including empty dicts), removing absent-vs-empty divergence risk.
+- Added regression tests covering hash equivalence for missing-vs-empty stats payloads and save/load round-trip preservation of empty stats.
 
 ## Troubleshooting
 - On CI/WSL/remote shells without a GUI display, run `python play.py --headless` (or set `HEXCRAWLER_HEADLESS=1`) to force SDL dummy mode and validate startup paths without opening a window.

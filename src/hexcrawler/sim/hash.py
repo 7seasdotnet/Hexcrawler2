@@ -58,8 +58,8 @@ def simulation_hash(simulation: Simulation) -> str:
                     "source_action_uid": entity.source_action_uid,
                     "selected_entity_id": entity.selected_entity_id,
                     "inventory_container_id": entity.inventory_container_id,
+                    "stats": entity.stats,
                 },
-                **({"stats": entity.stats} if entity.stats is not None else {}),
             }
             for entity in sorted(simulation.state.entities.values(), key=lambda e: e.entity_id)
         ],
