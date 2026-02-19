@@ -219,9 +219,7 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Docs-only refinement in `docs/COMBAT_SEAM_DESIGN.md`: introduced canonical `CellRef` for `target_cell` with topology-owned coordinate encoding and tick-`T` topology validation semantics.
-- Clarified validation vs resolution boundary for attack-shape seams: intake enforces admissibility of selected discriminator(s), while deterministic resolution computes actual affected results and records outcomes.
-- Extended forensic `combat_outcome` schema guidance with optional bounded `affected` entries for future sweeps/AoE while retaining `target_id`/`target_cell` as primary selected/aimed target fields.
+- Docs: clarified called-shot defaulting point and tightened weapon arc admissibility wording (no runtime changes).
 
 
 ## Troubleshooting

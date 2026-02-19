@@ -92,6 +92,8 @@ Validation vs resolution boundary:
 Called-shot contract:
 - `target_region` is a requested called-shot region, not a guaranteed outcome.
 - If `target_region` is omitted/null, called shot defaults to `torso` (center-mass label).
+- If `target_region` is null/omitted, resolution treats `called_region` as `torso`/center-mass for outcome recording.
+- Wherever the default is applied, it must be deterministic and recorded forensically (e.g., `combat_outcome.called_region`).
 - Region taxonomy remains content/rules-owned and deferred at seam level.
 
 Execution contract:
@@ -303,8 +305,8 @@ Each entity must support a bounded wound ledger:
 
 ### Weapon arc / attack-shape seam contract
 - Weapons may define deterministic attack shapes in content/rules (`arc`, `cone`, `line`, `sweep`, etc.; taxonomy deferred).
-- At tick `T`, legal affected targets are derived deterministically from attacker position + authoritative facing + weapon/mode reference + topology rules.
-- Validation step: engine seam enforces deterministic admissibility checks that chosen entity/cell discriminator is legal for that computed attack shape at tick `T`.
+- At tick `T`, an admissibility constraint is derived deterministically from attacker position + authoritative facing + weapon/mode reference + topology rules.
+- Validation step: engine seam enforces that the selected discriminator is admissible under the derived shape constraint at tick `T`.
 - Resolution step: rules deterministically resolve actual affected entity/entities (e.g., first-in-line, all in cone, etc.) and outcome records what was affected.
 - Engine seam does not require precomputing the full affected set at intake; it enforces admissibility and records results.
 - Cell-only targeting is permitted; resolution may deterministically affect an entity in that cell or none, and outcome records what was affected.
