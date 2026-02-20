@@ -10,7 +10,7 @@ from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import HexCoord, RumorRecord
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, HexCoord, RumorRecord
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -20,6 +20,7 @@ ENCOUNTER_SELECTION_STUB_EVENT_TYPE = "encounter_selection_stub"
 ENCOUNTER_ACTION_STUB_EVENT_TYPE = "encounter_action_stub"
 ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE = "encounter_action_execute"
 ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE = "encounter_action_outcome"
+LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE = "local_encounter_request"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
@@ -172,6 +173,63 @@ class EncounterActionModule(RuleModule):
                 normalized[key] = self._normalize_json_value(value[key], field_name=field_name)
             return normalized
         raise ValueError(f"{field_name} must contain only JSON-serializable values")
+
+
+class LocalEncounterRequestModule(RuleModule):
+    """Phase 6B seam: campaign encounter requests local tactical resolution."""
+
+    name = "local_encounter_request"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE:
+            return
+
+        from_location_payload = event.params.get("location")
+        if not isinstance(from_location_payload, dict):
+            return
+        from_location = LocationRef.from_dict(from_location_payload)
+        from_space = sim.state.world.spaces.get(from_location.space_id)
+        if from_space is None or from_space.role != CAMPAIGN_SPACE_ROLE:
+            return
+
+        sim.schedule_event_at(
+            tick=event.tick + 1,
+            event_type=LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE,
+            params={
+                "tick": int(event.params.get("tick", event.tick)),
+                "from_space_id": from_location.space_id,
+                "from_location": from_location.to_dict(),
+                "trigger": self._optional_string(event.params.get("trigger")),
+                "encounter": {
+                    "table_id": self._optional_string(event.params.get("table_id")),
+                    "entry_id": self._optional_string(event.params.get("entry_id")),
+                    "category": self._optional_string(event.params.get("category")),
+                    "roll": self._optional_int(event.params.get("roll")),
+                },
+                "suggested_local_template_id": self._optional_string(event.params.get("suggested_local_template_id")),
+                "tags": self._normalized_tags(event.params.get("tags")),
+            },
+        )
+
+    @staticmethod
+    def _optional_string(value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(value)
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        return int(value)
+
+    @staticmethod
+    def _normalized_tags(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("local_encounter_request tags must be a list when present")
+        return [str(tag) for tag in value]
 
 
 class EncounterActionExecutionModule(RuleModule):
