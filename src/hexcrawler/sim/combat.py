@@ -341,6 +341,8 @@ class CombatExecutionModule(RuleModule):
         if attacker.space_id != target.space_id:
             return "space_mismatch"
         space = sim.state.world.spaces.get(attacker.space_id)
+        # TODO(Model B): replace topology-derived tactical admissibility with explicit
+        # space-role checks once role metadata is serialized on spaces.
         if space is None or space.topology_type == SQUARE_GRID_TOPOLOGY:
             return None
         attacker_coord = cls._entity_coord(sim, attacker_id)
@@ -399,7 +401,11 @@ class CombatExecutionModule(RuleModule):
             return None
         if space.topology_type == SQUARE_GRID_TOPOLOGY:
             return world_xy_to_square_grid_cell(entity.position_x, entity.position_y)
-        if space.topology_type == OVERWORLD_HEX_TOPOLOGY or space.topology_type.startswith("hex") or space.topology_type == "custom":
+        # TODO(Model B): tactical intent admissibility must be role-gated (campaign vs local),
+        # not topology-gated. Keep this explicit and avoid wildcard string-matching admission.
+        is_campaign_hex_topology = space.topology_type in {OVERWORLD_HEX_TOPOLOGY, "hex_disk", "hex_rectangle", "hex_axial"}
+        is_legacy_overworld_custom = entity.space_id == "overworld" and space.topology_type == "custom"
+        if is_campaign_hex_topology or is_legacy_overworld_custom:
             return world_xy_to_axial(entity.position_x, entity.position_y).to_dict()
         return None
 
