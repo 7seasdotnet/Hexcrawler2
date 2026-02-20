@@ -318,4 +318,4 @@ def test_action_execution_contract_regression_hash_is_stable() -> None:
 
     sim.advance_ticks(8)
 
-    assert simulation_hash(sim) == "fa7d2b2cf22dd6ea06240e72250ac91cf6e28d217993fb49697965235a869147"
+    assert simulation_hash(sim) == "a5b981488bfc7ece53953d171fc606f4a3e9a04d387c32111611ee649b570da0"
