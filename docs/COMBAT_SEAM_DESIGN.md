@@ -28,6 +28,11 @@ This section defines minimal command seams only. It does **not** define combat m
 
 ### `attack_intent` (required seam)
 
+Admissibility scope contract:
+- Combat intents are admissible only in Local spaces.
+- Tactical combat intents (`attack_intent`, `turn_intent`, and related tactical commands) are inadmissible in campaign-role spaces.
+- Campaign-role systems may emit deterministic transition/encounter requests into Local spaces, but do not execute tactical combat seams directly.
+
 Canonical target cell reference type used by this seam:
 
 - `CellRef`
