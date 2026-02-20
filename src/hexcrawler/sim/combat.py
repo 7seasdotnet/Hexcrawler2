@@ -9,6 +9,7 @@ from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.signals import distance_between_locations
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE
 
 ATTACK_INTENT_COMMAND_TYPE = "attack_intent"
 TURN_INTENT_COMMAND_TYPE = "turn_intent"
@@ -75,74 +76,77 @@ class CombatExecutionModule(RuleModule):
             reason = "invalid_attacker"
         else:
             attacker = sim.state.entities[attacker_id]
-            target_id_value = str(target_id) if isinstance(target_id, str) and target_id else None
-            if target_id_value is not None and target_id_value not in sim.state.entities:
-                reason = "invalid_target"
-            elif target_id_value is None and target_cell_payload is None:
-                reason = "invalid_target"
+            if self._is_campaign_space_entity(sim, attacker_id):
+                reason = "tactical_not_allowed_in_campaign_space"
             else:
-                parsed_cell, cell_error = self._parse_cell_ref(sim, target_cell_payload)
-                if cell_error is not None:
-                    reason = cell_error
+                target_id_value = str(target_id) if isinstance(target_id, str) and target_id else None
+                if target_id_value is not None and target_id_value not in sim.state.entities:
+                    reason = "invalid_target"
+                elif target_id_value is None and target_cell_payload is None:
+                    reason = "invalid_target"
                 else:
-                    target_cell = parsed_cell
-                    if target_id_value is not None:
-                        target = sim.state.entities[target_id_value]
-                        if attacker.space_id != target.space_id:
-                            reason = "space_mismatch"
-                        elif target_cell is not None:
+                    parsed_cell, cell_error = self._parse_cell_ref(sim, target_cell_payload)
+                    if cell_error is not None:
+                        reason = cell_error
+                    else:
+                        target_cell = parsed_cell
+                        if target_id_value is not None:
+                            target = sim.state.entities[target_id_value]
+                            if attacker.space_id != target.space_id:
+                                reason = "space_mismatch"
+                            elif target_cell is not None:
+                                target_coord = self._entity_coord(sim, target_id_value)
+                                if target_coord is None:
+                                    reason = "invalid_target"
+                                elif target_cell["space_id"] != target.space_id or target_cell["coord"] != target_coord:
+                                    reason = "target_cell_mismatch"
+                        if reason == "resolved" and target_cell is None and target_id_value is not None:
                             target_coord = self._entity_coord(sim, target_id_value)
                             if target_coord is None:
                                 reason = "invalid_target"
-                            elif target_cell["space_id"] != target.space_id or target_cell["coord"] != target_coord:
-                                reason = "target_cell_mismatch"
-                    if reason == "resolved" and target_cell is None and target_id_value is not None:
-                        target_coord = self._entity_coord(sim, target_id_value)
-                        if target_coord is None:
-                            reason = "invalid_target"
-                        else:
-                            target_cell = {"space_id": sim.state.entities[target_id_value].space_id, "coord": target_coord}
+                            else:
+                                target_cell = {"space_id": sim.state.entities[target_id_value].space_id, "coord": target_coord}
 
-                    if reason == "resolved" and target_cell is not None:
-                        if attacker.space_id != str(target_cell["space_id"]):
-                            reason = "space_mismatch"
+                        if reason == "resolved" and target_cell is not None:
+                            if attacker.space_id != str(target_cell["space_id"]):
+                                reason = "space_mismatch"
 
-                    if reason == "resolved" and target_id_value is None and target_cell is not None:
-                        resolved_target_id = self._entity_id_at_cell(sim, target_cell)
-                        if resolved_target_id is None:
-                            reason = "no_target_in_cell"
+                        if reason == "resolved" and target_id_value is None and target_cell is not None:
+                            resolved_target_id = self._entity_id_at_cell(sim, target_cell)
+                            if resolved_target_id is None:
+                                reason = "no_target_in_cell"
 
-                    if reason == "resolved" and target_id_value is not None:
-                        resolved_target_id = target_id_value
+                        if reason == "resolved" and target_id_value is not None:
+                            resolved_target_id = target_id_value
 
-                    if reason == "resolved" and self._mode_is_melee(mode):
-                        attacker_location = self._entity_location(sim, attacker_id)
-                        target_location = {
-                            "space_id": str(target_cell["space_id"]) if target_cell is not None else attacker.space_id,
-                            "topology_type": attacker_location["topology_type"],
-                            "coord": copy.deepcopy(target_cell["coord"]) if target_cell is not None else copy.deepcopy(attacker_location["coord"]),
-                        }
-                        if target_cell is None:
-                            reason = "invalid_target"
-                        elif target_location["space_id"] != attacker_location["space_id"]:
-                            reason = "space_mismatch"
-                        elif not self._is_adjacent(attacker_location, target_location):
-                            reason = "out_of_range"
-                        elif resolved_target_id is not None:
-                            arc_reason = self._validate_melee_arc_admissibility(
-                                sim=sim,
-                                attacker_id=attacker_id,
-                                target_id=resolved_target_id,
-                            )
-                            if arc_reason is not None:
-                                reason = arc_reason
+                        if reason == "resolved" and self._mode_is_melee(mode):
+                            attacker_location = self._entity_location(sim, attacker_id)
+                            target_location = {
+                                "space_id": str(target_cell["space_id"]) if target_cell is not None else attacker.space_id,
+                                "topology_type": attacker_location["topology_type"],
+                                "coord": copy.deepcopy(target_cell["coord"]) if target_cell is not None else copy.deepcopy(attacker_location["coord"]),
+                            }
+                            if target_cell is None:
+                                reason = "invalid_target"
+                            elif target_location["space_id"] != attacker_location["space_id"]:
+                                reason = "space_mismatch"
+                            elif not self._is_adjacent(attacker_location, target_location):
+                                reason = "out_of_range"
+                            elif resolved_target_id is not None:
+                                arc_reason = self._validate_melee_arc_admissibility(
+                                    sim=sim,
+                                    attacker_id=attacker_id,
+                                    target_id=resolved_target_id,
+                                )
+                                if arc_reason is not None:
+                                    reason = arc_reason
 
-                    if reason == "resolved" and attacker.cooldown_until_tick > command.tick:
-                        reason = "cooldown_blocked"
+                        if reason == "resolved" and attacker.cooldown_until_tick > command.tick:
+                            reason = "cooldown_blocked"
 
-                    if reason == "resolved":
-                        applied = True
-                        attacker.cooldown_until_tick = int(command.tick) + PLACEHOLDER_COOLDOWN_TICKS
+                        if reason == "resolved":
+                            applied = True
+                            attacker.cooldown_until_tick = int(command.tick) + PLACEHOLDER_COOLDOWN_TICKS
 
         affected = self._build_affected_outcomes(
             sim=sim,
@@ -300,6 +304,8 @@ class CombatExecutionModule(RuleModule):
             reason = "invalid_entity"
         elif entity_id not in sim.state.entities:
             reason = "invalid_entity"
+        elif self._is_campaign_space_entity(sim, entity_id):
+            reason = "tactical_not_allowed_in_campaign_space"
         elif facing_raw is None:
             reason = "invalid_facing"
         else:
@@ -401,13 +407,23 @@ class CombatExecutionModule(RuleModule):
             return None
         if space.topology_type == SQUARE_GRID_TOPOLOGY:
             return world_xy_to_square_grid_cell(entity.position_x, entity.position_y)
-        # TODO(Model B): tactical intent admissibility must be role-gated (campaign vs local),
-        # not topology-gated. Keep this explicit and avoid wildcard string-matching admission.
+        # Role gating is enforced at command ingress. The branch below is migration-only
+        # compatibility for legacy overworld+custom topology payloads.
         is_campaign_hex_topology = space.topology_type in {OVERWORLD_HEX_TOPOLOGY, "hex_disk", "hex_rectangle", "hex_axial"}
         is_legacy_overworld_custom = entity.space_id == "overworld" and space.topology_type == "custom"
         if is_campaign_hex_topology or is_legacy_overworld_custom:
             return world_xy_to_axial(entity.position_x, entity.position_y).to_dict()
         return None
+
+    @staticmethod
+    def _is_campaign_space_entity(sim: Simulation, entity_id: str) -> bool:
+        entity = sim.state.entities.get(entity_id)
+        if entity is None:
+            return False
+        space = sim.state.world.spaces.get(entity.space_id)
+        if space is None:
+            return False
+        return space.role == CAMPAIGN_SPACE_ROLE
 
     @classmethod
     def _entity_location(cls, sim: Simulation, entity_id: str) -> dict[str, Any]:

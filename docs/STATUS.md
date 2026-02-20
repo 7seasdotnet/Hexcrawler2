@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6B follow-on — Tactical legibility seams (facing update + arc admissibility validation-only).
-- **Next action:** Prompt 3 follow-up: add explicit campaign/local role metadata and tactical-intent admissibility checks, then quarantine remaining topology-derived tactical assumptions behind role gates only.
-- **Phase status:** ✅ Phase 6A complete; 6B follow-on now includes deterministic `turn_intent` facing updates, overworld melee front-arc admissibility gating, stable `affected[]` ordering contracts, and canonical campaign-vs-local role clarification in architecture docs.
+- **Current phase:** Phase 6B follow-on — Role-gated tactical admissibility (campaign/local separation enforcement).
+- **Next action:** implement encounter→local transition seam so campaign encounter triggers hand off tactical resolution to local-role spaces.
+- **Phase status:** ✅ Phase 6A complete; 6B follow-on now enforces serialized space roles (`campaign`/`local`) and local-only tactical intent admissibility for `attack_intent` and `turn_intent`.
 
 
 ## What changed in this commit
-- Audited tactical intent surfaces for campaign/local role confusion and documented topology-derived tactical seams for Prompt 3 quarantine/gating.
-- Tightened combat coord resolution by removing wildcard hex/custom topology admission in `_entity_coord`; explicit allowlisted campaign hex topology values now resolve via axial conversion (with legacy `overworld`+`custom` compatibility retained).
-- Added targeted combat regression coverage proving non-canonical hex topologies are rejected without wildcard tactical admission.
+- Introduced serialized/hash-covered `SpaceState.role` (`campaign`/`local`) with deterministic legacy defaulting (`overworld`→`campaign`, non-overworld→`local`) and strict role validation on load.
+- Enforced ingress tactical gating: `attack_intent` and `turn_intent` now reject in campaign-role spaces with deterministic reason token `tactical_not_allowed_in_campaign_space` before arc/cooldown/wound logic runs.
+- Added deterministic tests for campaign rejection, local allowance across hex/square topologies, and legacy save migration behavior when role is absent.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -25,8 +25,8 @@
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
-  - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing deterministic validation/range/cooldown checks plus overworld-only melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
-  - Combat seam also consumes `turn_intent` to deterministically update entity facing and emit forensic `turn_outcome` events on the serialized event queue/trace path.
+  - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing ingress role-gating (`local` only), then deterministic validation/range/cooldown checks plus local-hex melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
+  - Combat seam also consumes `turn_intent` with the same local-only role gate; campaign-role turn intents deterministically reject with `tactical_not_allowed_in_campaign_space` and do not mutate facing.
   - Combat outcomes support bounded deterministic affected-target projection via `affected[]` (cap: `MAX_AFFECTED_PER_ACTION = 8`) with deterministic ordering contract (primary key: coord ordering; secondary key: `entity_id`), applied entries carrying resolved `entity_id` + `cell`, and rejected outcomes omitting `affected`.
   - Combat outcome schema convention (locked): rejected combat outcomes omit `affected`; applied outcomes include non-empty `affected`.
   - Combat outcome schema convention (locked): each `affected` entry always includes `wound_deltas` (default `[]`), and wound append is recorded as a single append delta (`[{"op":"append","wound": <exact appended wound>}]`).
@@ -36,6 +36,7 @@
   - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
   - World sites substrate (`WorldState.sites`) with deterministic canonical serialization/hash coverage, legacy load default (`{}`), and deterministic location query helper (`WorldState.get_sites_at_location(...)`).
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
+  - Space substrate now serializes explicit `role` metadata (`campaign`/`local`); topology is no longer used as tactical-permission proxy.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
   - Deterministic `enter_site` command seam that validates site/entrance/target-space records, routes valid requests through the existing `transition_space` seam, and emits deterministic `site_enter_outcome` forensic events (`applied`, `unknown_site`, `no_entrance`, `unknown_target_space`).
   - Space interaction substrate for non-overworld spaces: deterministic canonical `SpaceState.doors` / `SpaceState.anchors` / `SpaceState.interactables` records with strict JSON-safe structural validation, back-compat defaults, and hash coverage through world serialization.

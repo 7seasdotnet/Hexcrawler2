@@ -7,15 +7,32 @@ from hexcrawler.sim.combat import (
 )
 from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, MAX_WOUNDS, EntityState, SimCommand, Simulation
 from hexcrawler.sim.hash import simulation_hash
-from hexcrawler.sim.world import HexCoord, HexRecord, SpaceState
+from hexcrawler.sim.world import HexCoord, HexRecord, SpaceState, WorldState
 
+
+LOCAL_SPACE_ID = "local_arena"
 
 def _build_sim() -> Simulation:
     world = load_world_json("content/examples/basic_map.json")
+    world.spaces[LOCAL_SPACE_ID] = SpaceState(
+        space_id=LOCAL_SPACE_ID,
+        topology_type="hex_disk",
+        role="local",
+        hexes={
+            HexCoord(0, 0): HexRecord(terrain_type="plains"),
+            HexCoord(1, 0): HexRecord(terrain_type="plains"),
+            HexCoord(1, -1): HexRecord(terrain_type="plains"),
+            HexCoord(0, -1): HexRecord(terrain_type="plains"),
+        },
+    )
     sim = Simulation(world=world, seed=17)
     sim.register_rule_module(CombatExecutionModule())
-    sim.add_entity(EntityState.from_hex(entity_id="attacker", hex_coord=HexCoord(0, 0), speed_per_tick=0.0))
-    sim.add_entity(EntityState.from_hex(entity_id="target", hex_coord=HexCoord(1, 0), speed_per_tick=0.0))
+    attacker = EntityState.from_hex(entity_id="attacker", hex_coord=HexCoord(0, 0), speed_per_tick=0.0)
+    attacker.space_id = LOCAL_SPACE_ID
+    target = EntityState.from_hex(entity_id="target", hex_coord=HexCoord(1, 0), speed_per_tick=0.0)
+    target.space_id = LOCAL_SPACE_ID
+    sim.add_entity(attacker)
+    sim.add_entity(target)
     return sim
 
 
@@ -59,8 +76,8 @@ def test_attack_intent_has_no_authoritative_effect_before_tick_executes() -> Non
 
 def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> None:
     sim = _build_sim()
-    sim.append_command(_attack_command(tick=0, target_cell={"space_id": "overworld", "coord": {"q": 1, "r": 0}}))
-    sim.append_command(_attack_command(tick=1, target_id=None, target_cell={"space_id": "overworld", "coord": {"q": 0, "r": 0}}))
+    sim.append_command(_attack_command(tick=0, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}}))
+    sim.append_command(_attack_command(tick=1, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 0, "r": 0}}))
 
     sim.advance_ticks(3)
 
@@ -90,7 +107,7 @@ def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> Non
 
 def test_applied_attack_populates_affected_target_fields() -> None:
     sim = _build_sim()
-    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": "overworld", "coord": {"q": 1, "r": 0}}))
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}}))
     sim.advance_ticks(2)
 
     outcome = sim.state.combat_log[0]
@@ -103,7 +120,7 @@ def test_applied_attack_populates_affected_target_fields() -> None:
     affected = outcome["affected"]
     assert len(affected) == 1
     assert affected[0]["entity_id"] == "target"
-    assert affected[0]["cell"] == {"space_id": "overworld", "coord": {"q": 1, "r": 0}}
+    assert affected[0]["cell"] == {"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}}
     assert affected[0]["called_region"] == "torso"
     assert affected[0]["region_hit"] == "torso"
     assert affected[0]["wound_deltas"] == [
@@ -125,7 +142,7 @@ def test_applied_attack_populates_affected_target_fields() -> None:
 
 def test_cell_only_targeting_without_occupant_is_rejected_and_omits_affected() -> None:
     sim = _build_sim()
-    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": "overworld", "coord": {"q": 1, "r": -1}}))
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": -1}}))
     sim.advance_ticks(2)
 
     outcome = sim.state.combat_log[0]
@@ -154,7 +171,7 @@ def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
 def test_combat_state_round_trip_and_hash_is_stable() -> None:
     script = [
         _attack_command(tick=0),
-        _attack_command(tick=1, target_cell={"space_id": "overworld", "coord": {"q": 0, "r": 0}}),
+        _attack_command(tick=1, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 0, "r": 0}}),
     ]
 
     sim_a = _build_sim()
@@ -197,7 +214,7 @@ def test_affected_entries_are_truncated_to_max_bound() -> None:
                     "action_uid": "0:0",
                     "attacker_id": "attacker",
                     "target_id": "target",
-                    "target_cell": {"space_id": "overworld", "coord": {"q": 1, "r": 0}},
+                    "target_cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}},
                     "mode": "melee",
                     "weapon_ref": None,
                     "called_region": "torso",
@@ -230,7 +247,7 @@ def test_load_normalization_injects_default_wound_deltas_without_injecting_affec
                     "action_uid": "0:0",
                     "attacker_id": "attacker",
                     "target_id": "target",
-                    "target_cell": {"space_id": "overworld", "coord": {"q": 1, "r": 0}},
+                    "target_cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}},
                     "mode": "melee",
                     "weapon_ref": None,
                     "called_region": "torso",
@@ -243,7 +260,7 @@ def test_load_normalization_injects_default_wound_deltas_without_injecting_affec
                     "affected": [
                         {
                             "entity_id": "target",
-                            "cell": {"space_id": "overworld", "coord": {"q": 1, "r": 0}},
+                            "cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}},
                             "called_region": "torso",
                             "region_hit": "torso",
                             "applied": True,
@@ -257,7 +274,7 @@ def test_load_normalization_injects_default_wound_deltas_without_injecting_affec
                     "action_uid": "1:0",
                     "attacker_id": "attacker",
                     "target_id": None,
-                    "target_cell": {"space_id": "overworld", "coord": {"q": 9, "r": 9}},
+                    "target_cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 9, "r": 9}},
                     "mode": "melee",
                     "weapon_ref": None,
                     "called_region": "torso",
@@ -338,7 +355,7 @@ def test_called_region_defaults_to_canonical_torso_for_omitted_and_null_target_r
 
 def test_target_cell_coord_validation_is_topology_owned_not_generic_length_check() -> None:
     sim = _build_sim()
-    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": "overworld", "coord": [0, 0, 0]}))
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": [0, 0, 0]}))
 
     sim.advance_ticks(2)
 
@@ -479,9 +496,9 @@ def test_melee_arc_gate_allows_front_arc_and_rejects_behind() -> None:
 
 def test_affected_ordering_helper_is_deterministic_and_non_mutating() -> None:
     entries = [
-        {"entity_id": "z", "cell": {"space_id": "overworld", "coord": {"q": 2, "r": 0}}},
-        {"entity_id": "a", "cell": {"space_id": "overworld", "coord": {"q": 0, "r": 0}}},
-        {"entity_id": "m", "cell": {"space_id": "overworld", "coord": {"q": 0, "r": -1}}},
+        {"entity_id": "z", "cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 2, "r": 0}}},
+        {"entity_id": "a", "cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 0, "r": 0}}},
+        {"entity_id": "m", "cell": {"space_id": LOCAL_SPACE_ID, "coord": {"q": 0, "r": -1}}},
     ]
     snapshot = [dict(row) for row in entries]
 
@@ -502,6 +519,7 @@ def test_attack_in_noncanonical_hex_topology_is_rejected_without_wildcard_topolo
     sim.state.world.spaces["hex_local"] = SpaceState(
         space_id="hex_local",
         topology_type="custom",
+        role="local",
         hexes={
             HexCoord(0, 0): HexRecord(terrain_type="plains"),
             HexCoord(1, 0): HexRecord(terrain_type="plains"),
@@ -517,3 +535,112 @@ def test_attack_in_noncanonical_hex_topology_is_rejected_without_wildcard_topolo
     assert outcome["applied"] is False
     assert outcome["reason"] == "invalid_target"
     assert "affected" not in outcome
+
+
+def test_attack_intent_rejected_in_campaign_space_without_side_effects() -> None:
+    sim = _build_sim()
+    sim.state.entities["attacker"].space_id = "overworld"
+    sim.state.entities["target"].space_id = "overworld"
+
+    baseline_hash = simulation_hash(sim)
+    sim.append_command(_attack_command(tick=0, target_id="target"))
+    sim.advance_ticks(2)
+
+    outcome = sim.state.combat_log[0]
+    assert outcome["applied"] is False
+    assert outcome["reason"] == "tactical_not_allowed_in_campaign_space"
+    assert "affected" not in outcome
+    assert sim.state.entities["attacker"].cooldown_until_tick == 0
+    assert sim.state.entities["target"].wounds == []
+
+    replay = _build_sim()
+    replay.state.entities["attacker"].space_id = "overworld"
+    replay.state.entities["target"].space_id = "overworld"
+    assert simulation_hash(replay) == baseline_hash
+    replay.append_command(_attack_command(tick=0, target_id="target"))
+    replay.advance_ticks(2)
+    assert simulation_hash(replay) == simulation_hash(sim)
+
+
+def test_turn_intent_rejected_in_campaign_space_without_mutation() -> None:
+    sim = _build_sim()
+    sim.state.entities["attacker"].space_id = "overworld"
+    sim.state.entities["attacker"].facing = 2
+    sim.append_command(_turn_command(tick=0, facing=4))
+
+    sim.advance_ticks(2)
+
+    assert sim.state.entities["attacker"].facing == 2
+    outcomes = _turn_outcomes(sim)
+    assert len(outcomes) == 1
+    assert outcomes[0]["params"]["applied"] is False
+    assert outcomes[0]["params"]["reason"] == "tactical_not_allowed_in_campaign_space"
+
+
+def test_tactical_permission_depends_on_space_role_not_topology() -> None:
+    local_hex = _build_sim()
+    local_hex.append_command(_attack_command(tick=0, target_id="target"))
+    local_hex.advance_ticks(2)
+    assert local_hex.state.combat_log[0]["applied"] is True
+
+    local_square = _build_sim()
+    local_square.state.world.spaces["local_square"] = SpaceState(
+        space_id="local_square",
+        topology_type="square_grid",
+        role="local",
+        topology_params={"width": 3, "height": 3, "origin": {"x": 0, "y": 0}},
+    )
+    local_square.state.entities["attacker"].space_id = "local_square"
+    local_square.state.entities["target"].space_id = "local_square"
+    local_square.state.entities["attacker"].position_x = 0.0
+    local_square.state.entities["attacker"].position_y = 0.0
+    local_square.state.entities["target"].position_x = 1.0
+    local_square.state.entities["target"].position_y = 0.0
+    local_square.append_command(_attack_command(tick=0, target_id="target"))
+    local_square.advance_ticks(2)
+    assert local_square.state.combat_log[0]["applied"] is True
+
+    campaign_square = _build_sim()
+    campaign_square.state.world.spaces["campaign_square"] = SpaceState(
+        space_id="campaign_square",
+        topology_type="square_grid",
+        role="campaign",
+        topology_params={"width": 3, "height": 3, "origin": {"x": 0, "y": 0}},
+    )
+    campaign_square.state.entities["attacker"].space_id = "campaign_square"
+    campaign_square.state.entities["target"].space_id = "campaign_square"
+    campaign_square.state.entities["attacker"].position_x = 0.0
+    campaign_square.state.entities["attacker"].position_y = 0.0
+    campaign_square.state.entities["target"].position_x = 1.0
+    campaign_square.state.entities["target"].position_y = 0.0
+    campaign_square.append_command(_attack_command(tick=0, target_id="target"))
+    campaign_square.advance_ticks(2)
+    assert campaign_square.state.combat_log[0]["applied"] is False
+    assert campaign_square.state.combat_log[0]["reason"] == "tactical_not_allowed_in_campaign_space"
+
+
+def test_legacy_world_payload_defaults_space_roles_deterministically() -> None:
+    legacy_world = {
+        "topology_type": "hex_disk",
+        "topology_params": {"radius": 1},
+        "hexes": [
+            {"coord": {"q": 0, "r": 0}, "record": {"terrain_type": "plains", "site_type": "none"}},
+            {"coord": {"q": 1, "r": 0}, "record": {"terrain_type": "plains", "site_type": "none"}},
+        ],
+    }
+    world = WorldState.from_dict(legacy_world)
+    world.spaces["local_extra"] = SpaceState(
+        space_id="local_extra",
+        topology_type="square_grid",
+        role="local",
+        topology_params={"width": 2, "height": 2, "origin": {"x": 0, "y": 0}},
+    )
+
+    payload = world.to_dict()
+    for space in payload["spaces"]:
+        space.pop("role", None)
+
+    restored = WorldState.from_dict(payload)
+    assert restored.spaces["overworld"].role == "campaign"
+    assert restored.spaces["local_extra"].role == "local"
+    assert WorldState.from_dict(restored.to_dict()).to_dict() == restored.to_dict()

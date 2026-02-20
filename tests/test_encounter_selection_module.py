@@ -286,5 +286,5 @@ def test_selection_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "6cc10957be9cc9d18bea0a7a4d4851a33661a7154573840a831bdb1410caf3db"
+        == "af0314aab1f2331df80b2b4db04b89e1529e7a866d6975dd31dd5ef643c98077"
     )

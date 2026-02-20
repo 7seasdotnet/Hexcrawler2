@@ -12,6 +12,9 @@ RNG_WORLDGEN_STREAM_NAME = "rng_worldgen"
 DEFAULT_TERRAIN_OPTIONS = ("plains", "forest", "hills")
 DEFAULT_OVERWORLD_SPACE_ID = "overworld"
 SQUARE_GRID_TOPOLOGY = "square_grid"
+CAMPAIGN_SPACE_ROLE = "campaign"
+LOCAL_SPACE_ROLE = "local"
+SPACE_ROLES = {CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE}
 MAX_SIGNALS = 256
 MAX_OCCLUSION_EDGES = 2048
 
@@ -456,6 +459,7 @@ class InteractableRecord:
 class SpaceState:
     space_id: str
     topology_type: str
+    role: str = LOCAL_SPACE_ROLE
     topology_params: dict[str, Any] = field(default_factory=dict)
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     doors: dict[str, DoorRecord] = field(default_factory=dict)
@@ -463,6 +467,9 @@ class SpaceState:
     interactables: dict[str, InteractableRecord] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self.role = str(self.role)
+        if self.role not in SPACE_ROLES:
+            raise ValueError(f"space.role must be one of {sorted(SPACE_ROLES)}")
         if self.topology_type == SQUARE_GRID_TOPOLOGY:
             self.topology_params = self._normalized_square_topology_params(self.topology_params)
         self._normalize_space_records()
@@ -572,6 +579,7 @@ class SpaceState:
         payload = {
             "space_id": self.space_id,
             "topology_type": self.topology_type,
+            "role": self.role,
             "topology_params": dict(self.topology_params),
             "hexes": hex_rows,
         }
@@ -587,9 +595,16 @@ class SpaceState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SpaceState":
+        space_id = str(data["space_id"])
+        role_raw = data.get("role")
+        if role_raw is None:
+            role = CAMPAIGN_SPACE_ROLE if space_id == DEFAULT_OVERWORLD_SPACE_ID else LOCAL_SPACE_ROLE
+        else:
+            role = str(role_raw)
         space = cls(
-            space_id=str(data["space_id"]),
+            space_id=space_id,
             topology_type=str(data.get("topology_type", "custom")),
+            role=role,
             topology_params=dict(data.get("topology_params", {})),
         )
         for row in data.get("hexes", []):
@@ -769,6 +784,7 @@ class WorldState:
         self.spaces[DEFAULT_OVERWORLD_SPACE_ID] = SpaceState(
             space_id=DEFAULT_OVERWORLD_SPACE_ID,
             topology_type=self.topology_type,
+            role=CAMPAIGN_SPACE_ROLE,
             topology_params=dict(self.topology_params),
             hexes=self.hexes,
         )
