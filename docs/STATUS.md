@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Phase 6B follow-on — Role-gated tactical admissibility (campaign/local separation enforcement).
-- **Next action:** implement encounter→local transition seam so campaign encounter triggers hand off tactical resolution to local-role spaces.
+- **Next action:** local encounter instancing + space transition wiring (still deferred).
 - **Phase status:** ✅ Phase 6A complete; 6B follow-on now enforces serialized space roles (`campaign`/`local`) and local-only tactical intent admissibility for `attack_intent` and `turn_intent`.
 
 
 ## What changed in this commit
-- Introduced serialized/hash-covered `SpaceState.role` (`campaign`/`local`) with deterministic legacy defaulting (`overworld`→`campaign`, non-overworld→`local`) and strict role validation on load.
-- Enforced ingress tactical gating: `attack_intent` and `turn_intent` now reject in campaign-role spaces with deterministic reason token `tactical_not_allowed_in_campaign_space` before arc/cooldown/wound logic runs.
-- Added deterministic tests for campaign rejection, local allowance across hex/square topologies, and legacy save migration behavior when role is absent.
+- Added `local_encounter_request` seam emission from `encounter_resolve_request` when (and only when) the originating space role is `campaign`.
+- The seam payload now records `from_space_id` plus `from_location` and encounter identifiers (`table_id`, `entry_id`, `category`, `roll`) with nullable optional fields for forward compatibility.
+- Added deterministic tests proving campaign-role emission, local-role non-emission, and replay-stable local encounter request traces.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
