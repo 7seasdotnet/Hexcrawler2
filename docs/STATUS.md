@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Phase 6B follow-on — Tactical legibility seams (facing update + arc admissibility validation-only).
-- **Next action:** Continue Phase 6B follow-on hardening by extending deterministic admissibility contracts while keeping combat math/armor/healing/LOS out of scope.
-- **Phase status:** ✅ Phase 6A complete; 6B follow-on now includes deterministic `turn_intent` facing updates, overworld melee front-arc admissibility gating, and stable `affected[]` ordering contracts.
+- **Next action:** Run targeted audit of tactical intent surfaces, then implement role-based admissibility gating (campaign vs local) without adding combat math/armor/healing/LOS semantics.
+- **Phase status:** ✅ Phase 6A complete; 6B follow-on now includes deterministic `turn_intent` facing updates, overworld melee front-arc admissibility gating, stable `affected[]` ordering contracts, and canonical campaign-vs-local role clarification in architecture docs.
 
 
 ## What changed in this commit
-- Added deterministic `turn_intent` command handling to update authoritative entity `facing` via core facing normalization and emit forensic `turn_outcome` events.
-- Added overworld-only melee arc admissibility stub (`front 3 of 6` from attacker facing): resolved attacks proceed unchanged, while behind-arc attacks reject with deterministic `invalid_arc` / `invalid_arc_coord` reasons.
-- Locked deterministic `affected[]` ordering contract helper (primary: coord key; secondary: `entity_id`) and added focused tests for turn seam, arc gating, ordering stability, and save/load/hash behavior.
+- Canonicalized campaign-vs-local space roles as an explicit architecture contract (Model B), including role-based admissibility language for tactical intents.
+- Moved operational role-guidance into the existing root `AGENTS.md` scope (and removed `docs/AGENTS.md`) so instruction ownership remains centralized and non-duplicative.
+- Updated combat seam documentation to state that combat intents are admissible only in Local spaces and that campaign spaces may emit transition requests only.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`

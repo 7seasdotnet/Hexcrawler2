@@ -142,3 +142,12 @@ Current verification commands that actually work
 What changed in this commit (1–3 bullets)
 
 If Codex fails to update STATUS.md, you reject the output.
+
+## Space Role Implementation Guidance
+- When implementing or documenting a feature, explicitly state which space role(s) it applies to (`campaign`, `local`, or both).
+- Do not use topology (hex/square/nested geometry) as a proxy for role assignment.
+- Tactical logic must be role-gated, not topology-gated.
+- Campaign-role spaces handle travel/time/logistics/encounter triggering and abstract outcomes.
+- Local-role spaces handle tactical movement and tactical combat resolution.
+- Tactical combat intents (`attack_intent`, `turn_intent`, and other tactical commands) are inadmissible in campaign-role spaces.
+

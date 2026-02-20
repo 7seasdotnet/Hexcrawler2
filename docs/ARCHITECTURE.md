@@ -18,6 +18,17 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Generation helpers (for example: disk/rectangle) may be used to create topology, but persistence stores only the realized valid-cell set.
 - **Contract:** Future dungeon spaces may use a different topology (for example: square grid) while sharing the same simulation clock and entity model.
 
+## 2A) Space Roles: Campaign vs Local
+- **Contract:** A space has an explicit simulation **role** independent of topology representation.
+- **Contract:** Canonical roles are `campaign` and `local`.
+- **Contract:** Campaign-role spaces handle travel cadence, time advancement, logistics/accounting, encounter triggering, and abstract outcomes.
+- **Contract:** Local-role spaces handle tactical movement and tactical resolution surfaces.
+- **Contract:** Tactical combat intents (`attack_intent`, `turn_intent`, and other tactical commands) are inadmissible in campaign-role spaces.
+- **Contract:** Campaign-role systems may schedule or emit deterministic requests to enter/start local encounters, but campaign-role execution does not resolve tactical seams directly.
+- **Contract:** Topology must not be used as a proxy for role; role-gating is authoritative for admissibility.
+- **Contract:** This role boundary does not lock out future zoom/refinement or nested-hex workflows on campaign maps; any zoom implementation must preserve campaign vs local role separation.
+- **Canonical Decision:** Earlier internal exploration considered overworld combat geometry execution in campaign spaces; Model B (role-separated campaign/local execution) is now canonical.
+
 ## 3) Time Contract
 - **Contract:** Authoritative simulation advances only via `advance_ticks(n)` and `advance_days(n)`.
 - **Contract:** Tick duration is an in-world quantum; wall-clock stepping/speed controls are viewer concerns.
