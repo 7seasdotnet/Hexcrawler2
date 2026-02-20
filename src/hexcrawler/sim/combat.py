@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, SimCommand, Simulation
+from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_WOUNDS, SimCommand, Simulation
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
@@ -13,6 +13,7 @@ ATTACK_INTENT_COMMAND_TYPE = "attack_intent"
 COMBAT_OUTCOME_EVENT_TYPE = "combat_outcome"
 DEFAULT_CALLED_REGION = "torso"
 PLACEHOLDER_COOLDOWN_TICKS = 1
+DEFAULT_WOUND_SEVERITY = 1
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -151,9 +152,63 @@ class CombatExecutionModule(RuleModule):
                 "tags": list(tags),
             }
         if affected:
+            self._apply_wounds_from_affected(
+                sim=sim,
+                tick=int(command.tick),
+                attacker_id=outcome["attacker_id"],
+                called_region=outcome["called_region"],
+                affected=affected,
+            )
             outcome["affected"] = affected
         sim.append_combat_outcome(outcome)
         return True
+
+    @staticmethod
+    def _append_wound_with_fifo_cap(entity_wounds: list[dict[str, Any]], wound: dict[str, Any]) -> None:
+        entity_wounds.append(copy.deepcopy(wound))
+        while len(entity_wounds) > MAX_WOUNDS:
+            entity_wounds.pop(0)
+
+    @classmethod
+    def _apply_wounds_from_affected(
+        cls,
+        *,
+        sim: Simulation,
+        tick: int,
+        attacker_id: str | None,
+        called_region: str,
+        affected: list[dict[str, Any]],
+    ) -> None:
+        for entry in affected:
+            if entry.get("applied") is not True:
+                continue
+            entity_id = entry.get("entity_id")
+            if not isinstance(entity_id, str) or not entity_id:
+                continue
+            entity = sim.state.entities.get(entity_id)
+            if entity is None:
+                continue
+            wound = {
+                "region": cls._resolve_wound_region(entry=entry, called_region=called_region),
+                "severity": DEFAULT_WOUND_SEVERITY,
+                "tags": [],
+                "inflicted_tick": int(tick),
+                "source": attacker_id if isinstance(attacker_id, str) else None,
+            }
+            cls._append_wound_with_fifo_cap(entity.wounds, wound)
+            entry["wound_deltas"] = [{"op": "append", "wound": copy.deepcopy(wound)}]
+
+    @staticmethod
+    def _resolve_wound_region(*, entry: dict[str, Any], called_region: str) -> str:
+        region_hit = entry.get("region_hit")
+        if isinstance(region_hit, str) and region_hit:
+            return region_hit
+        affected_called_region = entry.get("called_region")
+        if isinstance(affected_called_region, str) and affected_called_region:
+            return affected_called_region
+        if isinstance(called_region, str) and called_region:
+            return called_region
+        return DEFAULT_CALLED_REGION
 
     @staticmethod
     def _truncate_affected_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
