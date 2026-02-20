@@ -7,7 +7,7 @@ from hexcrawler.sim.combat import (
 )
 from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, MAX_WOUNDS, EntityState, SimCommand, Simulation
 from hexcrawler.sim.hash import simulation_hash
-from hexcrawler.sim.world import HexCoord
+from hexcrawler.sim.world import HexCoord, HexRecord, SpaceState
 
 
 def _build_sim() -> Simulation:
@@ -495,3 +495,25 @@ def test_affected_ordering_helper_is_deterministic_and_non_mutating() -> None:
     ]
     assert first == second
     assert entries == snapshot
+
+
+def test_attack_in_noncanonical_hex_topology_is_rejected_without_wildcard_topology_admission() -> None:
+    sim = _build_sim()
+    sim.state.world.spaces["hex_local"] = SpaceState(
+        space_id="hex_local",
+        topology_type="custom",
+        hexes={
+            HexCoord(0, 0): HexRecord(terrain_type="plains"),
+            HexCoord(1, 0): HexRecord(terrain_type="plains"),
+        },
+    )
+    sim.state.entities["attacker"].space_id = "hex_local"
+    sim.state.entities["target"].space_id = "hex_local"
+
+    sim.append_command(_attack_command(tick=0, target_id="target"))
+    sim.advance_ticks(2)
+
+    outcome = sim.state.combat_log[0]
+    assert outcome["applied"] is False
+    assert outcome["reason"] == "invalid_target"
+    assert "affected" not in outcome

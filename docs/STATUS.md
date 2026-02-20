@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Phase 6B follow-on — Tactical legibility seams (facing update + arc admissibility validation-only).
-- **Next action:** Run targeted audit of tactical intent surfaces, then implement role-based admissibility gating (campaign vs local) without adding combat math/armor/healing/LOS semantics.
+- **Next action:** Prompt 3 follow-up: add explicit campaign/local role metadata and tactical-intent admissibility checks, then quarantine remaining topology-derived tactical assumptions behind role gates only.
 - **Phase status:** ✅ Phase 6A complete; 6B follow-on now includes deterministic `turn_intent` facing updates, overworld melee front-arc admissibility gating, stable `affected[]` ordering contracts, and canonical campaign-vs-local role clarification in architecture docs.
 
 
 ## What changed in this commit
-- Canonicalized campaign-vs-local space roles as an explicit architecture contract (Model B), including role-based admissibility language for tactical intents.
-- Moved operational role-guidance into the existing root `AGENTS.md` scope (and removed `docs/AGENTS.md`) so instruction ownership remains centralized and non-duplicative.
-- Updated combat seam documentation to state that combat intents are admissible only in Local spaces and that campaign spaces may emit transition requests only.
+- Audited tactical intent surfaces for campaign/local role confusion and documented topology-derived tactical seams for Prompt 3 quarantine/gating.
+- Tightened combat coord resolution by removing wildcard hex/custom topology admission in `_entity_coord`; explicit allowlisted campaign hex topology values now resolve via axial conversion (with legacy `overworld`+`custom` compatibility retained).
+- Added targeted combat regression coverage proving non-canonical hex topologies are rejected without wildcard tactical admission.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
