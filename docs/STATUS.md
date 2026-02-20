@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6B — Combat Resolution Stubs (affected-target scaffolding, no combat math).
-- **Next action:** Expand 6B combat seams with deterministic multi-affected scaffolding consumers while deferring all damage/armor/wound mechanics.
-- **Phase status:** ✅ Phase 6A complete and 6B scaffolding in progress: `combat_outcome.affected[]` is now deterministic, bounded, and save/load stable for resolved target projection.
+- **Current phase:** Phase 6B follow-on — Deterministic minimal wound application (no combat math).
+- **Next action:** Continue Phase 6B follow-on by extending structural wound consequences beyond minimal append stubs while keeping combat math/armor/healing out of scope.
+- **Phase status:** ✅ Phase 6A complete; 6B follow-on now applies deterministic minimal wounds from `combat_outcome.affected[]` with bounded entity wound ledgers and save/load/hash stability.
 
 
 ## What changed in this commit
-- Added Phase 6B affected-target scaffolding: applied `combat_outcome` records now include deterministic `affected[]` entries (currently 0/1) with resolved entity/cell projection and stub wound deltas.
-- Added deterministic boundedness contract `MAX_AFFECTED_PER_ACTION = 8` with FIFO truncation (`keep first N`) in combat outcome normalization.
-- Added regression coverage for applied affected payloads, cell-only no-occupant rejection (`no_target_in_cell`), save/load+hash stability, and bounded affected truncation.
+- Applied deterministic minimal wound append behavior for each applied `combat_outcome.affected[]` entry with an `entity_id`, including `WoundRecord` fields: `region`, `severity=1`, `tags=[]`, `inflicted_tick`, and `source`.
+- Reused `MAX_WOUNDS = 64` and implemented explicit deterministic FIFO eviction (`pop(0)`) in a single combat helper so wound ledgers stay bounded while preserving newest consequences.
+- Populated `affected[i].wound_deltas` with a single JSON-safe structural append delta (`{"op": "append", "wound": <WoundRecord>}`) and added deterministic tests for applied/rejected/cell-only/overflow/save-load-hash behavior.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -167,7 +167,7 @@
 
 ## Out of Scope Kept
 - No towns/markets/prices/economy systems in this phase.
-- No combat/wounds/armor/HP systems in this phase.
+- No combat math, hit chance, armor/penetration, healing, bleed-over-time, or AI combat behaviors in this phase.
 - No AI/factions/networking in this phase.
 
 ## Canonical Launch
@@ -228,9 +228,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Combat outcomes now emit deterministic bounded `affected[]` target projection entries for applied attacks (no combat math introduced).
-- Cell-only targeting now resolves deterministic occupancy and rejects empty target cells with `no_target_in_cell` outcomes.
-- Tests now cover affected payload correctness, save/load/hash stability, and explicit bounded truncation behavior for affected entries.
+- Combat execution now appends one deterministic minimal wound record to each applied affected entity (if present) and records a matching `wound_deltas` append artifact on that affected entry.
+- Wound ledgers are explicitly bounded by `MAX_WOUNDS = 64` with deterministic FIFO eviction of oldest wounds on overflow.
+- Tests now cover wound append semantics, region fallback behavior, rejected and empty-cell no-op behavior, overflow eviction, and save/load + hash stability for wound state.
 
 
 ## Troubleshooting

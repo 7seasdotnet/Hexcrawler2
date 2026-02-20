@@ -1,6 +1,6 @@
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, CombatExecutionModule
-from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, EntityState, SimCommand, Simulation
+from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, MAX_WOUNDS, EntityState, SimCommand, Simulation
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.world import HexCoord
 
@@ -54,6 +54,15 @@ def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> Non
     assert accepted["called_region"] == "torso"
     assert accepted["region_hit"] == "torso"
     assert accepted["wound_deltas"] == []
+    assert sim.state.entities["target"].wounds == [
+        {
+            "region": "torso",
+            "severity": 1,
+            "tags": [],
+            "inflicted_tick": 0,
+            "source": "attacker",
+        }
+    ]
 
     assert rejected["applied"] is False
     assert rejected["reason"] == "out_of_range"
@@ -76,9 +85,21 @@ def test_applied_attack_populates_affected_target_fields() -> None:
     assert affected[0]["cell"] == {"space_id": "overworld", "coord": {"q": 1, "r": 0}}
     assert affected[0]["called_region"] == "torso"
     assert affected[0]["region_hit"] == "torso"
-    assert affected[0]["wound_deltas"] == []
+    assert affected[0]["wound_deltas"] == [
+        {
+            "op": "append",
+            "wound": {
+                "region": "torso",
+                "severity": 1,
+                "tags": [],
+                "inflicted_tick": 0,
+                "source": "attacker",
+            },
+        }
+    ]
     assert affected[0]["applied"] is True
     assert affected[0]["reason"] == "resolved"
+    assert sim.state.entities["target"].wounds[-1] == affected[0]["wound_deltas"][0]["wound"]
 
 
 def test_cell_only_targeting_without_occupant_is_rejected_and_omits_affected() -> None:
@@ -90,6 +111,7 @@ def test_cell_only_targeting_without_occupant_is_rejected_and_omits_affected() -
     assert outcome["applied"] is False
     assert outcome["reason"] == "no_target_in_cell"
     assert "affected" not in outcome
+    assert sim.state.entities["target"].wounds == []
 
     restored = Simulation.from_simulation_payload(sim.simulation_payload())
     assert restored.state.combat_log[0] == outcome
@@ -126,7 +148,7 @@ def test_combat_state_round_trip_and_hash_is_stable() -> None:
     restored = Simulation.from_simulation_payload(sim_a.simulation_payload())
     assert restored.state.combat_log == sim_a.state.combat_log
     assert restored.state.entities["attacker"].cooldown_until_tick == sim_a.state.entities["attacker"].cooldown_until_tick
-    assert restored.state.entities["attacker"].wounds == []
+    assert restored.state.entities["target"].wounds == sim_a.state.entities["target"].wounds
     assert simulation_hash(restored) == simulation_hash(sim_a)
 
 
@@ -240,3 +262,72 @@ def test_target_cell_coord_validation_is_topology_owned_not_generic_length_check
     outcome = sim.state.combat_log[0]
     assert outcome["applied"] is False
     assert outcome["reason"] == "invalid_target_cell_coord_for_space"
+
+
+def test_wound_region_falls_back_to_called_region_when_region_hit_missing() -> None:
+    sim = _build_sim()
+
+    affected = [
+        {
+            "entity_id": "target",
+            "called_region": "arm",
+            "region_hit": None,
+            "wound_deltas": [],
+            "applied": True,
+            "reason": "resolved",
+        }
+    ]
+
+    CombatExecutionModule._apply_wounds_from_affected(
+        sim=sim,
+        tick=4,
+        attacker_id="attacker",
+        called_region="torso",
+        affected=affected,
+    )
+
+    assert sim.state.entities["target"].wounds == [
+        {
+            "region": "arm",
+            "severity": 1,
+            "tags": [],
+            "inflicted_tick": 4,
+            "source": "attacker",
+        }
+    ]
+
+
+def test_wound_append_is_bounded_with_fifo_eviction() -> None:
+    sim = _build_sim()
+    target = sim.state.entities["target"]
+    target.wounds = [
+        {
+            "region": f"old_{index}",
+            "severity": 1,
+            "tags": [],
+            "inflicted_tick": index,
+            "source": "setup",
+        }
+        for index in range(MAX_WOUNDS)
+    ]
+
+    sim.append_command(_attack_command(tick=0))
+    sim.advance_ticks(2)
+
+    assert len(target.wounds) == MAX_WOUNDS
+    assert target.wounds[0]["region"] == "old_1"
+    assert target.wounds[-1]["region"] == "torso"
+    assert target.wounds[-1]["inflicted_tick"] == 0
+
+
+def test_wound_application_save_load_preserves_hash_and_ledger() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0))
+    sim.advance_ticks(2)
+
+    before_hash = simulation_hash(sim)
+    before_wounds = list(sim.state.entities["target"].wounds)
+
+    restored = Simulation.from_simulation_payload(sim.simulation_payload())
+    assert restored.state.entities["target"].wounds == before_wounds
+    assert simulation_hash(restored) == before_hash
