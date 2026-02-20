@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6B follow-on — Deterministic minimal wound application (no combat math).
-- **Next action:** Continue Phase 6B follow-on hardening by preserving deterministic combat artifact schema contracts while keeping combat math/armor/healing out of scope.
-- **Phase status:** ✅ Phase 6A complete; 6B follow-on now applies deterministic minimal wounds from `combat_outcome.affected[]` with bounded entity wound ledgers and save/load/hash stability.
+- **Current phase:** Phase 6B follow-on — Tactical legibility seams (facing update + arc admissibility validation-only).
+- **Next action:** Continue Phase 6B follow-on hardening by extending deterministic admissibility contracts while keeping combat math/armor/healing/LOS out of scope.
+- **Phase status:** ✅ Phase 6A complete; 6B follow-on now includes deterministic `turn_intent` facing updates, overworld melee front-arc admissibility gating, and stable `affected[]` ordering contracts.
 
 
 ## What changed in this commit
-- Locked combat outcome artifact conventions in tests: rejected outcomes omit `affected`, applied outcomes include non-empty `affected`, and save/load preserves omitted `affected` for rejected results.
-- Added strict normalization tests asserting every `affected[i]` includes `wound_deltas`, with loader default injection to `[]` when legacy rows omit the key.
-- Kept combat schema hardening scoped to Phase 6B follow-on (no combat math/RNG/mechanics expansion).
+- Added deterministic `turn_intent` command handling to update authoritative entity `facing` via core facing normalization and emit forensic `turn_outcome` events.
+- Added overworld-only melee arc admissibility stub (`front 3 of 6` from attacker facing): resolved attacks proceed unchanged, while behind-arc attacks reject with deterministic `invalid_arc` / `invalid_arc_coord` reasons.
+- Locked deterministic `affected[]` ordering contract helper (primary: coord key; secondary: `entity_id`) and added focused tests for turn seam, arc gating, ordering stability, and save/load/hash behavior.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -25,8 +25,9 @@
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
-  - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing deterministic validation/range/cooldown checks, and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
-  - Combat outcomes support bounded deterministic affected-target projection via `affected[]` (cap: `MAX_AFFECTED_PER_ACTION = 8`, FIFO keep-first-N truncation), with applied entries carrying resolved `entity_id` + `cell` and rejected outcomes omitting `affected`.
+  - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing deterministic validation/range/cooldown checks plus overworld-only melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
+  - Combat seam also consumes `turn_intent` to deterministically update entity facing and emit forensic `turn_outcome` events on the serialized event queue/trace path.
+  - Combat outcomes support bounded deterministic affected-target projection via `affected[]` (cap: `MAX_AFFECTED_PER_ACTION = 8`) with deterministic ordering contract (primary key: coord ordering; secondary key: `entity_id`), applied entries carrying resolved `entity_id` + `cell`, and rejected outcomes omitting `affected`.
   - Combat outcome schema convention (locked): rejected combat outcomes omit `affected`; applied outcomes include non-empty `affected`.
   - Combat outcome schema convention (locked): each `affected` entry always includes `wound_deltas` (default `[]`), and wound append is recorded as a single append delta (`[{"op":"append","wound": <exact appended wound>}]`).
   - Rumor pipeline seam (`RumorPipelineModule`) that deterministically creates `world.rumors` from executed `encounter_action_outcome` events, persists emitted-rumor ledger state in `rules_state["rumor_pipeline"]`, and runs serialized periodic propagation/expiration accounting (hop cap 4).
@@ -222,6 +223,7 @@
 - `entity_stat_intent` (simulation command seam; structural per-entity stat set/remove operations with delayed execution and idempotent outcomes)
 - `emit_signal_intent` (simulation command seam; delayed signal record emission into deterministic bounded world signal container)
 - `perceive_signal_intent` (simulation command seam; delayed deterministic signal query with channel/radius filtering and strength reporting)
+- `turn_intent` (simulation command seam; deterministic facing-token update with forensic `turn_outcome`)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -230,9 +232,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Combat execution now appends one deterministic minimal wound record to each applied affected entity (if present) and records a matching `wound_deltas` append artifact on that affected entry.
-- Wound ledgers are explicitly bounded by `MAX_WOUNDS = 64` with deterministic FIFO eviction of oldest wounds on overflow.
-- Tests now cover wound append semantics, region fallback behavior, rejected and empty-cell no-op behavior, overflow eviction, and save/load + hash stability for wound state.
+- Added deterministic `turn_intent` command seam that validates entity/facing, applies normalized facing tokens, and records forensic `turn_outcome` events.
+- Added deterministic overworld melee arc admissibility stub (`front-3-of-6` from facing) with explicit rejection reasons (`invalid_arc`, `invalid_arc_coord`) and no combat math changes.
+- Added deterministic `affected[]` ordering helper contract and tests covering turn outcomes, arc gating behavior, ordering stability, and save/load/hash invariants.
 
 
 ## Troubleshooting

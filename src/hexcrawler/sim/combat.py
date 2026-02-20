@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
-from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_WOUNDS, SimCommand, Simulation
+from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_WOUNDS, SimCommand, Simulation, _normalize_facing_token
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.signals import distance_between_locations
 
 ATTACK_INTENT_COMMAND_TYPE = "attack_intent"
+TURN_INTENT_COMMAND_TYPE = "turn_intent"
 COMBAT_OUTCOME_EVENT_TYPE = "combat_outcome"
+TURN_OUTCOME_EVENT_TYPE = "turn_outcome"
 DEFAULT_CALLED_REGION = "torso"
 PLACEHOLDER_COOLDOWN_TICKS = 1
 DEFAULT_WOUND_SEVERITY = 1
@@ -30,10 +33,17 @@ def _is_json_safe(value: Any) -> bool:
     return False
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 class CombatExecutionModule(RuleModule):
     name = "combat"
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type == TURN_INTENT_COMMAND_TYPE:
+            self._handle_turn_intent(sim, command=command, command_index=command_index)
+            return True
         if command.command_type != ATTACK_INTENT_COMMAND_TYPE:
             return False
 
@@ -118,6 +128,14 @@ class CombatExecutionModule(RuleModule):
                             reason = "space_mismatch"
                         elif not self._is_adjacent(attacker_location, target_location):
                             reason = "out_of_range"
+                        elif resolved_target_id is not None:
+                            arc_reason = self._validate_melee_arc_admissibility(
+                                sim=sim,
+                                attacker_id=attacker_id,
+                                target_id=resolved_target_id,
+                            )
+                            if arc_reason is not None:
+                                reason = arc_reason
 
                     if reason == "resolved" and attacker.cooldown_until_tick > command.tick:
                         reason = "cooldown_blocked"
@@ -243,7 +261,114 @@ class CombatExecutionModule(RuleModule):
                 "reason": reason,
             }
         ]
+        entries = cls._sort_affected_entries(entries)
         return cls._truncate_affected_entries(entries)
+
+    @classmethod
+    def _sort_affected_entries(cls, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(entries, key=cls._affected_sort_key)
+
+    @classmethod
+    def _affected_sort_key(cls, entry: dict[str, Any]) -> tuple[int, int, int, str, str]:
+        cell = entry.get("cell") if isinstance(entry, dict) else None
+        cell_key = cls._cell_sort_key(cell)
+        entity_id = entry.get("entity_id") if isinstance(entry, dict) else None
+        entity_key = entity_id if isinstance(entity_id, str) else ""
+        return (cell_key[0], cell_key[1], cell_key[2], cell_key[3], entity_key)
+
+    @staticmethod
+    def _cell_sort_key(cell: Any) -> tuple[int, int, int, str]:
+        if not isinstance(cell, dict):
+            return (1, 0, 0, "")
+        coord = cell.get("coord")
+        if isinstance(coord, dict) and isinstance(coord.get("q"), int) and isinstance(coord.get("r"), int):
+            return (0, int(coord["q"]), int(coord["r"]), "")
+        return (1, 0, 0, _canonical_json(cell.get("coord")))
+
+    def _handle_turn_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
+        entity_id = command.params.get("entity_id")
+        facing_raw = command.params.get("facing")
+        tags = command.params.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            tags = []
+
+        applied = False
+        reason = "resolved"
+        normalized_facing = 0
+
+        if not isinstance(entity_id, str) or not entity_id:
+            reason = "invalid_entity"
+        elif entity_id not in sim.state.entities:
+            reason = "invalid_entity"
+        elif facing_raw is None:
+            reason = "invalid_facing"
+        else:
+            try:
+                normalized_facing = _normalize_facing_token(facing_raw)
+            except ValueError:
+                reason = "invalid_facing"
+            else:
+                sim.state.entities[entity_id].facing = normalized_facing
+                applied = True
+
+        sim.schedule_event_at(
+            tick=command.tick,
+            event_type=TURN_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": int(command.tick),
+                "intent": TURN_INTENT_COMMAND_TYPE,
+                "action_uid": f"{command.tick}:{command_index}",
+                "entity_id": entity_id if isinstance(entity_id, str) else None,
+                "facing": int(normalized_facing) if applied else None,
+                "applied": applied,
+                "reason": reason,
+                "tags": list(tags),
+            },
+        )
+
+    @classmethod
+    def _validate_melee_arc_admissibility(
+        cls,
+        *,
+        sim: Simulation,
+        attacker_id: str,
+        target_id: str,
+    ) -> str | None:
+        attacker = sim.state.entities.get(attacker_id)
+        target = sim.state.entities.get(target_id)
+        if attacker is None or target is None:
+            return "invalid_target"
+        if attacker.space_id != target.space_id:
+            return "space_mismatch"
+        space = sim.state.world.spaces.get(attacker.space_id)
+        if space is None or space.topology_type == SQUARE_GRID_TOPOLOGY:
+            return None
+        attacker_coord = cls._entity_coord(sim, attacker_id)
+        target_coord = cls._entity_coord(sim, target_id)
+        direction = cls._hex_neighbor_direction(attacker_coord=attacker_coord, target_coord=target_coord)
+        if direction is None:
+            return "invalid_arc_coord"
+        facing = attacker.facing % 6
+        allowed = {(facing - 1) % 6, facing, (facing + 1) % 6}
+        if direction not in allowed:
+            return "invalid_arc"
+        return None
+
+    @staticmethod
+    def _hex_neighbor_direction(*, attacker_coord: dict[str, Any] | None, target_coord: dict[str, Any] | None) -> int | None:
+        if not isinstance(attacker_coord, dict) or not isinstance(target_coord, dict):
+            return None
+        if not isinstance(attacker_coord.get("q"), int) or not isinstance(attacker_coord.get("r"), int):
+            return None
+        if not isinstance(target_coord.get("q"), int) or not isinstance(target_coord.get("r"), int):
+            return None
+        dq = target_coord["q"] - attacker_coord["q"]
+        dr = target_coord["r"] - attacker_coord["r"]
+        directions = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
+        try:
+            return directions.index((dq, dr))
+        except ValueError:
+            return None
 
     @classmethod
     def _entity_id_at_cell(cls, sim: Simulation, cell: dict[str, Any]) -> str | None:

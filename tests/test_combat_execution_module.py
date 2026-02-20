@@ -1,5 +1,10 @@
 from hexcrawler.content.io import load_world_json
-from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, CombatExecutionModule
+from hexcrawler.sim.combat import (
+    ATTACK_INTENT_COMMAND_TYPE,
+    TURN_INTENT_COMMAND_TYPE,
+    TURN_OUTCOME_EVENT_TYPE,
+    CombatExecutionModule,
+)
 from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, MAX_WOUNDS, EntityState, SimCommand, Simulation
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.world import HexCoord
@@ -13,6 +18,18 @@ def _build_sim() -> Simulation:
     sim.add_entity(EntityState.from_hex(entity_id="target", hex_coord=HexCoord(1, 0), speed_per_tick=0.0))
     return sim
 
+
+
+
+def _turn_command(*, tick: int, entity_id: str = "attacker", facing: object = 0, tags: list[str] | None = None) -> SimCommand:
+    params: dict[str, object] = {"entity_id": entity_id, "facing": facing}
+    if tags is not None:
+        params["tags"] = tags
+    return SimCommand(tick=tick, command_type=TURN_INTENT_COMMAND_TYPE, params=params)
+
+
+def _turn_outcomes(sim: Simulation) -> list[dict[str, object]]:
+    return [entry for entry in sim.get_event_trace() if entry.get("event_type") == TURN_OUTCOME_EVENT_TYPE]
 
 def _attack_command(*, tick: int, target_id: str | None = "target", target_cell=None, attacker_id: str = "attacker") -> SimCommand:
     params = {
@@ -397,3 +414,84 @@ def test_wound_application_save_load_preserves_hash_and_ledger() -> None:
     restored = Simulation.from_simulation_payload(sim.simulation_payload())
     assert restored.state.entities["target"].wounds == before_wounds
     assert simulation_hash(restored) == before_hash
+
+
+def test_turn_intent_applies_facing_and_records_outcome_with_hash_stability() -> None:
+    sim = _build_sim()
+    sim.append_command(_turn_command(tick=0, facing=4, tags=["test"]))
+
+    sim.advance_ticks(2)
+
+    assert sim.state.entities["attacker"].facing == 4
+    outcomes = _turn_outcomes(sim)
+    assert len(outcomes) == 1
+    params = outcomes[0]["params"]
+    assert params["applied"] is True
+    assert params["reason"] == "resolved"
+    assert params["entity_id"] == "attacker"
+    assert params["facing"] == 4
+
+    before_hash = simulation_hash(sim)
+    restored = Simulation.from_simulation_payload(sim.simulation_payload())
+    assert restored.state.entities["attacker"].facing == 4
+    assert _turn_outcomes(restored)[0]["params"] == params
+    assert simulation_hash(restored) == before_hash
+
+
+def test_turn_intent_invalid_facing_rejected_deterministically() -> None:
+    sim = _build_sim()
+    sim.append_command(_turn_command(tick=0, facing="bad"))
+
+    sim.advance_ticks(2)
+
+    assert sim.state.entities["attacker"].facing == 0
+    outcomes = _turn_outcomes(sim)
+    assert len(outcomes) == 1
+    params = outcomes[0]["params"]
+    assert params["applied"] is False
+    assert params["reason"] == "invalid_facing"
+    assert params["facing"] is None
+
+
+def test_melee_arc_gate_allows_front_arc_and_rejects_behind() -> None:
+    front = _build_sim()
+    front.state.entities["attacker"].facing = 0
+    front.append_command(_attack_command(tick=0, target_id="target"))
+    front.advance_ticks(2)
+
+    front_outcome = front.state.combat_log[0]
+    assert front_outcome["applied"] is True
+    assert front_outcome["reason"] == "resolved"
+    assert "affected" in front_outcome
+    assert front.state.entities["target"].wounds
+
+    behind = _build_sim()
+    behind.state.entities["attacker"].facing = 3
+    behind.append_command(_attack_command(tick=0, target_id="target"))
+    behind.advance_ticks(2)
+
+    behind_outcome = behind.state.combat_log[0]
+    assert behind_outcome["applied"] is False
+    assert behind_outcome["reason"] == "invalid_arc"
+    assert "affected" not in behind_outcome
+    assert behind.state.entities["target"].wounds == []
+
+
+def test_affected_ordering_helper_is_deterministic_and_non_mutating() -> None:
+    entries = [
+        {"entity_id": "z", "cell": {"space_id": "overworld", "coord": {"q": 2, "r": 0}}},
+        {"entity_id": "a", "cell": {"space_id": "overworld", "coord": {"q": 0, "r": 0}}},
+        {"entity_id": "m", "cell": {"space_id": "overworld", "coord": {"q": 0, "r": -1}}},
+    ]
+    snapshot = [dict(row) for row in entries]
+
+    first = CombatExecutionModule._sort_affected_entries(entries)
+    second = CombatExecutionModule._sort_affected_entries(entries)
+
+    assert [(row["cell"]["coord"]["q"], row["cell"]["coord"]["r"], row["entity_id"]) for row in first] == [
+        (0, -1, "m"),
+        (0, 0, "a"),
+        (2, 0, "z"),
+    ]
+    assert first == second
+    assert entries == snapshot
