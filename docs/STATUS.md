@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Phase 6B follow-on — Deterministic minimal wound application (no combat math).
-- **Next action:** Continue Phase 6B follow-on by extending structural wound consequences beyond minimal append stubs while keeping combat math/armor/healing out of scope.
+- **Next action:** Continue Phase 6B follow-on hardening by preserving deterministic combat artifact schema contracts while keeping combat math/armor/healing out of scope.
 - **Phase status:** ✅ Phase 6A complete; 6B follow-on now applies deterministic minimal wounds from `combat_outcome.affected[]` with bounded entity wound ledgers and save/load/hash stability.
 
 
 ## What changed in this commit
-- Applied deterministic minimal wound append behavior for each applied `combat_outcome.affected[]` entry with an `entity_id`, including `WoundRecord` fields: `region`, `severity=1`, `tags=[]`, `inflicted_tick`, and `source`.
-- Reused `MAX_WOUNDS = 64` and implemented explicit deterministic FIFO eviction (`pop(0)`) in a single combat helper so wound ledgers stay bounded while preserving newest consequences.
-- Populated `affected[i].wound_deltas` with a single JSON-safe structural append delta (`{"op": "append", "wound": <WoundRecord>}`) and added deterministic tests for applied/rejected/cell-only/overflow/save-load-hash behavior.
+- Locked combat outcome artifact conventions in tests: rejected outcomes omit `affected`, applied outcomes include non-empty `affected`, and save/load preserves omitted `affected` for rejected results.
+- Added strict normalization tests asserting every `affected[i]` includes `wound_deltas`, with loader default injection to `[]` when legacy rows omit the key.
+- Kept combat schema hardening scoped to Phase 6B follow-on (no combat math/RNG/mechanics expansion).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -27,6 +27,8 @@
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
   - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing deterministic validation/range/cooldown checks, and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
   - Combat outcomes support bounded deterministic affected-target projection via `affected[]` (cap: `MAX_AFFECTED_PER_ACTION = 8`, FIFO keep-first-N truncation), with applied entries carrying resolved `entity_id` + `cell` and rejected outcomes omitting `affected`.
+  - Combat outcome schema convention (locked): rejected combat outcomes omit `affected`; applied outcomes include non-empty `affected`.
+  - Combat outcome schema convention (locked): each `affected` entry always includes `wound_deltas` (default `[]`), and wound append is recorded as a single append delta (`[{"op":"append","wound": <exact appended wound>}]`).
   - Rumor pipeline seam (`RumorPipelineModule`) that deterministically creates `world.rumors` from executed `encounter_action_outcome` events, persists emitted-rumor ledger state in `rules_state["rumor_pipeline"]`, and runs serialized periodic propagation/expiration accounting (hop cap 4).
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
