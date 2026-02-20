@@ -50,6 +50,8 @@ def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> Non
     accepted = sim.state.combat_log[0]
     rejected = sim.state.combat_log[1]
     assert accepted["applied"] is True
+    assert "affected" in accepted
+    assert len(accepted["affected"]) >= 1
     assert accepted["reason"] == "resolved"
     assert accepted["called_region"] == "torso"
     assert accepted["region_hit"] == "torso"
@@ -66,6 +68,7 @@ def test_attack_outcomes_are_deterministic_for_acceptance_and_rejection() -> Non
 
     assert rejected["applied"] is False
     assert rejected["reason"] == "out_of_range"
+    assert "affected" not in rejected
 
 
 def test_applied_attack_populates_affected_target_fields() -> None:
@@ -75,6 +78,7 @@ def test_applied_attack_populates_affected_target_fields() -> None:
 
     outcome = sim.state.combat_log[0]
     assert outcome["applied"] is True
+    assert "affected" in outcome
     assert outcome["reason"] == "resolved"
     assert outcome["called_region"] == "torso"
     assert outcome["region_hit"] == "torso"
@@ -115,6 +119,7 @@ def test_cell_only_targeting_without_occupant_is_rejected_and_omits_affected() -
 
     restored = Simulation.from_simulation_payload(sim.simulation_payload())
     assert restored.state.combat_log[0] == outcome
+    assert "affected" not in restored.state.combat_log[0]
 
 
 def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
@@ -194,6 +199,67 @@ def test_affected_entries_are_truncated_to_max_bound() -> None:
     affected = normalized.state.combat_log[0]["affected"]
     assert len(affected) == MAX_AFFECTED_PER_ACTION
     assert [row["entity_id"] for row in affected] == [str(index) for index in range(MAX_AFFECTED_PER_ACTION)]
+    assert affected[0]["wound_deltas"] == []
+
+
+def test_load_normalization_injects_default_wound_deltas_without_injecting_affected_on_rejected() -> None:
+    normalized = Simulation.from_simulation_payload(
+        {
+            **_build_sim().simulation_payload(),
+            "combat_log": [
+                {
+                    "tick": 0,
+                    "intent": ATTACK_INTENT_COMMAND_TYPE,
+                    "action_uid": "0:0",
+                    "attacker_id": "attacker",
+                    "target_id": "target",
+                    "target_cell": {"space_id": "overworld", "coord": {"q": 1, "r": 0}},
+                    "mode": "melee",
+                    "weapon_ref": None,
+                    "called_region": "torso",
+                    "region_hit": "torso",
+                    "applied": True,
+                    "reason": "resolved",
+                    "wound_deltas": [],
+                    "roll_trace": [],
+                    "tags": [],
+                    "affected": [
+                        {
+                            "entity_id": "target",
+                            "cell": {"space_id": "overworld", "coord": {"q": 1, "r": 0}},
+                            "called_region": "torso",
+                            "region_hit": "torso",
+                            "applied": True,
+                            "reason": "resolved",
+                        }
+                    ],
+                },
+                {
+                    "tick": 1,
+                    "intent": ATTACK_INTENT_COMMAND_TYPE,
+                    "action_uid": "1:0",
+                    "attacker_id": "attacker",
+                    "target_id": None,
+                    "target_cell": {"space_id": "overworld", "coord": {"q": 9, "r": 9}},
+                    "mode": "melee",
+                    "weapon_ref": None,
+                    "called_region": "torso",
+                    "region_hit": None,
+                    "applied": False,
+                    "reason": "no_target_in_cell",
+                    "wound_deltas": [],
+                    "roll_trace": [],
+                    "tags": [],
+                },
+            ],
+        }
+    )
+
+    applied, rejected = normalized.state.combat_log
+    assert "affected" in applied
+    assert len(applied["affected"]) >= 1
+    assert applied["affected"][0]["wound_deltas"] == []
+    assert "affected" not in rejected
 
 
 def test_absent_vs_explicit_default_entity_fields_have_matching_hash() -> None:
