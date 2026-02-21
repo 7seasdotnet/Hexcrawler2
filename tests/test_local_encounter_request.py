@@ -102,3 +102,36 @@ def test_local_encounter_request_emission_is_deterministic() -> None:
     sim_b.advance_ticks(2)
 
     assert _local_encounter_request_trace(sim_a) == _local_encounter_request_trace(sim_b)
+
+
+def test_local_encounter_request_emits_once_and_does_not_duplicate_after_save_load() -> None:
+    sim = _build_sim(role=CAMPAIGN_SPACE_ROLE, seed=991)
+    _schedule_encounter_resolve_request(sim)
+
+    sim.advance_ticks(2)
+    requests_before_save = _local_encounter_request_trace(sim)
+    assert len(requests_before_save) == 1
+
+    payload = sim.simulation_payload()
+    reloaded = Simulation.from_simulation_payload(payload)
+    reloaded.register_rule_module(LocalEncounterRequestModule())
+
+    reloaded.advance_ticks(10)
+    requests_after_load = _local_encounter_request_trace(reloaded)
+    assert len(requests_after_load) == 1
+
+
+def test_local_encounter_request_save_load_replay_deterministic_trace_identity() -> None:
+    def _run(seed: int) -> list[dict]:
+        sim = _build_sim(role=CAMPAIGN_SPACE_ROLE, seed=seed)
+        _schedule_encounter_resolve_request(sim)
+        sim.advance_ticks(2)
+        payload = sim.simulation_payload()
+        loaded = Simulation.from_simulation_payload(payload)
+        loaded.register_rule_module(LocalEncounterRequestModule())
+        loaded.advance_ticks(10)
+        return _local_encounter_request_trace(loaded)
+
+    trace_a = _run(seed=404)
+    trace_b = _run(seed=404)
+    assert trace_a == trace_b
