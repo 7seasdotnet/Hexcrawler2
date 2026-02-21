@@ -20,6 +20,7 @@ from hexcrawler.sim.encounters import (
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
+    LocalEncounterInstanceModule,
     EncounterSelectionModule,
     RumorPipelineModule,
     SpawnMaterializationModule,
@@ -1105,6 +1106,7 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
     sim.register_rule_module(EncounterActionModule())
     sim.register_rule_module(EncounterActionExecutionModule())
+    sim.register_rule_module(LocalEncounterInstanceModule())
     sim.register_rule_module(RumorPipelineModule())
     sim.register_rule_module(SpawnMaterializationModule())
 

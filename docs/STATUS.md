@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Phase 6B follow-on — Role-gated tactical admissibility (campaign/local separation enforcement).
-- **Next action:** local encounter instancing + space transition wiring (still deferred).
+- **Next action:** deterministic local arena generation/template selection for encounter requests (instancing bridge now in place; still deferred).
 - **Phase status:** ✅ Phase 6A complete; 6B follow-on now enforces serialized space roles (`campaign`/`local`) and local-only tactical intent admissibility for `attack_intent` and `turn_intent`.
 
 
 ## What changed in this commit
-- Added `local_encounter_request` seam emission from `encounter_resolve_request` when (and only when) the originating space role is `campaign`.
-- The seam payload now records `from_space_id` plus `from_location` and encounter identifiers (`table_id`, `entry_id`, `category`, `roll`) with nullable optional fields for forward compatibility.
-- Added deterministic tests proving campaign-role emission, local-role non-emission, and replay-stable local encounter request traces.
+- Added `LocalEncounterInstanceModule` that consumes `local_encounter_request`, derives deterministic local space IDs as `local_encounter:{request_event_id}`, and emits forensic `local_encounter_begin` events.
+- Added deterministic idempotence ledger state at `rules_state["local_encounter_instance"].processed_request_ids` (bounded FIFO cap) to prevent duplicate instancing/transition across replay and save-load continuation.
+- Added focused tests for exactly-once local instancing, save/load idempotence, deterministic hash stability, and non-overworld campaign-plane compatibility.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -24,6 +24,7 @@
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
+  - Local encounter instancing bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, and persists processed request IDs in serialized rules-state for restart-safe idempotence.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
   - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing ingress role-gating (`local` only), then deterministic validation/range/cooldown checks plus local-hex melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
   - Combat seam also consumes `turn_intent` with the same local-only role gate; campaign-role turn intents deterministically reject with `tactical_not_allowed_in_campaign_space` and do not mutate facing.

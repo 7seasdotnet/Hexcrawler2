@@ -5,12 +5,12 @@ import hashlib
 from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
-from hexcrawler.sim.core import EntityState, TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
+from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, HexCoord, RumorRecord
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, HexCoord, LOCAL_SPACE_ROLE, RumorRecord, SpaceState
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -21,6 +21,7 @@ ENCOUNTER_ACTION_STUB_EVENT_TYPE = "encounter_action_stub"
 ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE = "encounter_action_execute"
 ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE = "encounter_action_outcome"
 LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE = "local_encounter_request"
+LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE = "local_encounter_begin"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
@@ -32,6 +33,7 @@ RUMOR_PROPAGATION_TASK_NAME = "rumor_pipeline:propagate"
 RUMOR_PROPAGATION_INTERVAL_TICKS = 50
 RUMOR_HOP_CAP = 4
 RUMOR_TTL_TICKS = 200
+LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX = 64
 
 
 class EncounterSelectionModule(RuleModule):
@@ -230,6 +232,100 @@ class LocalEncounterRequestModule(RuleModule):
         if not isinstance(value, list):
             raise ValueError("local_encounter_request tags must be a list when present")
         return [str(tag) for tag in value]
+
+
+class LocalEncounterInstanceModule(RuleModule):
+    """Phase 6B bridge: deterministic local encounter instancing and transition.
+
+    Applies to both space roles:
+    - campaign role emits `local_encounter_request` upstream.
+    - local role is used for deterministic tactical instance creation/reuse here.
+    """
+
+    name = "local_encounter_instance"
+    _STATE_PROCESSED_REQUEST_IDS = "processed_request_ids"
+
+    def on_simulation_start(self, sim: Simulation) -> None:
+        sim.set_rules_state(self.name, self._rules_state(sim))
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE:
+            return
+
+        state = self._rules_state(sim)
+        processed_ids = list(state[self._STATE_PROCESSED_REQUEST_IDS])
+        request_id = str(event.event_id)
+        if request_id in processed_ids:
+            return
+
+        from_space_id = str(event.params.get("from_space_id", ""))
+        local_space_id = f"local_encounter:{request_id}"
+        local_space = sim.state.world.spaces.get(local_space_id)
+        if local_space is None:
+            local_space = SpaceState(
+                space_id=local_space_id,
+                topology_type=SQUARE_GRID_TOPOLOGY,
+                role=LOCAL_SPACE_ROLE,
+                topology_params={
+                    "width": 10,
+                    "height": 10,
+                    "origin": {"x": 0, "y": 0},
+                },
+            )
+            sim.state.world.spaces[local_space_id] = local_space
+
+        entity_id = self._select_entity_id(sim=sim, from_space_id=from_space_id)
+        transition_applied = False
+        from_location_payload = event.params.get("from_location")
+        if entity_id is not None:
+            entity = sim.state.entities[entity_id]
+            from_location_payload = sim._entity_location_ref(entity).to_dict()
+            to_spawn_coord = local_space.default_spawn_coord()
+            next_x, next_y = sim._coord_to_world_xy(space=local_space, coord=to_spawn_coord)
+            entity.space_id = local_space.space_id
+            entity.position_x = next_x
+            entity.position_y = next_y
+            transition_applied = True
+        else:
+            to_spawn_coord = local_space.default_spawn_coord()
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+            params={
+                "request_event_id": request_id,
+                "from_space_id": from_space_id,
+                "to_space_id": local_space_id,
+                "entity_id": entity_id,
+                "from_location": copy.deepcopy(from_location_payload),
+                "to_spawn_coord": dict(to_spawn_coord),
+                "transition_applied": transition_applied,
+            },
+        )
+
+        processed_ids.append(request_id)
+        state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
+        sim.set_rules_state(self.name, state)
+
+    def _rules_state(self, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        raw_processed = state.get(self._STATE_PROCESSED_REQUEST_IDS, [])
+        if not isinstance(raw_processed, list):
+            raise ValueError("local_encounter_instance.processed_request_ids must be a list")
+        normalized = [str(value) for value in raw_processed if str(value)]
+        state[self._STATE_PROCESSED_REQUEST_IDS] = normalized[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
+        return state
+
+    @staticmethod
+    def _select_entity_id(sim: Simulation, *, from_space_id: str) -> str | None:
+        if DEFAULT_PLAYER_ENTITY_ID in sim.state.entities:
+            return DEFAULT_PLAYER_ENTITY_ID
+        candidate_ids = sorted(
+            entity_id for entity_id, entity in sim.state.entities.items() if entity.space_id == from_space_id
+        )
+        if not candidate_ids:
+            return None
+        return candidate_ids[0]
 
 
 class EncounterActionExecutionModule(RuleModule):
