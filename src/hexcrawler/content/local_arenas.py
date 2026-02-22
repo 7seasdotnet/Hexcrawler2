@@ -206,6 +206,11 @@ def _registry_from_payload(payload: dict[str, Any]) -> LocalArenaTemplateRegistr
     )
 
 
+def load_local_arena_templates_payload(payload: dict[str, Any]) -> LocalArenaTemplateRegistry:
+    """Public, test-friendly entrypoint. Performs full validation + deterministic normalization."""
+    return _registry_from_payload(payload)
+
+
 def load_local_arena_templates_json(path: str | Path) -> LocalArenaTemplateRegistry:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     return _registry_from_payload(payload)

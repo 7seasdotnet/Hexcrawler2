@@ -4,7 +4,7 @@ import re
 import pytest
 
 from hexcrawler.content.local_arenas import (
-    _registry_from_payload,
+    load_local_arena_templates_payload,
     validate_local_arena_templates_payload,
 )
 
@@ -177,8 +177,8 @@ def test_local_arena_registry_deterministic_ordering_on_repeated_loads() -> None
         }
     )
 
-    first_registry = _registry_from_payload(copy.deepcopy(payload))
-    second_registry = _registry_from_payload(copy.deepcopy(payload))
+    first_registry = load_local_arena_templates_payload(copy.deepcopy(payload))
+    second_registry = load_local_arena_templates_payload(copy.deepcopy(payload))
 
     assert [template.template_id for template in first_registry.templates] == [
         template.template_id for template in second_registry.templates
