@@ -70,7 +70,17 @@ def test_campaign_space_emits_local_encounter_request() -> None:
             "topology_type": SQUARE_GRID_TOPOLOGY,
             "coord": {"x": 1, "y": 2},
         },
+        "context": "global",
         "trigger": "travel",
+        "location": {
+            "space_id": CAMPAIGN_SPACE_ID,
+            "topology_type": SQUARE_GRID_TOPOLOGY,
+            "coord": {"x": 1, "y": 2},
+        },
+        "roll": 33,
+        "category": "hostile",
+        "table_id": "enc_table_primary",
+        "entry_id": "wolves_1",
         "encounter": {
             "table_id": "enc_table_primary",
             "entry_id": "wolves_1",

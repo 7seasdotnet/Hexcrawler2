@@ -1,15 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6B follow-on — Role-gated tactical admissibility (campaign/local separation enforcement).
-- **Next action:** deterministic local arena generation/template selection for encounter requests and encounter-driven content binding (return seam now in place; still deferred).
-- **Phase status:** ✅ Phase 6A complete; 6B follow-on now enforces serialized space roles (`campaign`/`local`), local-only tactical admissibility, and a deterministic Local→Campaign return seam.
+- **Current phase:** Phase 6C — Deterministic local arena template selection + structural instantiation.
+- **Next action:** bind encounter semantics onto structural local arenas (content-driven composition), preserving role gating and deterministic passthrough context.
+- **Phase status:** ✅ Phase 6B complete; Phase 6C now adds deterministic, data-driven local arena template selection/application with fallback forensics and save/load stability.
 
 
 ## What changed in this commit
-- Added a deterministic `end_local_encounter_intent` command seam (Local-role only) that records `end_local_encounter_outcome`, schedules `local_encounter_end`, and emits `local_encounter_return` forensic events.
-- Extended `rules_state["local_encounter_instance"]` with serialized/hash-covered return context (`active_by_local_space`) plus bounded idempotence ledgers for begin/end action processing.
-- Added focused return-seam tests for happy-path Local→Campaign return, role gating, save/load idempotence, multi-campaign-plane safety, and deterministic hash/event-trace stability.
+- Added `content/local_arenas/local_arenas.json` plus `hexcrawler.content.local_arenas` strict loader/validator (`DEFAULT_LOCAL_ARENAS_PATH`, deterministic normalization, explicit local-role/square-grid checks).
+- Extended `LocalEncounterInstanceModule` to deterministically select/apply structural local arena templates (suggested-template override, default fallback, minimal-safe fallback, idempotent applied-template ledger in serialized rules-state).
+- Added forensic `local_arena_template_applied` events and passthrough encounter context blob on `local_encounter_begin`, with focused tests for selection/fallback/save-load/hash stability.
+
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`

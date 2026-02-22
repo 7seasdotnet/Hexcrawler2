@@ -80,7 +80,7 @@ def test_local_encounter_instance_exactly_once() -> None:
     assert begin_params["to_space_id"] == expected_space_id
     assert begin_params["entity_id"] == "scout"
     assert begin_params["from_space_id"] == CAMPAIGN_SPACE_ID
-    assert begin_params["to_spawn_coord"] == {"x": 0, "y": 0}
+    assert begin_params["to_spawn_coord"] == {"x": 1, "y": 6}
     assert begin_params["transition_applied"] is True
     assert sim.state.entities["scout"].space_id == expected_space_id
 
