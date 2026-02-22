@@ -311,6 +311,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 if active_context is None:
                     reason = "no_active_local_encounter"
                 else:
+                    origin_location = copy.deepcopy(active_context.get("origin_location", active_context.get("from_location")))
                     sim.schedule_event_at(
                         tick=command.tick + 1,
                         event_type=LOCAL_ENCOUNTER_END_EVENT_TYPE,
@@ -321,6 +322,8 @@ class LocalEncounterInstanceModule(RuleModule):
                             "local_space_id": local_space_id,
                             "request_event_id": str(active_context["request_event_id"]),
                             "from_space_id": str(active_context["from_space_id"]),
+                            "origin_space_id": str(active_context.get("origin_space_id", active_context["from_space_id"])),
+                            "origin_location": origin_location,
                             "from_location": copy.deepcopy(active_context["from_location"]),
                             "tags": list(normalized_tags),
                         },
@@ -453,11 +456,20 @@ class LocalEncounterInstanceModule(RuleModule):
         )
 
         if transition_applied and entity_id is not None and isinstance(from_location_payload, dict):
+            origin_location = self._normalize_origin_location_payload(
+                origin_space_id=from_space_id,
+                origin_location_payload=from_location_payload,
+                legacy_coord=from_location_payload.get("coord"),
+            )
+            if origin_location is None:
+                origin_location = sim._entity_location_ref(sim.state.entities[entity_id]).to_dict()
             active_by_local_space[local_space_id] = {
                 "request_event_id": request_id,
                 "entity_id": entity_id,
                 "from_space_id": from_space_id,
+                "origin_space_id": from_space_id,
                 "from_location": copy.deepcopy(from_location_payload),
+                "origin_location": copy.deepcopy(origin_location),
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
                 "started_tick": int(event.tick),
             }
@@ -608,21 +620,35 @@ class LocalEncounterInstanceModule(RuleModule):
         elif entity_id is None or entity_id not in sim.state.entities:
             reason = "invalid_entity"
         else:
-            from_space_id = str(context["from_space_id"])
-            to_space_id = from_space_id
-            to_coord = copy.deepcopy(context["return_spawn_coord"])
-            to_space = sim.state.world.spaces.get(from_space_id)
+            fallback_space_id = str(context.get("origin_space_id", context["from_space_id"]))
+            normalized_origin = self._normalize_origin_location_payload(
+                origin_space_id=fallback_space_id,
+                origin_location_payload=context.get("origin_location", context.get("from_location")),
+                legacy_coord=context.get("return_spawn_coord"),
+            )
+            to_space_id = str(normalized_origin.get("space_id", fallback_space_id)) if normalized_origin is not None else fallback_space_id
+            to_space = sim.state.world.spaces.get(to_space_id)
             if to_space is None:
                 reason = "invalid_from_space"
-            elif not isinstance(to_coord, dict):
-                reason = "invalid_return_spawn_coord"
+            elif normalized_origin is None:
+                reason = "invalid_origin_location_for_space"
+            elif not sim._topology_compatible(
+                space_topology=to_space.topology_type,
+                location_topology=str(normalized_origin["topology_type"]),
+            ):
+                reason = "invalid_origin_location_for_space"
             else:
-                next_x, next_y = sim._coord_to_world_xy(space=to_space, coord=to_coord)
-                entity = sim.state.entities[entity_id]
-                entity.space_id = from_space_id
-                entity.position_x = next_x
-                entity.position_y = next_y
-                applied = True
+                to_coord = copy.deepcopy(normalized_origin["coord"])
+                try:
+                    next_x, next_y = sim._coord_to_world_xy(space=to_space, coord=to_coord)
+                except (KeyError, TypeError, ValueError):
+                    reason = "invalid_origin_location_for_space"
+                else:
+                    entity = sim.state.entities[entity_id]
+                    entity.space_id = to_space_id
+                    entity.position_x = next_x
+                    entity.position_y = next_y
+                    applied = True
 
         if context is not None:
             del active_by_local_space[local_space_id]
@@ -680,13 +706,29 @@ class LocalEncounterInstanceModule(RuleModule):
                 continue
             from_location = context.get("from_location")
             return_spawn_coord = context.get("return_spawn_coord")
+            origin_space_id = context.get("origin_space_id", context.get("from_space_id"))
+            origin_location = self._normalize_origin_location_payload(
+                origin_space_id=str(origin_space_id) if isinstance(origin_space_id, str) else "",
+                origin_location_payload=context.get("origin_location", from_location),
+                legacy_coord=return_spawn_coord,
+            )
             if not isinstance(from_location, dict) or not isinstance(return_spawn_coord, dict):
                 continue
+            if not isinstance(origin_space_id, str) or not origin_space_id:
+                continue
+            if origin_location is None:
+                fallback_origin = context.get("origin_location", from_location)
+                if not isinstance(fallback_origin, dict):
+                    fallback_origin = {"coord": copy.deepcopy(return_spawn_coord)}
+                origin_location = copy.deepcopy(fallback_origin)
+                origin_location.setdefault("space_id", origin_space_id)
             normalized_active_by_local_space[local_space_id] = {
                 "request_event_id": str(context["request_event_id"]),
                 "entity_id": str(context["entity_id"]),
                 "from_space_id": str(context["from_space_id"]),
+                "origin_space_id": origin_space_id,
                 "from_location": copy.deepcopy(from_location),
+                "origin_location": copy.deepcopy(origin_location),
                 "return_spawn_coord": copy.deepcopy(return_spawn_coord),
                 "started_tick": int(context.get("started_tick", 0)),
             }
@@ -702,6 +744,47 @@ class LocalEncounterInstanceModule(RuleModule):
             if isinstance(space_id, str) and space_id and isinstance(template_id, str) and template_id
         }
         return state
+
+    @staticmethod
+    def _infer_topology_type_from_coord(coord: Any) -> str | None:
+        if not isinstance(coord, dict):
+            return None
+        if "q" in coord and "r" in coord:
+            return OVERWORLD_HEX_TOPOLOGY
+        if "x" in coord and "y" in coord:
+            return SQUARE_GRID_TOPOLOGY
+        return None
+
+    def _normalize_origin_location_payload(
+        self,
+        *,
+        origin_space_id: str,
+        origin_location_payload: Any,
+        legacy_coord: Any,
+    ) -> dict[str, Any] | None:
+        if not isinstance(origin_space_id, str) or not origin_space_id:
+            return None
+        candidate = origin_location_payload if isinstance(origin_location_payload, dict) else {}
+        coord = candidate.get("coord")
+        if not isinstance(coord, dict) and isinstance(legacy_coord, dict):
+            coord = legacy_coord
+        if not isinstance(coord, dict):
+            return None
+        topology_type = candidate.get("topology_type")
+        if not isinstance(topology_type, str) or not topology_type:
+            topology_type = self._infer_topology_type_from_coord(coord)
+        if topology_type is None:
+            return None
+
+        location_payload = copy.deepcopy(candidate)
+        location_payload["space_id"] = str(candidate.get("space_id", origin_space_id))
+        location_payload["topology_type"] = topology_type
+        location_payload["coord"] = copy.deepcopy(coord)
+        try:
+            location = LocationRef.from_dict(location_payload)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return location.to_dict()
 
     @staticmethod
     def _select_entity_id(sim: Simulation, *, from_space_id: str) -> str | None:

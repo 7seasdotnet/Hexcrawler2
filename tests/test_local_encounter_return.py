@@ -12,7 +12,7 @@ from hexcrawler.sim.encounters import (
     LocalEncounterRequestModule,
 )
 from hexcrawler.sim.hash import simulation_hash
-from hexcrawler.sim.location import SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import square_grid_cell_to_world_xy, world_xy_to_square_grid_cell
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, SpaceState
 
@@ -185,3 +185,90 @@ def test_local_encounter_return_deterministic_trace_and_hash() -> None:
     filtered_a = [entry for entry in sim_a.get_event_trace() if entry["event_type"] in traced]
     filtered_b = [entry for entry in sim_b.get_event_trace() if entry["event_type"] in traced]
     assert filtered_a == filtered_b
+
+
+def test_local_encounter_return_rejects_invalid_origin_location_shape() -> None:
+    sim = _build_sim(seed=52)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+    active["origin_space_id"] = "overworld"
+    active["origin_location"] = {
+        "space_id": "overworld",
+        "topology_type": OVERWORLD_HEX_TOPOLOGY,
+        "coord": {"x": 2, "y": 3},
+    }
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    scout_before = sim.state.entities["scout"].space_id
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is False
+    assert return_event["params"]["reason"] == "invalid_origin_location_for_space"
+    assert sim.state.entities["scout"].space_id == scout_before
+
+
+def test_local_encounter_return_migrates_legacy_origin_coord_shape() -> None:
+    sim = _build_sim(seed=62)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+    active["origin_space_id"] = "overworld"
+    active["origin_location"] = {"space_id": "overworld", "coord": {"q": 0, "r": 0}}
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["to_space_id"] == "overworld"
+
+
+def test_local_encounter_return_save_load_hash_stable_with_legacy_context() -> None:
+    sim_a = _build_sim(seed=71)
+    sim_b = _build_sim(seed=71)
+    _schedule_request(sim_a)
+    _schedule_request(sim_b)
+    sim_a.advance_ticks(3)
+    sim_b.advance_ticks(3)
+
+    for sim in (sim_a, sim_b):
+        begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+        local_space_id = begin["params"]["to_space_id"]
+        rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        active = rules_state["active_by_local_space"][local_space_id]
+        active.pop("origin_location", None)
+        active.pop("origin_space_id", None)
+        active["from_space_id"] = "overworld"
+        active["return_spawn_coord"] = {"q": 0, "r": 0}
+        rules_state["active_by_local_space"][local_space_id] = active
+        sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+        payload = sim.simulation_payload()
+        loaded = Simulation.from_simulation_payload(payload)
+        loaded.register_rule_module(LocalEncounterRequestModule())
+        loaded.register_rule_module(LocalEncounterInstanceModule())
+
+        _issue_end_intent(loaded)
+        loaded.advance_ticks(3)
+        assert _trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]["params"]["applied"] is True
+
+        if sim is sim_a:
+            sim_a = loaded
+        else:
+            sim_b = loaded
+
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)

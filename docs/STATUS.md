@@ -7,9 +7,9 @@
 
 
 ## What changed in this commit
-- Added `local_encounter_intent` to `EncounterActionExecutionModule` so encounter action execution can deterministically emit `local_encounter_request` events with idempotent `action_uid` ledger gating.
-- Updated default encounter content so `scavenger_patrol` can request a local encounter (`default_arena_v1`) during normal play, exercising campaign→local instancing paths.
-- Added focused deterministic tests for local encounter request emission, idempotence, local space instancing transition, and save/load + replay hash stability.
+- Fixed Local→Campaign return crash by storing origin as `LocationRef` and validating coord topology before return placement.
+- Added deterministic legacy-context migration for local encounter return state (`origin_location`/`origin_space_id` inference from older shapes) with safe rejection outcome `invalid_origin_location_for_space` when invalid.
+- Added focused regression coverage for invalid coord-shape rejection, happy-path/migration return, and save/load hash stability.
 
 
 ## What Exists (folders / entry points)
