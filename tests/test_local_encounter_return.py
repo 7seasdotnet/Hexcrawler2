@@ -272,3 +272,62 @@ def test_local_encounter_return_save_load_hash_stable_with_legacy_context() -> N
             sim_b = loaded
 
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
+
+
+def test_end_local_encounter_intent_is_gated_per_local_space() -> None:
+    sim = _build_sim(seed=81)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=END_LOCAL_ENCOUNTER_INTENT,
+            params={"intent": END_LOCAL_ENCOUNTER_INTENT, "entity_id": "scout", "tags": []},
+        )
+    )
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=END_LOCAL_ENCOUNTER_INTENT,
+            params={"intent": END_LOCAL_ENCOUNTER_INTENT, "entity_id": "scout", "tags": []},
+        )
+    )
+    sim.advance_ticks(3)
+
+    outcomes = _trace_by_type(sim, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)
+    assert len(outcomes) == 2
+    assert outcomes[0]["params"]["reason"] == "resolved"
+    assert outcomes[1]["params"]["reason"] == "already_returning"
+    assert len(_trace_by_type(sim, LOCAL_ENCOUNTER_END_EVENT_TYPE)) == 1
+    assert len(_trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)) == 1
+
+
+def test_return_in_progress_state_survives_save_load_and_clears_on_return() -> None:
+    sim = _build_sim(seed=82)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(1)
+
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    assert rules_state["return_in_progress_by_local_space"].get(local_space_id) is True
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    loaded_rules_state = loaded.get_rules_state(LocalEncounterInstanceModule.name)
+    assert loaded_rules_state["return_in_progress_by_local_space"].get(local_space_id) is True
+
+    loaded.advance_ticks(2)
+    assert len(_trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)) == 1
+    loaded_rules_state_after = loaded.get_rules_state(LocalEncounterInstanceModule.name)
+    assert local_space_id not in loaded_rules_state_after["return_in_progress_by_local_space"]

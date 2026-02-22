@@ -262,6 +262,7 @@ class LocalEncounterInstanceModule(RuleModule):
     _STATE_ACTIVE_BY_LOCAL_SPACE = "active_by_local_space"
     _STATE_PROCESSED_END_ACTION_UIDS = "processed_end_action_uids"
     _STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE = "applied_template_by_local_space"
+    _STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE = "return_in_progress_by_local_space"
 
     def __init__(self, local_arenas_path: str = DEFAULT_LOCAL_ARENAS_PATH) -> None:
         self._template_by_id: dict[str, LocalArenaTemplate] = {}
@@ -310,8 +311,18 @@ class LocalEncounterInstanceModule(RuleModule):
                 active_context = state[self._STATE_ACTIVE_BY_LOCAL_SPACE].get(local_space_id)
                 if active_context is None:
                     reason = "no_active_local_encounter"
+                elif state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE].get(local_space_id, False):
+                    reason = "already_returning"
                 else:
                     origin_location = copy.deepcopy(active_context.get("origin_location", active_context.get("from_location")))
+                    return_in_progress_by_local_space = dict(state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE])
+                    return_in_progress_by_local_space[local_space_id] = True
+                    state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE] = {
+                        space_id: bool(return_in_progress_by_local_space[space_id])
+                        for space_id in sorted(return_in_progress_by_local_space)
+                        if bool(return_in_progress_by_local_space[space_id])
+                    }
+                    sim.set_rules_state(self.name, state)
                     sim.schedule_event_at(
                         tick=command.tick + 1,
                         event_type=LOCAL_ENCOUNTER_END_EVENT_TYPE,
@@ -608,6 +619,7 @@ class LocalEncounterInstanceModule(RuleModule):
 
         local_space_id = str(event.params.get("local_space_id", ""))
         active_by_local_space = dict(state[self._STATE_ACTIVE_BY_LOCAL_SPACE])
+        return_in_progress_by_local_space = dict(state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE])
         context = active_by_local_space.get(local_space_id)
         entity_id = str(event.params.get("entity_id", "")) if isinstance(event.params.get("entity_id"), str) else None
         applied = False
@@ -652,10 +664,17 @@ class LocalEncounterInstanceModule(RuleModule):
 
         if context is not None:
             del active_by_local_space[local_space_id]
+        if local_space_id in return_in_progress_by_local_space:
+            del return_in_progress_by_local_space[local_space_id]
 
         processed.append(action_uid)
         state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = active_by_local_space
         state[self._STATE_PROCESSED_END_ACTION_UIDS] = processed[-LOCAL_ENCOUNTER_END_LEDGER_MAX:]
+        state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE] = {
+            space_id: bool(return_in_progress_by_local_space[space_id])
+            for space_id in sorted(return_in_progress_by_local_space)
+            if bool(return_in_progress_by_local_space[space_id])
+        }
         sim.set_rules_state(self.name, state)
 
         sim.schedule_event_at(
@@ -682,6 +701,7 @@ class LocalEncounterInstanceModule(RuleModule):
         raw_processed_end = state.get(self._STATE_PROCESSED_END_ACTION_UIDS, [])
         raw_active_by_local_space = state.get(self._STATE_ACTIVE_BY_LOCAL_SPACE, {})
         raw_applied_template_by_local_space = state.get(self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE, {})
+        raw_return_in_progress_by_local_space = state.get(self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE, {})
         if not isinstance(raw_processed, list):
             raise ValueError("local_encounter_instance.processed_request_ids must be a list")
         if not isinstance(raw_processed_end, list):
@@ -690,6 +710,8 @@ class LocalEncounterInstanceModule(RuleModule):
             raise ValueError("local_encounter_instance.active_by_local_space must be an object")
         if not isinstance(raw_applied_template_by_local_space, dict):
             raise ValueError("local_encounter_instance.applied_template_by_local_space must be an object")
+        if not isinstance(raw_return_in_progress_by_local_space, dict):
+            raise ValueError("local_encounter_instance.return_in_progress_by_local_space must be an object")
         normalized = [str(value) for value in raw_processed if str(value)]
         normalized_processed_end = [str(value) for value in raw_processed_end if str(value)]
         normalized_active_by_local_space: dict[str, dict[str, Any]] = {}
@@ -742,6 +764,11 @@ class LocalEncounterInstanceModule(RuleModule):
             str(space_id): str(template_id)
             for space_id, template_id in sorted(raw_applied_template_by_local_space.items())
             if isinstance(space_id, str) and space_id and isinstance(template_id, str) and template_id
+        }
+        state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE] = {
+            str(space_id): bool(in_progress)
+            for space_id, in_progress in sorted(raw_return_in_progress_by_local_space.items())
+            if isinstance(space_id, str) and space_id and bool(in_progress)
         }
         return state
 

@@ -124,6 +124,15 @@ class EncounterPanelScrollState:
 
 
 @dataclass
+class LocalCameraCache:
+    space_id: str | None = None
+    viewport_size: tuple[int, int] = (0, 0)
+    topology_params_signature: str | None = None
+    center: tuple[float, float] = (0.0, 0.0)
+    zoom_scale: float = 1.0
+
+
+@dataclass
 class SimulationController:
     """Viewer command adapter; simulation remains source of truth."""
 
@@ -368,6 +377,43 @@ def _camera_center_and_zoom(sim: Simulation, viewport_rect: pygame.Rect) -> tupl
         float(viewport_rect.centery) - (arena_center_y * HEX_SIZE * zoom_scale),
     )
     return center, zoom_scale
+
+
+def _topology_params_signature(active_space: Any) -> str | None:
+    if active_space is None:
+        return None
+    if str(getattr(active_space, "role", "")) != "local":
+        return None
+    if getattr(active_space, "topology_type", None) != SQUARE_GRID_TOPOLOGY:
+        return None
+    params = getattr(active_space, "topology_params", None)
+    if not isinstance(params, dict):
+        return None
+    return json.dumps(params, sort_keys=True)
+
+
+def _cached_camera_center_and_zoom(
+    sim: Simulation,
+    viewport_rect: pygame.Rect,
+    cache: LocalCameraCache,
+) -> tuple[tuple[float, float], float]:
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    active_space_id = active_space.space_id if active_space is not None else None
+    topology_signature = _topology_params_signature(active_space)
+    viewport_size = (int(viewport_rect.width), int(viewport_rect.height))
+    if (
+        cache.space_id != active_space_id
+        or cache.viewport_size != viewport_size
+        or cache.topology_params_signature != topology_signature
+    ):
+        center, zoom_scale = _camera_center_and_zoom(sim, viewport_rect)
+        cache.space_id = active_space_id
+        cache.viewport_size = viewport_size
+        cache.topology_params_signature = topology_signature
+        cache.center = center
+        cache.zoom_scale = zoom_scale
+    return cache.center, cache.zoom_scale
 
 
 
@@ -851,6 +897,16 @@ def _get_return_context_for_space(sim: Simulation, local_space_id: str) -> dict[
     if not isinstance(context.get("from_space_id"), str) or not context.get("from_space_id"):
         return None
     return context
+
+
+def _is_return_in_progress(sim: Simulation, local_space_id: str) -> bool:
+    local_encounter_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    if not isinstance(local_encounter_state, dict):
+        return False
+    in_progress_by_local_space = local_encounter_state.get("return_in_progress_by_local_space")
+    if not isinstance(in_progress_by_local_space, dict):
+        return False
+    return bool(in_progress_by_local_space.get(local_space_id, False))
 
 
 def _draw_local_arena_overlay(
@@ -1557,6 +1613,8 @@ def run_pygame_viewer(
             if return_context is None:
                 items.append(ContextMenuItem(label="Return to origin (unavailable)", action="noop"))
                 items.append(ContextMenuItem(label=f"No active return context for {active_space.space_id}", action="noop"))
+            elif _is_return_in_progress(sim, active_space.space_id):
+                items.append(ContextMenuItem(label="Returning…", action="noop"))
             else:
                 from_space_id = str(return_context.get("from_space_id", "?"))
                 detail_parts = [from_space_id]
@@ -1585,6 +1643,7 @@ def run_pygame_viewer(
     viewport_rect = _viewport_rect()
     world_center = (float(viewport_rect.centerx), float(viewport_rect.centery))
     world_zoom_scale = 1.0
+    local_camera_cache = LocalCameraCache(center=world_center, zoom_scale=world_zoom_scale)
     panel_scroll = EncounterPanelScrollState()
     panel_section_rects: dict[str, pygame.Rect] = {}
     panel_section_counts: dict[str, int] = {}
@@ -1702,7 +1761,7 @@ def run_pygame_viewer(
         current_space_id = _entity_space_id(player) if player is not None else "overworld"
         if current_space_id is None:
             current_space_id = "overworld"
-        world_center, world_zoom_scale = _camera_center_and_zoom(sim, viewport_rect)
+        world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
 
         hover_message: str | None = None
         mouse_pos = pygame_module.mouse.get_pos()
