@@ -1,9 +1,12 @@
+import copy
 import re
 
 import pytest
 
-from hexcrawler.content.local_arenas import validate_local_arena_templates_payload
-
+from hexcrawler.content.local_arenas import (
+    _registry_from_payload,
+    validate_local_arena_templates_payload,
+)
 
 
 def _base_payload() -> dict:
@@ -42,15 +45,24 @@ def _base_payload() -> dict:
 @pytest.mark.parametrize(
     ("path", "value", "expected"),
     [
-        (("templates", 0, "metadata", "foo"), 1.5, "templates[0].metadata must not contain float values"),
         (
-            ("templates", 0, "doors", 0, "metadata", "weight"),
-            2.25,
+            ("templates", 0, "metadata", "a", "b", "c"),
+            1.234,
+            "templates[0].metadata must not contain float values",
+        ),
+        (
+            ("templates", 0, "topology_params", "scale"),
+            1.5,
+            "templates[0].topology_params must not contain float values",
+        ),
+        (
+            ("templates", 0, "doors", 0, "metadata", "opacity"),
+            0.5,
             "templates[0].doors[0] must not contain float values",
         ),
         (
-            ("templates", 0, "interactables", 0, "metadata", "durability"),
-            3.75,
+            ("templates", 0, "interactables", 0, "metadata", "opacity"),
+            0.5,
             "templates[0].interactables[0] must not contain float values",
         ),
     ],
@@ -67,15 +79,6 @@ def test_validate_local_arena_templates_rejects_float_values(path: tuple, value:
     with pytest.raises(ValueError, match=re.escape(expected)):
         validate_local_arena_templates_payload(payload)
 
-
-
-
-def test_validate_local_arena_templates_rejects_float_in_topology_params() -> None:
-    payload = _base_payload()
-    payload["templates"][0]["topology_params"]["noise"] = 0.125
-
-    with pytest.raises(ValueError, match=re.escape("templates[0].topology_params must not contain float values")):
-        validate_local_arena_templates_payload(payload)
 
 def test_validate_local_arena_templates_requires_door_id() -> None:
     payload = _base_payload()
@@ -125,17 +128,67 @@ def test_validate_local_arena_templates_rejects_duplicate_interactable_id() -> N
         validate_local_arena_templates_payload(payload)
 
 
-def test_validate_local_arena_templates_rejects_bool_door_id() -> None:
+@pytest.mark.parametrize("bool_id", [True, False])
+def test_validate_local_arena_templates_rejects_bool_door_id(bool_id: bool) -> None:
     payload = _base_payload()
-    payload["templates"][0]["doors"][0]["door_id"] = True
+    payload["templates"][0]["doors"][0]["door_id"] = bool_id
 
     with pytest.raises(ValueError, match=r"templates\[0\]\.doors\[0\]\.door_id must be non-empty string"):
         validate_local_arena_templates_payload(payload)
 
 
-def test_validate_local_arena_templates_rejects_bool_interactable_id() -> None:
+@pytest.mark.parametrize("bool_id", [True, False])
+def test_validate_local_arena_templates_rejects_bool_interactable_id(bool_id: bool) -> None:
     payload = _base_payload()
-    payload["templates"][0]["interactables"][0]["interactable_id"] = False
+    payload["templates"][0]["interactables"][0]["interactable_id"] = bool_id
 
     with pytest.raises(ValueError, match=r"templates\[0\]\.interactables\[0\]\.interactable_id must be non-empty string"):
         validate_local_arena_templates_payload(payload)
+
+
+def test_validate_local_arena_templates_accepts_numeric_string_ids() -> None:
+    payload = _base_payload()
+    payload["templates"][0]["doors"][0]["door_id"] = "1"
+    payload["templates"][0]["interactables"][0]["interactable_id"] = "0"
+
+    validate_local_arena_templates_payload(payload)
+
+
+def test_local_arena_registry_deterministic_ordering_on_repeated_loads() -> None:
+    payload = _base_payload()
+    payload["templates"].append(
+        {
+            "template_id": "template_beta",
+            "topology_type": "square_grid",
+            "topology_params": {"width": 5, "height": 5},
+            "role": "local",
+            "anchors": [
+                {"anchor_id": "z_anchor", "coord": {"x": 1, "y": 1}},
+                {"anchor_id": "a_anchor", "coord": {"x": 2, "y": 2}},
+            ],
+            "doors": [
+                {"door_id": "door_2", "anchor_id": "z_anchor"},
+                {"door_id": "door_1", "anchor_id": "a_anchor"},
+            ],
+            "interactables": [
+                {"interactable_id": "interactable_2", "anchor_id": "z_anchor"},
+                {"interactable_id": "interactable_1", "anchor_id": "a_anchor"},
+            ],
+        }
+    )
+
+    first_registry = _registry_from_payload(copy.deepcopy(payload))
+    second_registry = _registry_from_payload(copy.deepcopy(payload))
+
+    assert [template.template_id for template in first_registry.templates] == [
+        template.template_id for template in second_registry.templates
+    ]
+
+    first_beta = first_registry.by_id()["template_beta"]
+    second_beta = second_registry.by_id()["template_beta"]
+
+    assert [anchor["anchor_id"] for anchor in first_beta.anchors] == [anchor["anchor_id"] for anchor in second_beta.anchors]
+    assert [door["door_id"] for door in first_beta.doors] == [door["door_id"] for door in second_beta.doors]
+    assert [item["interactable_id"] for item in first_beta.interactables] == [
+        item["interactable_id"] for item in second_beta.interactables
+    ]
