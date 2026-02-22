@@ -7,9 +7,9 @@
 
 
 ## What changed in this commit
-- Fixed Local→Campaign return crash by storing origin as `LocationRef` and validating coord topology before return placement.
-- Added deterministic legacy-context migration for local encounter return state (`origin_location`/`origin_space_id` inference from older shapes) with safe rejection outcome `invalid_origin_location_for_space` when invalid.
-- Added focused regression coverage for invalid coord-shape rejection, happy-path/migration return, and save/load hash stability.
+- Added authoritative `local_encounter_instance.return_in_progress_by_local_space` gating so `end_local_encounter_intent` is idempotent per local-role space and emits deterministic `already_returning` outcomes for duplicate clicks.
+- Updated pygame viewer local-role RMB menu to show disabled `Returning…` while return is in progress and avoid enqueueing redundant return intents.
+- Added deterministic tests for duplicate end intents and save/load stability of return-in-progress gating.
 
 
 ## What Exists (folders / entry points)
@@ -238,9 +238,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added `local_encounter_intent` encounter action execution support with deterministic request emission and idempotence guards.
-- Updated default encounter content to occasionally emit local encounter requests for campaign→local seam exercise.
-- Added deterministic tests covering emission, instancing transition, and save/load/replay hash stability.
+- Added authoritative per-local-space return-in-progress gating in `LocalEncounterInstanceModule` so local encounter return requests are idempotent at encounter level.
+- Updated pygame viewer local-space context menu to render disabled `Returning…` while return processing is in progress.
+- Added deterministic regression tests for duplicate end-intent gating and save/load persistence of return-in-progress state.
 
 
 ## Troubleshooting
