@@ -626,6 +626,12 @@ class LocalEncounterInstanceModule(RuleModule):
         reason = "resolved"
         to_space_id = None
         to_coord = None
+        actor_space_id_before = None
+        actor_space_id_after = None
+        origin_space_id = str(event.params.get("origin_space_id", "")) if isinstance(event.params.get("origin_space_id"), str) else None
+
+        if entity_id is not None and entity_id in sim.state.entities:
+            actor_space_id_before = str(sim.state.entities[entity_id].space_id)
 
         if context is None:
             reason = "no_active_local_encounter"
@@ -661,6 +667,10 @@ class LocalEncounterInstanceModule(RuleModule):
                     entity.position_x = next_x
                     entity.position_y = next_y
                     applied = True
+                    actor_space_id_after = str(entity.space_id)
+
+        if actor_space_id_after is None:
+            actor_space_id_after = actor_space_id_before
 
         if context is not None:
             del active_by_local_space[local_space_id]
@@ -684,9 +694,14 @@ class LocalEncounterInstanceModule(RuleModule):
                 "tick": int(event.tick),
                 "action_uid": action_uid,
                 "entity_id": entity_id,
+                "actor_id": entity_id,
                 "request_event_id": str(event.params.get("request_event_id", "")),
+                "local_space_id": local_space_id,
+                "origin_space_id": origin_space_id,
                 "from_space_id": local_space_id,
                 "to_space_id": to_space_id,
+                "actor_space_id_before": actor_space_id_before,
+                "actor_space_id_after": actor_space_id_after,
                 "from_location": copy.deepcopy(event.params.get("from_location")),
                 "to_coord": to_coord,
                 "applied": applied,

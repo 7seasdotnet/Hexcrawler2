@@ -331,3 +331,36 @@ def test_return_in_progress_state_survives_save_load_and_clears_on_return() -> N
     assert len(_trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)) == 1
     loaded_rules_state_after = loaded.get_rules_state(LocalEncounterInstanceModule.name)
     assert local_space_id not in loaded_rules_state_after["return_in_progress_by_local_space"]
+
+
+def test_local_encounter_return_forensics_include_actor_space_before_after_with_save_load() -> None:
+    sim = _build_sim(seed=93)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    assert sim.state.entities["scout"].space_id == local_space_id
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(1)
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    assert rules_state["return_in_progress_by_local_space"].get(local_space_id) is True
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    loaded.advance_ticks(2)
+    assert loaded.state.entities["scout"].space_id == CAMPAIGN_SPACE_ID
+    loaded_rules_state = loaded.get_rules_state(LocalEncounterInstanceModule.name)
+    assert local_space_id not in loaded_rules_state["return_in_progress_by_local_space"]
+
+    return_event = _trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["actor_id"] == "scout"
+    assert return_event["params"]["local_space_id"] == local_space_id
+    assert return_event["params"]["origin_space_id"] == CAMPAIGN_SPACE_ID
+    assert return_event["params"]["actor_space_id_before"] == local_space_id
+    assert return_event["params"]["actor_space_id_after"] == CAMPAIGN_SPACE_ID
