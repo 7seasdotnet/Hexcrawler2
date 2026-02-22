@@ -35,7 +35,20 @@
           ]
         }
       ],
-      "doors": [],
+      "doors": [
+        {
+          "door_id": "door_1",
+          "a": {
+            "x": 7,
+            "y": 6
+          },
+          "b": {
+            "x": 8,
+            "y": 6
+          },
+          "state": "open"
+        }
+      ],
       "interactables": [],
       "metadata": {
         "description": "Structural only. No semantics."
