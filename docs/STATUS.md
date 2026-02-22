@@ -7,9 +7,9 @@
 
 
 ## What changed in this commit
-- Extended `local_encounter_return` forensic outcomes with explicit actor/space transition fields (`local_space_id`, `origin_space_id`, `actor_id`, `actor_space_id_before`, `actor_space_id_after`) for deterministic return-path debugging.
-- Updated pygame viewer to authoritatively follow the controlled entity `space_id` and reset camera/interpolation state on campaign↔local transitions to prevent stale local transforms after return.
-- Added deterministic regression coverage for full campaign→local→campaign return (including save/load round-trip and forensic before/after space assertions).
+- Enforced campaign-origin gating for `local_encounter_intent` execution: intents are deterministically rejected when the actor is already in a local-role space, preventing nested local encounter instancing.
+- Added explicit deterministic rejection forensics on `encounter_action_outcome` (`applied=false`, `reason=local_encounter_not_allowed_from_local_space`, `entity_id`, `space_id`, `tick`, `action_uid`) with no silent failure path.
+- Added a focused regression test that places the actor in `local_encounter:*`, verifies no `local_encounter_request` is emitted, and confirms save/load stability of the rejection trace.
 
 
 ## What Exists (folders / entry points)
@@ -219,7 +219,7 @@
 - `signal_intent`
 - `track_intent`
 - `spawn_intent`
-- `local_encounter_intent` (encounter action execution seam; emits deterministic `local_encounter_request` for LocalEncounterInstanceModule)
+- `local_encounter_intent` (encounter action execution seam; campaign-role origin only; deterministically rejects from local-role spaces with forensic `encounter_action_outcome`)
 - `transition_space` (simulation command seam; structural space transition only)
 - `inventory_intent` (simulation command seam; stackable inventory delta substrate)
 - `enter_site` (simulation command seam; structural site entrance transition router)
@@ -238,9 +238,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Extended deterministic local return forensics with explicit actor space-before/after fields to distinguish simulation transition success from viewer-follow issues.
-- Updated pygame viewer to hard-follow controlled entity `space_id` and reset per-space camera/interpolation state when transitioning between `campaign` and `local` role spaces.
-- Added a focused deterministic regression test for overworld→local encounter→end encounter→overworld loop with save/load stability and return-forensics assertions.
+- Enforced campaign-origin role gating for `local_encounter_intent` so local-role actors cannot instantiate nested local encounters.
+- Added deterministic rejection forensics to `encounter_action_outcome` with explicit `reason`, `entity_id`, `space_id`, and `tick` fields when gating blocks apply.
+- Added deterministic regression coverage for local-space rejection and save/load-stable outcome traces.
 
 
 ## Troubleshooting
