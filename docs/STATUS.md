@@ -7,8 +7,8 @@
 
 
 ## What changed in this commit
-- Local spaces can trigger Return to Origin via `end_local_encounter_intent` when return context exists.
-- Context menus clamp to window bounds and truncate long lines to keep labels visible.
+- Added one structural door (`door_1`) to `default_arena_v1` in local-role arena content to support viewer overlay seam checks (no mechanics changes).
+- Verified local arena content validation still passes via `PYTHONPATH=src pytest -q`.
 
 
 ## What Exists (folders / entry points)
@@ -236,8 +236,8 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Local spaces can trigger Return to Origin via `end_local_encounter_intent` when return context exists.
-- Context menus clamp to window bounds and truncate long lines to keep labels visible.
+- Added one structural door (`door_1`) to `default_arena_v1` in local-role arena content to support viewer overlay seam checks (no mechanics changes).
+- Verified local arena content validation still passes via `PYTHONPATH=src pytest -q`.
 
 
 ## Troubleshooting
