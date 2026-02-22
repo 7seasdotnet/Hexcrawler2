@@ -720,7 +720,7 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, s
     )
     lines = [
         context_line,
-        "WASD move | RMB menu | F5 save | F9 load | ESC quit",
+        "WASD move | RMB menu | F3 arena overlay | F5 save | F9 load | ESC quit",
     ]
     if status_message:
         lines.append(f"status: {status_message}")
@@ -729,6 +729,88 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, s
         surface = font.render(line, True, (240, 240, 240))
         screen.blit(surface, (12, y))
         y += 24
+
+
+def _active_local_arena_template_id(sim: Simulation, active_space_id: str, active_space: Any) -> str:
+    if isinstance(getattr(active_space, "metadata", None), dict):
+        value = active_space.metadata.get("template_id")
+        if isinstance(value, str) and value:
+            return value
+    local_encounter_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    if isinstance(local_encounter_state, dict):
+        applied = local_encounter_state.get("applied_template_by_local_space")
+        if isinstance(applied, dict):
+            value = applied.get(active_space_id)
+            if isinstance(value, str) and value:
+                return value
+    return "unknown"
+
+
+def _draw_local_arena_overlay(
+    screen: pygame.Surface,
+    sim: Simulation,
+    center: tuple[float, float],
+    font: pygame.font.Font,
+    *,
+    clip_rect: pygame.Rect,
+) -> None:
+    entity = sim.state.entities.get(PLAYER_ID)
+    if entity is None:
+        return
+    active_space = sim.state.world.spaces.get(entity.space_id)
+    if active_space is None:
+        return
+    role = str(getattr(active_space, "role", "unknown"))
+    lines = [f"arena_overlay: ON | space_id={active_space.space_id} | role={role}"]
+
+    local_encounter_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active_context = None
+    if isinstance(local_encounter_state, dict):
+        active_by_local_space = local_encounter_state.get("active_by_local_space")
+        if isinstance(active_by_local_space, dict):
+            context = active_by_local_space.get(active_space.space_id)
+            if isinstance(context, dict):
+                active_context = context
+
+    if role == "local":
+        lines.append(f"template_id={_active_local_arena_template_id(sim, active_space.space_id, active_space)}")
+    if isinstance(active_context, dict):
+        request_event_id = active_context.get("request_event_id")
+        from_space_id = active_context.get("from_space_id")
+        if isinstance(request_event_id, str) and request_event_id:
+            lines.append(f"request_event_id={request_event_id}")
+        if isinstance(from_space_id, str) and from_space_id:
+            lines.append(f"origin_from_space_id={from_space_id}")
+
+    if active_space.topology_type != SQUARE_GRID_TOPOLOGY:
+        lines.append(f"Local arena overlay unsupported for topology_type={active_space.topology_type}")
+    else:
+        old_clip = screen.get_clip()
+        screen.set_clip(clip_rect)
+        for anchor in sorted(active_space.anchors.values(), key=lambda row: row.anchor_id):
+            anchor_x = center[0] + (float(anchor.coord["x"]) + 0.5) * HEX_SIZE
+            anchor_y = center[1] + (float(anchor.coord["y"]) + 0.5) * HEX_SIZE
+            pygame.draw.circle(screen, (255, 122, 122), (int(anchor_x), int(anchor_y)), 4)
+            label = font.render(f"a:{anchor.anchor_id}", True, (255, 230, 230))
+            screen.blit(label, (int(anchor_x) + 6, int(anchor_y) - 10))
+        for door in sorted(active_space.doors.values(), key=lambda row: row.door_id):
+            door_x = center[0] + (float(door.a["x"]) + 0.5) * HEX_SIZE
+            door_y = center[1] + (float(door.a["y"]) + 0.5) * HEX_SIZE
+            pygame.draw.rect(screen, (255, 214, 116), (int(door_x) - 3, int(door_y) - 3, 7, 7))
+            label = font.render(f"d:{door.door_id} ({door.state})", True, (255, 240, 214))
+            screen.blit(label, (int(door_x) + 6, int(door_y) - 10))
+        for interactable in sorted(active_space.interactables.values(), key=lambda row: row.interactable_id):
+            obj_x = center[0] + (float(interactable.coord["x"]) + 0.5) * HEX_SIZE
+            obj_y = center[1] + (float(interactable.coord["y"]) + 0.5) * HEX_SIZE
+            pygame.draw.circle(screen, (175, 175, 255), (int(obj_x), int(obj_y)), 3)
+            label = font.render(f"i:{interactable.interactable_id}", True, (230, 230, 255))
+            screen.blit(label, (int(obj_x) + 6, int(obj_y) - 10))
+        screen.set_clip(old_clip)
+
+    y = 94
+    for line in lines:
+        screen.blit(font.render(line, True, (240, 240, 240)), (12, y))
+        y += 18
 
 
 def _format_location(location: object) -> str:
@@ -1324,6 +1406,7 @@ def run_pygame_viewer(
     panel_section_rects: dict[str, pygame.Rect] = {}
     panel_section_counts: dict[str, int] = {}
     active_panel_section = "encounters"
+    show_local_arena_overlay = False
 
     accumulator = 0.0
     running = True
@@ -1357,6 +1440,9 @@ def run_pygame_viewer(
                 else:
                     status_message = f"load failed: file not found ({load_target})"
                     print(f"[hexcrawler.viewer] load skipped; file not found path={load_target}")
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F3:
+                show_local_arena_overlay = not show_local_arena_overlay
+                status_message = f"local arena overlay {'on' if show_local_arena_overlay else 'off'}"
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -1439,6 +1525,8 @@ def run_pygame_viewer(
             else:
                 _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
         _draw_hud(screen, sim, font, status_message)
+        if show_local_arena_overlay:
+            _draw_local_arena_overlay(screen, sim, world_center, marker_font, clip_rect=viewport_rect)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll, active_panel_section)
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
