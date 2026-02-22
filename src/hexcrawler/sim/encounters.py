@@ -5,7 +5,7 @@ import hashlib
 from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
-from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, TRAVEL_STEP_EVENT_TYPE, SimEvent, Simulation
+from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, TRAVEL_STEP_EVENT_TYPE, SimCommand, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
@@ -22,6 +22,10 @@ ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE = "encounter_action_execute"
 ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE = "encounter_action_outcome"
 LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE = "local_encounter_request"
 LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE = "local_encounter_begin"
+END_LOCAL_ENCOUNTER_INTENT = "end_local_encounter_intent"
+END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE = "end_local_encounter_outcome"
+LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
+LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
@@ -34,6 +38,8 @@ RUMOR_PROPAGATION_INTERVAL_TICKS = 50
 RUMOR_HOP_CAP = 4
 RUMOR_TTL_TICKS = 200
 LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX = 64
+LOCAL_ENCOUNTER_END_LEDGER_MAX = 64
+MAX_ACTIVE_LOCAL_ENCOUNTERS = 8
 
 
 class EncounterSelectionModule(RuleModule):
@@ -244,18 +250,113 @@ class LocalEncounterInstanceModule(RuleModule):
 
     name = "local_encounter_instance"
     _STATE_PROCESSED_REQUEST_IDS = "processed_request_ids"
+    _STATE_ACTIVE_BY_LOCAL_SPACE = "active_by_local_space"
+    _STATE_PROCESSED_END_ACTION_UIDS = "processed_end_action_uids"
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
 
+    def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type != END_LOCAL_ENCOUNTER_INTENT:
+            return False
+
+        action_uid = f"{command.tick}:{command_index}"
+        state = self._rules_state(sim)
+        processed_end_action_uids = set(state[self._STATE_PROCESSED_END_ACTION_UIDS])
+        entity_id_raw = command.params.get("entity_id")
+        entity_id = str(entity_id_raw) if isinstance(entity_id_raw, str) else None
+        tags = command.params.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+        normalized_tags = [str(tag) for tag in tags]
+
+        reason = "resolved"
+        applied = False
+        local_space_id: str | None = None
+        active_context: dict[str, Any] | None = None
+
+        if action_uid in processed_end_action_uids:
+            reason = "already_processed"
+        elif entity_id is None or entity_id not in sim.state.entities:
+            reason = "invalid_entity"
+        else:
+            entity = sim.state.entities[entity_id]
+            space = sim.state.world.spaces.get(entity.space_id)
+            if space is None or space.role != LOCAL_SPACE_ROLE:
+                reason = "not_in_local_space"
+            else:
+                local_space_id = entity.space_id
+                active_context = state[self._STATE_ACTIVE_BY_LOCAL_SPACE].get(local_space_id)
+                if active_context is None:
+                    reason = "no_active_local_encounter"
+                else:
+                    sim.schedule_event_at(
+                        tick=command.tick + 1,
+                        event_type=LOCAL_ENCOUNTER_END_EVENT_TYPE,
+                        params={
+                            "tick": int(command.tick),
+                            "action_uid": action_uid,
+                            "entity_id": entity_id,
+                            "local_space_id": local_space_id,
+                            "request_event_id": str(active_context["request_event_id"]),
+                            "from_space_id": str(active_context["from_space_id"]),
+                            "from_location": copy.deepcopy(active_context["from_location"]),
+                            "tags": list(normalized_tags),
+                        },
+                    )
+                    applied = True
+
+        sim.schedule_event_at(
+            tick=command.tick,
+            event_type=END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": int(command.tick),
+                "intent": END_LOCAL_ENCOUNTER_INTENT,
+                "action_uid": action_uid,
+                "entity_id": entity_id,
+                "local_space_id": local_space_id,
+                "applied": applied,
+                "reason": reason,
+                "tags": list(normalized_tags),
+            },
+        )
+        return True
+
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
-        if event.event_type != LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE:
+        if event.event_type == LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE:
+            self._on_local_encounter_request(sim, event)
             return
+        if event.event_type != LOCAL_ENCOUNTER_END_EVENT_TYPE:
+            return
+        self._on_local_encounter_end(sim, event)
+
+    def _on_local_encounter_request(self, sim: Simulation, event: SimEvent) -> None:
 
         state = self._rules_state(sim)
         processed_ids = list(state[self._STATE_PROCESSED_REQUEST_IDS])
         request_id = str(event.event_id)
         if request_id in processed_ids:
+            return
+
+        active_by_local_space = dict(state[self._STATE_ACTIVE_BY_LOCAL_SPACE])
+        if len(active_by_local_space) >= MAX_ACTIVE_LOCAL_ENCOUNTERS:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+                params={
+                    "request_event_id": request_id,
+                    "from_space_id": str(event.params.get("from_space_id", "")),
+                    "to_space_id": None,
+                    "entity_id": None,
+                    "from_location": copy.deepcopy(event.params.get("from_location")),
+                    "to_spawn_coord": None,
+                    "transition_applied": False,
+                    "reason": "active_local_encounter_cap_reached",
+                },
+            )
+            processed_ids.append(request_id)
+            state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
+            sim.set_rules_state(self.name, state)
             return
 
         from_space_id = str(event.params.get("from_space_id", ""))
@@ -303,17 +404,133 @@ class LocalEncounterInstanceModule(RuleModule):
             },
         )
 
+        if transition_applied and entity_id is not None and isinstance(from_location_payload, dict):
+            active_by_local_space[local_space_id] = {
+                "request_event_id": request_id,
+                "entity_id": entity_id,
+                "from_space_id": from_space_id,
+                "from_location": copy.deepcopy(from_location_payload),
+                "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
+                "started_tick": int(event.tick),
+            }
+            ordered_space_ids = sorted(active_by_local_space.keys())
+            state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
+                space_id: active_by_local_space[space_id] for space_id in ordered_space_ids[-MAX_ACTIVE_LOCAL_ENCOUNTERS:]
+            }
+
         processed_ids.append(request_id)
         state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
         sim.set_rules_state(self.name, state)
 
+    def _on_local_encounter_end(self, sim: Simulation, event: SimEvent) -> None:
+        state = self._rules_state(sim)
+        action_uid = str(event.params.get("action_uid", ""))
+        if not action_uid:
+            raise ValueError("local_encounter_end action_uid must be a non-empty string")
+
+        processed = list(state[self._STATE_PROCESSED_END_ACTION_UIDS])
+        if action_uid in processed:
+            return
+
+        local_space_id = str(event.params.get("local_space_id", ""))
+        active_by_local_space = dict(state[self._STATE_ACTIVE_BY_LOCAL_SPACE])
+        context = active_by_local_space.get(local_space_id)
+        entity_id = str(event.params.get("entity_id", "")) if isinstance(event.params.get("entity_id"), str) else None
+        applied = False
+        reason = "resolved"
+        to_space_id = None
+        to_coord = None
+
+        if context is None:
+            reason = "no_active_local_encounter"
+        elif entity_id is None or entity_id not in sim.state.entities:
+            reason = "invalid_entity"
+        else:
+            from_space_id = str(context["from_space_id"])
+            to_space_id = from_space_id
+            to_coord = copy.deepcopy(context["return_spawn_coord"])
+            to_space = sim.state.world.spaces.get(from_space_id)
+            if to_space is None:
+                reason = "invalid_from_space"
+            elif not isinstance(to_coord, dict):
+                reason = "invalid_return_spawn_coord"
+            else:
+                next_x, next_y = sim._coord_to_world_xy(space=to_space, coord=to_coord)
+                entity = sim.state.entities[entity_id]
+                entity.space_id = from_space_id
+                entity.position_x = next_x
+                entity.position_y = next_y
+                applied = True
+
+        if context is not None:
+            del active_by_local_space[local_space_id]
+
+        processed.append(action_uid)
+        state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = active_by_local_space
+        state[self._STATE_PROCESSED_END_ACTION_UIDS] = processed[-LOCAL_ENCOUNTER_END_LEDGER_MAX:]
+        sim.set_rules_state(self.name, state)
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
+            params={
+                "tick": int(event.tick),
+                "action_uid": action_uid,
+                "entity_id": entity_id,
+                "request_event_id": str(event.params.get("request_event_id", "")),
+                "from_space_id": local_space_id,
+                "to_space_id": to_space_id,
+                "from_location": copy.deepcopy(event.params.get("from_location")),
+                "to_coord": to_coord,
+                "applied": applied,
+                "reason": reason,
+                "tags": [str(tag) for tag in event.params.get("tags", [])] if isinstance(event.params.get("tags"), list) else [],
+            },
+        )
+
     def _rules_state(self, sim: Simulation) -> dict[str, Any]:
         state = sim.get_rules_state(self.name)
         raw_processed = state.get(self._STATE_PROCESSED_REQUEST_IDS, [])
+        raw_processed_end = state.get(self._STATE_PROCESSED_END_ACTION_UIDS, [])
+        raw_active_by_local_space = state.get(self._STATE_ACTIVE_BY_LOCAL_SPACE, {})
         if not isinstance(raw_processed, list):
             raise ValueError("local_encounter_instance.processed_request_ids must be a list")
+        if not isinstance(raw_processed_end, list):
+            raise ValueError("local_encounter_instance.processed_end_action_uids must be a list")
+        if not isinstance(raw_active_by_local_space, dict):
+            raise ValueError("local_encounter_instance.active_by_local_space must be an object")
         normalized = [str(value) for value in raw_processed if str(value)]
+        normalized_processed_end = [str(value) for value in raw_processed_end if str(value)]
+        normalized_active_by_local_space: dict[str, dict[str, Any]] = {}
+        for local_space_id, context in raw_active_by_local_space.items():
+            if not isinstance(local_space_id, str) or not local_space_id:
+                continue
+            if not isinstance(context, dict):
+                continue
+            if not isinstance(context.get("request_event_id"), str):
+                continue
+            if not isinstance(context.get("entity_id"), str):
+                continue
+            if not isinstance(context.get("from_space_id"), str):
+                continue
+            from_location = context.get("from_location")
+            return_spawn_coord = context.get("return_spawn_coord")
+            if not isinstance(from_location, dict) or not isinstance(return_spawn_coord, dict):
+                continue
+            normalized_active_by_local_space[local_space_id] = {
+                "request_event_id": str(context["request_event_id"]),
+                "entity_id": str(context["entity_id"]),
+                "from_space_id": str(context["from_space_id"]),
+                "from_location": copy.deepcopy(from_location),
+                "return_spawn_coord": copy.deepcopy(return_spawn_coord),
+                "started_tick": int(context.get("started_tick", 0)),
+            }
         state[self._STATE_PROCESSED_REQUEST_IDS] = normalized[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
+        state[self._STATE_PROCESSED_END_ACTION_UIDS] = normalized_processed_end[-LOCAL_ENCOUNTER_END_LEDGER_MAX:]
+        ordered_space_ids = sorted(normalized_active_by_local_space.keys())
+        state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
+            space_id: normalized_active_by_local_space[space_id] for space_id in ordered_space_ids[-MAX_ACTIVE_LOCAL_ENCOUNTERS:]
+        }
         return state
 
     @staticmethod
