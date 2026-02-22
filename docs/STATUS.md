@@ -7,9 +7,9 @@
 
 
 ## What changed in this commit
-- Hardened `hexcrawler.content.local_arenas` normalization/validation to reject float values throughout template payload structures, including `topology_params` and nested metadata paths, for deterministic content behavior.
-- Tightened local arena validation: `doors[*].door_id` and `interactables[*].interactable_id` must be non-empty strings and unique within each template (including bool rejection via string-type enforcement).
-- Added focused Phase 6C-H1 tests for float rejection coverage (`metadata`, row metadata, `topology_params`) and stable ID enforcement for doors/interactables.
+- Added a viewer-only local arena instrumentation overlay toggle (`F3`) that never mutates simulation state, command logs, or rules state.
+- Added read-only local arena overlay rendering in pygame viewer for anchors, doors, and interactables with stable ID labels when in Local-role square-grid spaces.
+- Added local arena HUD instrumentation for `space_id`, role (`campaign`/`local`), resolved local `template_id` (or `unknown`), and optional local encounter context (`request_event_id`/origin `from_space_id`) from authoritative simulation state.
 
 
 ## What Exists (folders / entry points)
