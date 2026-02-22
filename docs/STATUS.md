@@ -1,14 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6C — Deterministic local arena template selection + structural instantiation.
-- **Next action:** bind encounter semantics onto structural local arenas (content-driven composition), preserving role gating and deterministic passthrough context.
-- **Phase status:** ✅ Phase 6B complete; Phase 6C now adds deterministic, data-driven local arena template selection/application with fallback forensics and save/load stability.
+- **Current phase:** Phase 6D-M0 — Minimal Encounter → Local Encounter Request binding.
+- **Next action:** broader encounter→arena semantic binding (spawn composition and richer context mapping) deferred to subsequent milestones.
+- **Phase status:** ✅ Phase 6D-M0 adds deterministic encounter action binding that emits `local_encounter_request` and exercises campaign→local instancing/return seams without adding combat/content semantics.
 
 
 ## What changed in this commit
-- Added one structural door (`door_1`) to `default_arena_v1` in local-role arena content to support viewer overlay seam checks (no mechanics changes).
-- Verified local arena content validation still passes via `PYTHONPATH=src pytest -q`.
+- Added `local_encounter_intent` to `EncounterActionExecutionModule` so encounter action execution can deterministically emit `local_encounter_request` events with idempotent `action_uid` ledger gating.
+- Updated default encounter content so `scavenger_patrol` can request a local encounter (`default_arena_v1`) during normal play, exercising campaign→local instancing paths.
+- Added focused deterministic tests for local encounter request emission, idempotence, local space instancing transition, and save/load + replay hash stability.
 
 
 ## What Exists (folders / entry points)
@@ -218,6 +219,7 @@
 - `signal_intent`
 - `track_intent`
 - `spawn_intent`
+- `local_encounter_intent` (encounter action execution seam; emits deterministic `local_encounter_request` for LocalEncounterInstanceModule)
 - `transition_space` (simulation command seam; structural space transition only)
 - `inventory_intent` (simulation command seam; stackable inventory delta substrate)
 - `enter_site` (simulation command seam; structural site entrance transition router)
@@ -236,8 +238,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added one structural door (`door_1`) to `default_arena_v1` in local-role arena content to support viewer overlay seam checks (no mechanics changes).
-- Verified local arena content validation still passes via `PYTHONPATH=src pytest -q`.
+- Added `local_encounter_intent` encounter action execution support with deterministic request emission and idempotence guards.
+- Updated default encounter content to occasionally emit local encounter requests for campaign→local seam exercise.
+- Added deterministic tests covering emission, instancing transition, and save/load/replay hash stability.
 
 
 ## Troubleshooting
