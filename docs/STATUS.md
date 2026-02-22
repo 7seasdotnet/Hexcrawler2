@@ -4,12 +4,13 @@
 - **Current phase:** Phase 6D-M0 — Minimal Encounter → Local Encounter Request binding.
 - **Next action:** broader encounter→arena semantic binding (spawn composition and richer context mapping) deferred to subsequent milestones.
 - **Phase status:** ✅ Phase 6D-M0 adds deterministic encounter action binding that emits `local_encounter_request` and exercises campaign→local instancing/return seams without adding combat/content semantics.
+- Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Enforced campaign-origin gating for `local_encounter_intent` execution: intents are deterministically rejected when the actor is already in a local-role space, preventing nested local encounter instancing.
-- Added explicit deterministic rejection forensics on `encounter_action_outcome` (`applied=false`, `reason=local_encounter_not_allowed_from_local_space`, `entity_id`, `space_id`, `tick`, `action_uid`) with no silent failure path.
-- Added a focused regression test that places the actor in `local_encounter:*`, verifies no `local_encounter_request` is emitted, and confirms save/load stability of the rejection trace.
+- Added `tests/test_phase6d_binding_contract.py` with one canonical end-to-end contract test for encounter→arena binding and single-hop return semantics.
+- Locked deterministic anti-nesting and return assertions in one run (including forensic `encounter_action_outcome` checks and no local→local return unwinding).
+- Added save/load round-trip trace/hash stability assertions for the binding contract path.
 
 
 ## What Exists (folders / entry points)
