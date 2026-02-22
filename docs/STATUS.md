@@ -7,8 +7,9 @@
 
 
 ## What changed in this commit
-- Viewer now filters markers/entities by current space_id to prevent cross-space ghost rendering; adds minimal hover inspection.
-- Maintained viewer read-only invariants: no new commands/events and no simulation/substrate mutations.
+- Local-role square-grid spaces now auto-zoom to a bounded viewport fill target and center on arena bounds (not player), improving local visibility.
+- F3 local arena overlay/marker/entity hit-testing remain aligned under local zoom scale; overworld campaign rendering behavior is unchanged.
+- Local spaces now auto-zoom and center on arena bounds for improved visibility.
 
 
 ## What Exists (folders / entry points)
@@ -236,8 +237,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Viewer now filters markers/entities by current space_id to prevent cross-space ghost rendering; adds minimal hover inspection.
-- Maintained viewer read-only invariants: no new commands/events and no simulation/substrate mutations.
+- Local-role square-grid spaces now auto-zoom to a bounded viewport fill target and center on arena bounds (not player), improving local visibility.
+- F3 local arena overlay/marker/entity hit-testing remain aligned under local zoom scale; overworld campaign rendering behavior is unchanged.
+- Local spaces now auto-zoom and center on arena bounds for improved visibility.
 
 
 ## Troubleshooting

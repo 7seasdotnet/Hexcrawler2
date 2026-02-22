@@ -68,6 +68,7 @@ INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
 CONTEXT_MENU_ROW_HEIGHT = 28
+LOCAL_VIEWPORT_FILL_RATIO = 0.72
 
 MARKER_SCATTER_RADIUS_MIN = 8.0
 MARKER_SCATTER_RADIUS_MAX = 18.0
@@ -286,8 +287,9 @@ def _axial_to_pixel(coord: HexCoord, center: tuple[float, float]) -> tuple[float
     return (center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE)
 
 
-def _pixel_to_world(pixel_x: int, pixel_y: int, center: tuple[float, float]) -> tuple[float, float]:
-    return ((pixel_x - center[0]) / HEX_SIZE, (pixel_y - center[1]) / HEX_SIZE)
+def _pixel_to_world(pixel_x: int, pixel_y: int, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
+    size = HEX_SIZE * zoom_scale
+    return ((pixel_x - center[0]) / size, (pixel_y - center[1]) / size)
 
 
 def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
@@ -307,6 +309,54 @@ def _viewport_rect() -> pygame.Rect:
 def _panel_rect() -> pygame.Rect:
     panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
     return pygame.Rect(panel_x, PANEL_MARGIN, PANEL_WIDTH, WINDOW_SIZE[1] - (PANEL_MARGIN * 2))
+
+
+def _local_space_square_bounds(active_space: Any) -> tuple[float, float, float, float] | None:
+    if active_space is None or str(getattr(active_space, "role", "")) != "local":
+        return None
+    if getattr(active_space, "topology_type", None) != SQUARE_GRID_TOPOLOGY:
+        return None
+    params = getattr(active_space, "topology_params", None)
+    if not isinstance(params, dict):
+        return None
+    width = params.get("width")
+    height = params.get("height")
+    origin = params.get("origin", {"x": 0, "y": 0})
+    if not isinstance(origin, dict):
+        return None
+    try:
+        width_i = int(width)
+        height_i = int(height)
+        origin_x = int(origin.get("x", 0))
+        origin_y = int(origin.get("y", 0))
+    except (TypeError, ValueError):
+        return None
+    if width_i <= 0 or height_i <= 0:
+        return None
+    return (float(origin_x), float(origin_y), float(width_i), float(height_i))
+
+
+def _camera_center_and_zoom(sim: Simulation, viewport_rect: pygame.Rect) -> tuple[tuple[float, float], float]:
+    center = (float(viewport_rect.centerx), float(viewport_rect.centery))
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    bounds = _local_space_square_bounds(active_space)
+    if bounds is None:
+        return center, 1.0
+    origin_x, origin_y, width, height = bounds
+    arena_center_x = origin_x + (width * 0.5)
+    arena_center_y = origin_y + (height * 0.5)
+
+    target_width_px = float(viewport_rect.width) * LOCAL_VIEWPORT_FILL_RATIO
+    arena_width_px = width * HEX_SIZE
+    if arena_width_px <= 0:
+        return center, 1.0
+    zoom_scale = max(1.0, min(target_width_px / arena_width_px, 2.0))
+    center = (
+        float(viewport_rect.centerx) - (arena_center_x * HEX_SIZE * zoom_scale),
+        float(viewport_rect.centery) - (arena_center_y * HEX_SIZE * zoom_scale),
+    )
+    return center, zoom_scale
 
 
 
@@ -555,11 +605,12 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
     for cell, markers in markers_by_cell.items():
         markers.sort(key=lambda row: (row.priority, row.marker_id))
     return markers_by_cell
-def _marker_cell_center(cell: MarkerCellRef, center: tuple[float, float]) -> tuple[float, float]:
+def _marker_cell_center(cell: MarkerCellRef, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
+    size = HEX_SIZE * zoom_scale
     if cell.topology_type == SQUARE_GRID_TOPOLOGY:
         world_x = float(dict(cell.coord_key)["x"]) + 0.5
         world_y = float(dict(cell.coord_key)["y"]) + 0.5
-        return center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE
+        return center[0] + world_x * size, center[1] + world_y * size
     return _axial_to_pixel(HexCoord(q=dict(cell.coord_key)["q"], r=dict(cell.coord_key)["r"]), center)
 
 
@@ -607,7 +658,7 @@ def _slot_markers_for_hex(center_x: float, center_y: float, markers: list[Marker
     return placements, 0
 
 
-def _world_marker_placements(sim: Simulation, center: tuple[float, float]) -> list[MarkerPlacement]:
+def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_scale: float = 1.0) -> list[MarkerPlacement]:
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is None:
@@ -619,7 +670,7 @@ def _world_marker_placements(sim: Simulation, center: tuple[float, float]) -> li
         SQUARE_GRID_TOPOLOGY if active_space.topology_type == SQUARE_GRID_TOPOLOGY else OVERWORLD_HEX_TOPOLOGY,
     )
     for cell in sorted(markers_by_cell, key=lambda current: (current.space_id, current.topology_type, current.coord_key)):
-        center_x, center_y = _marker_cell_center(cell, center)
+        center_x, center_y = _marker_cell_center(cell, center, zoom_scale)
         slotted, _ = _slot_markers_for_hex(center_x, center_y, markers_by_cell[cell], cell)
         placements.extend(slotted)
     return placements
@@ -630,8 +681,9 @@ def _draw_world_markers(
     sim: Simulation,
     center: tuple[float, float],
     font: pygame.font.Font,
+    zoom_scale: float = 1.0,
 ) -> None:
-    for placement in _world_marker_placements(sim, center):
+    for placement in _world_marker_placements(sim, center, zoom_scale):
         pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
         pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
         label_surface = font.render(placement.marker.label, True, (248, 250, 255))
@@ -648,21 +700,23 @@ def _draw_world(
     marker_font: pygame.font.Font,
     *,
     clip_rect: pygame.Rect,
+    zoom_scale: float = 1.0,
 ) -> None:
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
     if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
+        cell_size = HEX_SIZE * zoom_scale
         for coord in active_space.iter_cells():
             world_x = float(coord["x"]) + 0.5
             world_y = float(coord["y"]) + 0.5
-            pixel_x = center[0] + world_x * HEX_SIZE
-            pixel_y = center[1] + world_y * HEX_SIZE
-            rect = pygame.Rect(int(pixel_x - HEX_SIZE / 2), int(pixel_y - HEX_SIZE / 2), HEX_SIZE, HEX_SIZE)
+            pixel_x = center[0] + world_x * cell_size
+            pixel_y = center[1] + world_y * cell_size
+            rect = pygame.Rect(int(pixel_x - cell_size / 2), int(pixel_y - cell_size / 2), int(cell_size), int(cell_size))
             pygame.draw.rect(screen, (58, 58, 64), rect)
             pygame.draw.rect(screen, (35, 35, 40), rect, 1)
-        _draw_world_markers(screen, sim, center, marker_font)
+        _draw_world_markers(screen, sim, center, marker_font, zoom_scale)
         screen.set_clip(old_clip)
         return
 
@@ -677,7 +731,7 @@ def _draw_world(
         pygame.draw.polygon(screen, (35, 35, 40), points, 1)
 
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
-        _draw_world_markers(screen, sim, center, marker_font)
+        _draw_world_markers(screen, sim, center, marker_font, zoom_scale)
     screen.set_clip(old_clip)
 
 
@@ -686,13 +740,15 @@ def _draw_entity(
     world_x: float,
     world_y: float,
     center: tuple[float, float],
+    zoom_scale: float = 1.0,
     *,
     clip_rect: pygame.Rect,
 ) -> None:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
-    x = int(center[0] + world_x * HEX_SIZE)
-    y = int(center[1] + world_y * HEX_SIZE)
+    size = HEX_SIZE * zoom_scale
+    x = int(center[0] + world_x * size)
+    y = int(center[1] + world_y * size)
     pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
     pygame.draw.circle(screen, (15, 15, 15), (x, y), 8, 1)
     screen.set_clip(old_clip)
@@ -705,13 +761,15 @@ def _draw_spawned_entity(
     world_x: float,
     world_y: float,
     center: tuple[float, float],
+    zoom_scale: float = 1.0,
     *,
     clip_rect: pygame.Rect,
 ) -> None:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
-    x = int(center[0] + world_x * HEX_SIZE)
-    y = int(center[1] + world_y * HEX_SIZE)
+    size = HEX_SIZE * zoom_scale
+    x = int(center[0] + world_x * size)
+    y = int(center[1] + world_y * size)
     pygame.draw.circle(screen, (140, 225, 255), (x, y), 5)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), 5, 1)
     screen.set_clip(old_clip)
@@ -774,6 +832,7 @@ def _draw_local_arena_overlay(
     sim: Simulation,
     center: tuple[float, float],
     font: pygame.font.Font,
+    zoom_scale: float = 1.0,
     *,
     clip_rect: pygame.Rect,
 ) -> None:
@@ -810,21 +869,22 @@ def _draw_local_arena_overlay(
     else:
         old_clip = screen.get_clip()
         screen.set_clip(clip_rect)
+        cell_size = HEX_SIZE * zoom_scale
         for anchor in sorted(active_space.anchors.values(), key=lambda row: row.anchor_id):
-            anchor_x = center[0] + (float(anchor.coord["x"]) + 0.5) * HEX_SIZE
-            anchor_y = center[1] + (float(anchor.coord["y"]) + 0.5) * HEX_SIZE
+            anchor_x = center[0] + (float(anchor.coord["x"]) + 0.5) * cell_size
+            anchor_y = center[1] + (float(anchor.coord["y"]) + 0.5) * cell_size
             pygame.draw.circle(screen, (255, 122, 122), (int(anchor_x), int(anchor_y)), 4)
             label = font.render(f"a:{anchor.anchor_id}", True, (255, 230, 230))
             screen.blit(label, (int(anchor_x) + 6, int(anchor_y) - 10))
         for door in sorted(active_space.doors.values(), key=lambda row: row.door_id):
-            door_x = center[0] + (float(door.a["x"]) + 0.5) * HEX_SIZE
-            door_y = center[1] + (float(door.a["y"]) + 0.5) * HEX_SIZE
+            door_x = center[0] + (float(door.a["x"]) + 0.5) * cell_size
+            door_y = center[1] + (float(door.a["y"]) + 0.5) * cell_size
             pygame.draw.rect(screen, (255, 214, 116), (int(door_x) - 3, int(door_y) - 3, 7, 7))
             label = font.render(f"d:{door.door_id} ({door.state})", True, (255, 240, 214))
             screen.blit(label, (int(door_x) + 6, int(door_y) - 10))
         for interactable in sorted(active_space.interactables.values(), key=lambda row: row.interactable_id):
-            obj_x = center[0] + (float(interactable.coord["x"]) + 0.5) * HEX_SIZE
-            obj_y = center[1] + (float(interactable.coord["y"]) + 0.5) * HEX_SIZE
+            obj_x = center[0] + (float(interactable.coord["x"]) + 0.5) * cell_size
+            obj_y = center[1] + (float(interactable.coord["y"]) + 0.5) * cell_size
             pygame.draw.circle(screen, (175, 175, 255), (int(obj_x), int(obj_y)), 3)
             label = font.render(f"i:{interactable.interactable_id}", True, (230, 230, 255))
             screen.blit(label, (int(obj_x) + 6, int(obj_y) - 10))
@@ -1031,14 +1091,16 @@ def _draw_context_menu(
     return menu_rect
 
 
-def _world_to_pixel(world_x: float, world_y: float, center: tuple[float, float]) -> tuple[float, float]:
-    return (center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE)
+def _world_to_pixel(world_x: float, world_y: float, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
+    size = HEX_SIZE * zoom_scale
+    return (center[0] + world_x * size, center[1] + world_y * size)
 
 
 def _find_entity_at_pixel(
     sim: Simulation,
     pixel_pos: tuple[int, int],
     center: tuple[float, float],
+    zoom_scale: float = 1.0,
     *,
     radius_px: float = 10.0,
 ) -> str | None:
@@ -1050,7 +1112,7 @@ def _find_entity_at_pixel(
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
         if not _is_in_current_space(_entity_space_id(entity), current_space_id):
             continue
-        px, py = _world_to_pixel(entity.position_x, entity.position_y, center)
+        px, py = _world_to_pixel(entity.position_x, entity.position_y, center, zoom_scale)
         dx = pixel_pos[0] - px
         dy = pixel_pos[1] - py
         distance_sq = (dx * dx) + (dy * dy)
@@ -1068,11 +1130,12 @@ def _find_world_marker_candidates_at_pixel(
     sim: Simulation,
     pixel_pos: tuple[int, int],
     center: tuple[float, float],
+    zoom_scale: float = 1.0,
     *,
     radius_px: float = 10.0,
 ) -> list[MarkerRecord]:
     candidates: list[tuple[float, str, MarkerRecord]] = []
-    for placement in _world_marker_placements(sim, center):
+    for placement in _world_marker_placements(sim, center, zoom_scale):
         dx = pixel_pos[0] - placement.x
         dy = pixel_pos[1] - placement.y
         distance_sq = (dx * dx) + (dy * dy)
@@ -1087,24 +1150,25 @@ def _find_world_marker_at_pixel(
     sim: Simulation,
     pixel_pos: tuple[int, int],
     center: tuple[float, float],
+    zoom_scale: float = 1.0,
     *,
     radius_px: float = 10.0,
 ) -> MarkerRecord | None:
-    candidates = _find_world_marker_candidates_at_pixel(sim, pixel_pos, center, radius_px=radius_px)
+    candidates = _find_world_marker_candidates_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
     if not candidates:
         return None
     return candidates[0]
 
 
-def _hover_readout(sim: Simulation, pixel_pos: tuple[int, int], center: tuple[float, float]) -> str | None:
-    marker = _find_world_marker_at_pixel(sim, pixel_pos, center, radius_px=12.0)
+def _hover_readout(sim: Simulation, pixel_pos: tuple[int, int], center: tuple[float, float], zoom_scale: float = 1.0) -> str | None:
+    marker = _find_world_marker_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=12.0)
     player = sim.state.entities.get(PLAYER_ID)
     current_space_id = _entity_space_id(player) if player is not None else "overworld"
     if current_space_id is None:
         current_space_id = "overworld"
     if marker is not None:
         return f"hover: kind={marker.marker_kind} id={marker.marker_id} space_id={current_space_id}"
-    entity_id = _find_entity_at_pixel(sim, pixel_pos, center, radius_px=12.0)
+    entity_id = _find_entity_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=12.0)
     if entity_id is None:
         return None
     entity = sim.state.entities.get(entity_id)
@@ -1386,7 +1450,7 @@ def run_pygame_viewer(
     def build_context_menu(event_pos: tuple[int, int]) -> ContextMenuState | None:
         items: list[ContextMenuItem] = []
         if viewport_rect.collidepoint(event_pos):
-            markers = _find_world_marker_candidates_at_pixel(sim, event_pos, world_center)
+            markers = _find_world_marker_candidates_at_pixel(sim, event_pos, world_center, world_zoom_scale)
             if markers:
                 for marker in markers:
                     items.append(ContextMenuItem(label=f"Marker: {marker.marker_kind} {marker.label}", action="noop"))
@@ -1421,7 +1485,7 @@ def run_pygame_viewer(
                 items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
             else:
-                world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center)
+                world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center, world_zoom_scale)
                 target_hex = world_xy_to_axial(world_x, world_y)
                 if sim.state.world.get_hex_record(target_hex) is not None:
                     items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
@@ -1450,6 +1514,7 @@ def run_pygame_viewer(
 
     viewport_rect = _viewport_rect()
     world_center = (float(viewport_rect.centerx), float(viewport_rect.centery))
+    world_zoom_scale = 1.0
     panel_scroll = EncounterPanelScrollState()
     panel_section_rects: dict[str, pygame.Rect] = {}
     panel_section_counts: dict[str, int] = {}
@@ -1565,14 +1630,15 @@ def run_pygame_viewer(
         current_space_id = _entity_space_id(player) if player is not None else "overworld"
         if current_space_id is None:
             current_space_id = "overworld"
+        world_center, world_zoom_scale = _camera_center_and_zoom(sim, viewport_rect)
 
         hover_message: str | None = None
         mouse_pos = pygame_module.mouse.get_pos()
         if viewport_rect.collidepoint(mouse_pos):
-            hover_message = _hover_readout(sim, mouse_pos, world_center)
+            hover_message = _hover_readout(sim, mouse_pos, world_center, world_zoom_scale)
 
         screen.fill((17, 18, 25))
-        _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect)
+        _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale)
         pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
         for entity_id in sorted(sim.state.entities):
             entity = sim.state.entities[entity_id]
@@ -1582,12 +1648,12 @@ def run_pygame_viewer(
             if interpolated is None:
                 continue
             if entity_id == PLAYER_ID:
-                _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
+                _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
             else:
-                _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
+                _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
         _draw_hud(screen, sim, font, status_message, hover_message)
         if show_local_arena_overlay:
-            _draw_local_arena_overlay(screen, sim, world_center, marker_font, clip_rect=viewport_rect)
+            _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll, active_panel_section)
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
