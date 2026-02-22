@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Phase 6B follow-on — Role-gated tactical admissibility (campaign/local separation enforcement).
-- **Next action:** deterministic local arena generation/template selection for encounter requests (instancing bridge now in place; still deferred).
-- **Phase status:** ✅ Phase 6A complete; 6B follow-on now enforces serialized space roles (`campaign`/`local`) and local-only tactical intent admissibility for `attack_intent` and `turn_intent`.
+- **Next action:** deterministic local arena generation/template selection for encounter requests and encounter-driven content binding (return seam now in place; still deferred).
+- **Phase status:** ✅ Phase 6A complete; 6B follow-on now enforces serialized space roles (`campaign`/`local`), local-only tactical admissibility, and a deterministic Local→Campaign return seam.
 
 
 ## What changed in this commit
-- Added `LocalEncounterInstanceModule` that consumes `local_encounter_request`, derives deterministic local space IDs as `local_encounter:{request_event_id}`, and emits forensic `local_encounter_begin` events.
-- Added deterministic idempotence ledger state at `rules_state["local_encounter_instance"].processed_request_ids` (bounded FIFO cap) to prevent duplicate instancing/transition across replay and save-load continuation.
-- Added focused tests for exactly-once local instancing, save/load idempotence, deterministic hash stability, and non-overworld campaign-plane compatibility.
+- Added a deterministic `end_local_encounter_intent` command seam (Local-role only) that records `end_local_encounter_outcome`, schedules `local_encounter_end`, and emits `local_encounter_return` forensic events.
+- Extended `rules_state["local_encounter_instance"]` with serialized/hash-covered return context (`active_by_local_space`) plus bounded idempotence ledgers for begin/end action processing.
+- Added focused return-seam tests for happy-path Local→Campaign return, role gating, save/load idempotence, multi-campaign-plane safety, and deterministic hash/event-trace stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -24,7 +24,7 @@
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
-  - Local encounter instancing bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, and persists processed request IDs in serialized rules-state for restart-safe idempotence.
+  - Local encounter instancing/return bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, persists serialized return context in `rules_state["local_encounter_instance"].active_by_local_space`, and handles Local-role `end_local_encounter_intent` to schedule deterministic `local_encounter_end`/`local_encounter_return` events back to stored campaign origin space IDs.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
   - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing ingress role-gating (`local` only), then deterministic validation/range/cooldown checks plus local-hex melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
   - Combat seam also consumes `turn_intent` with the same local-only role gate; campaign-role turn intents deterministically reject with `tactical_not_allowed_in_campaign_space` and do not mutate facing.
@@ -188,6 +188,7 @@
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
 - `PYTHONPATH=src pytest -q tests/test_interaction_execution_module.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
@@ -226,6 +227,7 @@
 - `emit_signal_intent` (simulation command seam; delayed signal record emission into deterministic bounded world signal container)
 - `perceive_signal_intent` (simulation command seam; delayed deterministic signal query with channel/radius filtering and strength reporting)
 - `turn_intent` (simulation command seam; deterministic facing-token update with forensic `turn_outcome`)
+- `end_local_encounter_intent` (simulation command seam; Local-role-only encounter return request with forensic `end_local_encounter_outcome` + `local_encounter_return`)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -234,9 +236,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added deterministic `turn_intent` command seam that validates entity/facing, applies normalized facing tokens, and records forensic `turn_outcome` events.
-- Added deterministic overworld melee arc admissibility stub (`front-3-of-6` from facing) with explicit rejection reasons (`invalid_arc`, `invalid_arc_coord`) and no combat math changes.
-- Added deterministic `affected[]` ordering helper contract and tests covering turn outcomes, arc gating behavior, ordering stability, and save/load/hash invariants.
+- Added deterministic Local→Campaign return seam for Local-role encounters via `end_local_encounter_intent`, `local_encounter_end`, and `local_encounter_return` events.
+- Added serialized/hash-covered return context and bounded idempotence ledgers in `rules_state["local_encounter_instance"]` for restart/replay-safe exactly-once return transitions.
+- Added `tests/test_local_encounter_return.py` coverage for happy path, role gating, save/load idempotence, non-overworld campaign plane returns, and deterministic trace/hash invariants.
 
 
 ## Troubleshooting
