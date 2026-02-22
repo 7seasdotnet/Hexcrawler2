@@ -5,11 +5,14 @@ from hexcrawler.cli.pygame_viewer import (
     interpolate_entity_position,
     lerp,
     _clamp_scroll_offset,
+    _get_return_context_for_space,
     _section_entries,
+    _truncate_text_to_pixel_width,
     _truncate_label,
 )
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import EntityState, Simulation
+from hexcrawler.sim.encounters import LocalEncounterInstanceModule
 from hexcrawler.sim.world import HexCoord
 
 
@@ -66,3 +69,38 @@ def test_clamp_scroll_offset_clamps_to_page_bounds() -> None:
     assert _clamp_scroll_offset(current=0, delta=-1, total_count=8, page_size=6) == 0
     assert _clamp_scroll_offset(current=0, delta=1, total_count=8, page_size=6) == 1
     assert _clamp_scroll_offset(current=1, delta=10, total_count=8, page_size=6) == 2
+
+
+def test_get_return_context_for_space_reads_serialized_rules_state() -> None:
+    world = load_world_json("content/examples/basic_map.json")
+    sim = Simulation(world=world, seed=9)
+    sim.set_rules_state(
+        LocalEncounterInstanceModule.name,
+        {
+            "active_by_local_space": {
+                "local_encounter:test": {
+                    "from_space_id": "overworld",
+                    "request_event_id": "evt-1",
+                    "from_location": {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+                }
+            }
+        },
+    )
+
+    context = _get_return_context_for_space(sim, "local_encounter:test")
+
+    assert context is not None
+    assert context["from_space_id"] == "overworld"
+    assert _get_return_context_for_space(sim, "local_encounter:missing") is None
+
+
+class _StubFont:
+    def size(self, text: str) -> tuple[int, int]:
+        return (len(text) * 7, 10)
+
+
+def test_truncate_text_to_pixel_width_is_deterministic() -> None:
+    font = _StubFont()
+    assert _truncate_text_to_pixel_width("abcdefghijk", font, max_width=49) == "abcd..."
+    assert _truncate_text_to_pixel_width(" short ", font, max_width=70) == "short"
+    assert _truncate_text_to_pixel_width("", font, max_width=70) == "?"
