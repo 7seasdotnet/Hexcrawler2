@@ -9,7 +9,16 @@
       "tags": ["patrol", "humanoid"],
       "payload": {
         "template": "scavenger_patrol",
-        "notes": "Descriptive only in 4H"
+        "notes": "Phase 6D-M0 local encounter request sample",
+        "actions": [
+          {
+            "action_type": "local_encounter_intent",
+            "template_id": "default_arena_v1",
+            "params": {
+              "suggested_local_template_id": "default_arena_v1"
+            }
+          }
+        ]
       }
     },
     {

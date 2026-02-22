@@ -724,7 +724,7 @@ class EncounterActionExecutionModule(RuleModule):
 
     name = "encounter_action_execution"
     _STATE_EXECUTED_ACTION_UIDS = "executed_action_uids"
-    _SUPPORTED_ACTION_TYPES = {"signal_intent", "track_intent", "spawn_intent"}
+    _SUPPORTED_ACTION_TYPES = {"signal_intent", "track_intent", "spawn_intent", "local_encounter_intent"}
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
@@ -822,6 +822,39 @@ class EncounterActionExecutionModule(RuleModule):
                 sim.state.world.append_spawn_descriptor(descriptor)
                 mutation = "spawn_descriptor_recorded"
                 executed_action_uids.add(action_uid)
+            elif action_type == "local_encounter_intent":
+                from_space_id, from_location = self._local_encounter_origin(sim=sim, location=location)
+                if from_space_id is None or from_location is None:
+                    outcome = "ignored_invalid_origin"
+                    mutation = "none"
+                    executed_action_uids.add(action_uid)
+                else:
+                    passthrough = self._encounter_passthrough_blob(event.params)
+                    suggested_local_template_id = self._optional_non_empty_string(
+                        params.get("suggested_local_template_id", template_id)
+                    )
+                    sim.schedule_event_at(
+                        tick=event.tick + 1,
+                        event_type=LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE,
+                        params={
+                            "action_uid": action_uid,
+                            "from_space_id": from_space_id,
+                            "from_location": from_location,
+                            "suggested_local_template_id": suggested_local_template_id,
+                            "encounter_context_passthrough": passthrough,
+                            "tick": passthrough.get("tick"),
+                            "context": passthrough.get("context"),
+                            "trigger": passthrough.get("trigger"),
+                            "location": passthrough.get("location"),
+                            "roll": passthrough.get("roll"),
+                            "category": passthrough.get("category"),
+                            "table_id": passthrough.get("table_id"),
+                            "entry_id": passthrough.get("entry_id"),
+                            "entry_tags": passthrough.get("entry_tags"),
+                        },
+                    )
+                    mutation = "local_encounter_requested"
+                    executed_action_uids.add(action_uid)
 
             sim.schedule_event_at(
                 tick=event.tick + 1,
@@ -874,6 +907,36 @@ class EncounterActionExecutionModule(RuleModule):
         if not isinstance(location, dict):
             raise ValueError("encounter_action_execute location must be an object")
         return copy.deepcopy(location)
+
+    def _local_encounter_origin(self, *, sim: Simulation, location: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+        from_space_id = str(location.get("space_id", ""))
+        from_space = sim.state.world.spaces.get(from_space_id)
+        if from_space is None or from_space.role != CAMPAIGN_SPACE_ROLE:
+            return None, None
+        return from_space_id, copy.deepcopy(location)
+
+    @staticmethod
+    def _optional_non_empty_string(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+    def _encounter_passthrough_blob(self, params: dict[str, Any]) -> dict[str, Any]:
+        blob = {
+            "tick": params.get("tick"),
+            "context": params.get("context"),
+            "trigger": params.get("trigger"),
+            "location": params.get("location"),
+            "roll": params.get("roll"),
+            "category": params.get("category"),
+            "table_id": params.get("table_id"),
+            "entry_id": params.get("entry_id"),
+            "entry_tags": params.get("entry_tags"),
+        }
+        return json.loads(json.dumps(blob, sort_keys=True))
 
 
 
