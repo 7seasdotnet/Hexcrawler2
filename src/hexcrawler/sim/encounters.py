@@ -948,6 +948,33 @@ class EncounterActionExecutionModule(RuleModule):
                 mutation = "spawn_descriptor_recorded"
                 executed_action_uids.add(action_uid)
             elif action_type == "local_encounter_intent":
+                actor_id, actor_space_id, actor_space_role = self._local_encounter_actor_context(sim=sim, location=location)
+                if actor_space_role != CAMPAIGN_SPACE_ROLE:
+                    outcome = "rejected_local_encounter_origin"
+                    mutation = "none"
+                    executed_action_uids.add(action_uid)
+                    sim.schedule_event_at(
+                        tick=event.tick + 1,
+                        event_type=ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
+                        params={
+                            "source_event_id": source_event_id,
+                            "execute_event_id": event.event_id,
+                            "action_index": action_index,
+                            "action_uid": action_uid,
+                            "action_type": action_type,
+                            "template_id": template_id,
+                            "location": location,
+                            "quantity": quantity,
+                            "outcome": outcome,
+                            "mutation": mutation,
+                            "applied": False,
+                            "reason": "local_encounter_not_allowed_from_local_space",
+                            "entity_id": actor_id,
+                            "space_id": actor_space_id,
+                            "tick": int(event.tick),
+                        },
+                    )
+                    continue
                 from_space_id, from_location = self._local_encounter_origin(sim=sim, location=location)
                 if from_space_id is None or from_location is None:
                     outcome = "ignored_invalid_origin"
@@ -1039,6 +1066,25 @@ class EncounterActionExecutionModule(RuleModule):
         if from_space is None or from_space.role != CAMPAIGN_SPACE_ROLE:
             return None, None
         return from_space_id, copy.deepcopy(location)
+
+    def _local_encounter_actor_context(
+        self, *, sim: Simulation, location: dict[str, Any]
+    ) -> tuple[str | None, str | None, str | None]:
+        location_space_id = str(location.get("space_id", ""))
+        if DEFAULT_PLAYER_ENTITY_ID in sim.state.entities:
+            player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+            player_space = sim.state.world.spaces.get(player.space_id)
+            return DEFAULT_PLAYER_ENTITY_ID, str(player.space_id), None if player_space is None else str(player_space.role)
+
+        entity_ids = sorted(entity_id for entity_id, entity in sim.state.entities.items() if entity.space_id == location_space_id)
+        if entity_ids:
+            entity_id = entity_ids[0]
+            entity = sim.state.entities[entity_id]
+            actor_space = sim.state.world.spaces.get(entity.space_id)
+            return entity_id, str(entity.space_id), None if actor_space is None else str(actor_space.role)
+
+        location_space = sim.state.world.spaces.get(location_space_id)
+        return None, location_space_id if location_space_id else None, None if location_space is None else str(location_space.role)
 
     @staticmethod
     def _optional_non_empty_string(value: Any) -> str | None:

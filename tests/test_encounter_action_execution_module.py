@@ -14,6 +14,7 @@ from hexcrawler.sim.encounters import (
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.movement import axial_to_world_xy
 from hexcrawler.sim.world import HexCoord
+from hexcrawler.sim.world import LOCAL_SPACE_ROLE, SQUARE_GRID_TOPOLOGY, SpaceState
 
 
 def _action_stub_params(actions: list[dict[str, object]]) -> dict[str, object]:
@@ -471,3 +472,57 @@ def test_local_encounter_request_save_load_and_replay_hash_stability() -> None:
         sim.advance_ticks(8)
 
     assert simulation_hash(replay_a) == simulation_hash(replay_b)
+
+
+def test_local_encounter_intent_rejected_when_actor_is_already_in_local_space() -> None:
+    sim = _build_execution_with_local_instance_sim(seed=777)
+    local_space_id = "local_encounter:fixture"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type=SQUARE_GRID_TOPOLOGY,
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 8, "height": 8},
+    )
+    sim.add_entity(EntityState(entity_id=DEFAULT_PLAYER_ENTITY_ID, position_x=2.0, position_y=2.0, space_id=local_space_id))
+
+    execute_params = {
+        "source_event_id": "evt-nested-local",
+        "tick": 11,
+        "context": "global",
+        "trigger": "travel",
+        "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 1, "r": -1}},
+        "roll": 12,
+        "category": "hostile",
+        "table_id": "basic_encounters",
+        "entry_id": "scavenger_patrol",
+        "entry_tags": ["patrol"],
+        "actions": [
+            {
+                "action_type": "local_encounter_intent",
+                "template_id": "default_arena_v1",
+                "params": {"suggested_local_template_id": "default_arena_v1"},
+            }
+        ],
+    }
+
+    sim.schedule_event_at(tick=0, event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE, params=execute_params)
+    sim.advance_ticks(4)
+
+    request_events = [entry for entry in sim.get_event_trace() if entry["event_type"] == LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE]
+    assert request_events == []
+
+    outcomes = [entry for entry in sim.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
+    assert len(outcomes) == 1
+    outcome = outcomes[0]["params"]
+    assert outcome["applied"] is False
+    assert outcome["reason"] == "local_encounter_not_allowed_from_local_space"
+    assert outcome["entity_id"] == DEFAULT_PLAYER_ENTITY_ID
+    assert outcome["space_id"] == local_space_id
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(EncounterActionExecutionModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    loaded_outcomes = [entry for entry in loaded.get_event_trace() if entry["event_type"] == ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE]
+    assert loaded_outcomes == outcomes
