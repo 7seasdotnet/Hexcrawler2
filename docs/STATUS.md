@@ -7,9 +7,8 @@
 
 
 ## What changed in this commit
-- Added a viewer-only local arena instrumentation overlay toggle (`F3`) that never mutates simulation state, command logs, or rules state.
-- Added read-only local arena overlay rendering in pygame viewer for anchors, doors, and interactables with stable ID labels when in Local-role square-grid spaces.
-- Added local arena HUD instrumentation for `space_id`, role (`campaign`/`local`), resolved local `template_id` (or `unknown`), and optional local encounter context (`request_event_id`/origin `from_space_id`) from authoritative simulation state.
+- Viewer now filters markers/entities by current space_id to prevent cross-space ghost rendering; adds minimal hover inspection.
+- Maintained viewer read-only invariants: no new commands/events and no simulation/substrate mutations.
 
 
 ## What Exists (folders / entry points)
@@ -237,9 +236,8 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added deterministic Local→Campaign return seam for Local-role encounters via `end_local_encounter_intent`, `local_encounter_end`, and `local_encounter_return` events.
-- Added serialized/hash-covered return context and bounded idempotence ledgers in `rules_state["local_encounter_instance"]` for restart/replay-safe exactly-once return transitions.
-- Added `tests/test_local_encounter_return.py` coverage for happy path, role gating, save/load idempotence, non-overworld campaign plane returns, and deterministic trace/hash invariants.
+- Viewer now filters markers/entities by current space_id to prevent cross-space ghost rendering; adds minimal hover inspection.
+- Maintained viewer read-only invariants: no new commands/events and no simulation/substrate mutations.
 
 
 ## Troubleshooting

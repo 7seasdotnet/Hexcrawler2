@@ -357,7 +357,8 @@ def _marker_cell_from_location(location: object, default_topology_type: str) -> 
     if not isinstance(coord, dict):
         return None
     topology_type = str(location.get("topology_type", default_topology_type))
-    space_id = str(location.get("space_id", "overworld"))
+    raw_space_id = location.get("space_id")
+    space_id = raw_space_id if isinstance(raw_space_id, str) and raw_space_id.strip() else "overworld"
     if topology_type == OVERWORLD_HEX_TOPOLOGY:
         try:
             normalized = {"q": int(coord["q"]), "r": int(coord["r"])}
@@ -372,6 +373,19 @@ def _marker_cell_from_location(location: object, default_topology_type: str) -> 
         return None
     coord_key = tuple(sorted((axis, int(value)) for axis, value in normalized.items()))
     return MarkerCellRef(space_id=space_id, topology_type=topology_type, coord_key=coord_key)
+
+
+def _is_in_current_space(obj_space_id: str | None, current_space_id: str) -> bool:
+    if obj_space_id is None:
+        return current_space_id == "overworld"
+    return obj_space_id == current_space_id
+
+
+def _entity_space_id(entity: EntityState) -> str | None:
+    value = getattr(entity, "space_id", None)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 def _truncate_label(text: str, max_length: int = 10) -> str:
@@ -402,7 +416,7 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
     markers_by_cell: dict[MarkerCellRef, list[MarkerRecord]] = {}
 
     def add_marker(cell: MarkerCellRef | None, marker: MarkerRecord) -> None:
-        if cell is None or cell.space_id != active_space_id or cell.topology_type != active_location_topology:
+        if cell is None or not _is_in_current_space(cell.space_id, active_space_id) or cell.topology_type != active_location_topology:
             return
         markers_by_cell.setdefault(cell, []).append(marker)
 
@@ -470,18 +484,19 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
         if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
             continue
-        if entity.space_id != active_space_id:
+        entity_space_id = _entity_space_id(entity)
+        if not _is_in_current_space(entity_space_id, active_space_id):
             continue
         label = entity.template_id if entity.template_id else _short_stable_id(entity.entity_id)
         if active_location_topology == SQUARE_GRID_TOPOLOGY:
             cell = MarkerCellRef(
-                space_id=entity.space_id,
+                space_id=entity_space_id or "overworld",
                 topology_type=active_location_topology,
                 coord_key=(("x", math.floor(entity.position_x)), ("y", math.floor(entity.position_y))),
             )
         else:
             cell = MarkerCellRef(
-                space_id=entity.space_id,
+                space_id=entity_space_id or "overworld",
                 topology_type=active_location_topology,
                 coord_key=(("q", entity.hex_coord.q), ("r", entity.hex_coord.r)),
             )
@@ -702,7 +717,13 @@ def _draw_spawned_entity(
     screen.set_clip(old_clip)
 
 
-def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, status_message: str | None) -> None:
+def _draw_hud(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    status_message: str | None,
+    hover_message: str | None,
+) -> None:
     entity = sim.state.entities[PLAYER_ID]
     active_space = sim.state.world.spaces.get(entity.space_id)
     if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
@@ -724,6 +745,8 @@ def _draw_hud(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, s
     ]
     if status_message:
         lines.append(f"status: {status_message}")
+    if hover_message:
+        lines.append(hover_message)
     y = 12
     for line in lines:
         surface = font.render(line, True, (240, 240, 240))
@@ -1019,8 +1042,14 @@ def _find_entity_at_pixel(
     *,
     radius_px: float = 10.0,
 ) -> str | None:
+    player = sim.state.entities.get(PLAYER_ID)
+    current_space_id = _entity_space_id(player) if player is not None else "overworld"
+    if current_space_id is None:
+        current_space_id = "overworld"
     candidates: list[tuple[float, str]] = []
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+        if not _is_in_current_space(_entity_space_id(entity), current_space_id):
+            continue
         px, py = _world_to_pixel(entity.position_x, entity.position_y, center)
         dx = pixel_pos[0] - px
         dy = pixel_pos[1] - py
@@ -1065,6 +1094,25 @@ def _find_world_marker_at_pixel(
     if not candidates:
         return None
     return candidates[0]
+
+
+def _hover_readout(sim: Simulation, pixel_pos: tuple[int, int], center: tuple[float, float]) -> str | None:
+    marker = _find_world_marker_at_pixel(sim, pixel_pos, center, radius_px=12.0)
+    player = sim.state.entities.get(PLAYER_ID)
+    current_space_id = _entity_space_id(player) if player is not None else "overworld"
+    if current_space_id is None:
+        current_space_id = "overworld"
+    if marker is not None:
+        return f"hover: kind={marker.marker_kind} id={marker.marker_id} space_id={current_space_id}"
+    entity_id = _find_entity_at_pixel(sim, pixel_pos, center, radius_px=12.0)
+    if entity_id is None:
+        return None
+    entity = sim.state.entities.get(entity_id)
+    if entity is None:
+        return None
+    template = entity.template_id if entity.template_id else "unknown"
+    entity_space_id = _entity_space_id(entity) or "overworld"
+    return f"hover: kind=entity id={entity.entity_id} template={template} space_id={entity_space_id}"
 
 
 def _current_input_vector() -> tuple[float, float]:
@@ -1513,10 +1561,23 @@ def run_pygame_viewer(
         now_seconds = pygame_module.time.get_ticks() / 1000.0
         alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
 
+        player = sim.state.entities.get(PLAYER_ID)
+        current_space_id = _entity_space_id(player) if player is not None else "overworld"
+        if current_space_id is None:
+            current_space_id = "overworld"
+
+        hover_message: str | None = None
+        mouse_pos = pygame_module.mouse.get_pos()
+        if viewport_rect.collidepoint(mouse_pos):
+            hover_message = _hover_readout(sim, mouse_pos, world_center)
+
         screen.fill((17, 18, 25))
         _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect)
         pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
         for entity_id in sorted(sim.state.entities):
+            entity = sim.state.entities[entity_id]
+            if not _is_in_current_space(_entity_space_id(entity), current_space_id):
+                continue
             interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
             if interpolated is None:
                 continue
@@ -1524,7 +1585,7 @@ def run_pygame_viewer(
                 _draw_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
             else:
                 _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, clip_rect=viewport_rect)
-        _draw_hud(screen, sim, font, status_message)
+        _draw_hud(screen, sim, font, status_message, hover_message)
         if show_local_arena_overlay:
             _draw_local_arena_overlay(screen, sim, world_center, marker_font, clip_rect=viewport_rect)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll, active_panel_section)
