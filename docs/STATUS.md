@@ -7,9 +7,9 @@
 
 
 ## What changed in this commit
-- Added `content/local_arenas/local_arenas.json` plus `hexcrawler.content.local_arenas` strict loader/validator (`DEFAULT_LOCAL_ARENAS_PATH`, deterministic normalization, explicit local-role/square-grid checks).
-- Extended `LocalEncounterInstanceModule` to deterministically select/apply structural local arena templates (suggested-template override, default fallback, minimal-safe fallback, idempotent applied-template ledger in serialized rules-state).
-- Added forensic `local_arena_template_applied` events and passthrough encounter context blob on `local_encounter_begin`, with focused tests for selection/fallback/save-load/hash stability.
+- Hardened `hexcrawler.content.local_arenas` normalization/validation to reject float values throughout template payload structures, including `topology_params` and nested metadata paths, for deterministic content behavior.
+- Tightened local arena validation: `doors[*].door_id` and `interactables[*].interactable_id` must be non-empty strings and unique within each template (including bool rejection via string-type enforcement).
+- Added focused Phase 6C-H1 tests for float rejection coverage (`metadata`, row metadata, `topology_params`) and stable ID enforcement for doors/interactables.
 
 
 ## What Exists (folders / entry points)
