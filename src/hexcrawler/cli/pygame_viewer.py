@@ -1655,6 +1655,7 @@ def run_pygame_viewer(
     context_menu: ContextMenuState | None = None
     previous_snapshot = extract_render_snapshot(sim)
     current_snapshot = previous_snapshot
+    tracked_space_id = _entity_space_id(sim.state.entities.get(PLAYER_ID)) or "overworld"
     tick_duration_seconds = SIM_TICK_SECONDS
     last_tick_time = pygame_module.time.get_ticks() / 1000.0
     recent_saves: list[str] = []
@@ -1761,6 +1762,10 @@ def run_pygame_viewer(
         current_space_id = _entity_space_id(player) if player is not None else "overworld"
         if current_space_id is None:
             current_space_id = "overworld"
+        if current_space_id != tracked_space_id:
+            tracked_space_id = current_space_id
+            local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
+            previous_snapshot = current_snapshot
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
 
         hover_message: str | None = None

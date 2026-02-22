@@ -7,9 +7,9 @@
 
 
 ## What changed in this commit
-- Added authoritative `local_encounter_instance.return_in_progress_by_local_space` gating so `end_local_encounter_intent` is idempotent per local-role space and emits deterministic `already_returning` outcomes for duplicate clicks.
-- Updated pygame viewer local-role RMB menu to show disabled `Returning…` while return is in progress and avoid enqueueing redundant return intents.
-- Added deterministic tests for duplicate end intents and save/load stability of return-in-progress gating.
+- Extended `local_encounter_return` forensic outcomes with explicit actor/space transition fields (`local_space_id`, `origin_space_id`, `actor_id`, `actor_space_id_before`, `actor_space_id_after`) for deterministic return-path debugging.
+- Updated pygame viewer to authoritatively follow the controlled entity `space_id` and reset camera/interpolation state on campaign↔local transitions to prevent stale local transforms after return.
+- Added deterministic regression coverage for full campaign→local→campaign return (including save/load round-trip and forensic before/after space assertions).
 
 
 ## What Exists (folders / entry points)
@@ -238,9 +238,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added authoritative per-local-space return-in-progress gating in `LocalEncounterInstanceModule` so local encounter return requests are idempotent at encounter level.
-- Updated pygame viewer local-space context menu to render disabled `Returning…` while return processing is in progress.
-- Added deterministic regression tests for duplicate end-intent gating and save/load persistence of return-in-progress state.
+- Extended deterministic local return forensics with explicit actor space-before/after fields to distinguish simulation transition success from viewer-follow issues.
+- Updated pygame viewer to hard-follow controlled entity `space_id` and reset per-space camera/interpolation state when transitioning between `campaign` and `local` role spaces.
+- Added a focused deterministic regression test for overworld→local encounter→end encounter→overworld loop with save/load stability and return-forensics assertions.
 
 
 ## Troubleshooting
