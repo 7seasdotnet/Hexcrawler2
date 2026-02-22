@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "templates": [
+    {
+      "template_id": "default_arena_v1",
+      "topology_type": "square_grid",
+      "topology_params": {
+        "width": 16,
+        "height": 12,
+        "origin": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      "role": "local",
+      "anchors": [
+        {
+          "anchor_id": "entry",
+          "coord": {
+            "x": 1,
+            "y": 6
+          },
+          "tags": [
+            "entry"
+          ]
+        },
+        {
+          "anchor_id": "exit",
+          "coord": {
+            "x": 14,
+            "y": 6
+          },
+          "tags": [
+            "exit"
+          ]
+        }
+      ],
+      "doors": [],
+      "interactables": [],
+      "metadata": {
+        "description": "Structural only. No semantics."
+      }
+    }
+  ],
+  "default_template_id": "default_arena_v1"
+}

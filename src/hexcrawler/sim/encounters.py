@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
+from hexcrawler.content.local_arenas import DEFAULT_LOCAL_ARENAS_PATH, LocalArenaTemplate, load_local_arena_templates_json
 from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, TRAVEL_STEP_EVENT_TYPE, SimCommand, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, HexCoord, LOCAL_SPACE_ROLE, RumorRecord, SpaceState
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -26,6 +28,7 @@ END_LOCAL_ENCOUNTER_INTENT = "end_local_encounter_intent"
 END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE = "end_local_encounter_outcome"
 LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
 LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
+LOCAL_ARENA_TEMPLATE_APPLIED_EVENT_TYPE = "local_arena_template_applied"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
@@ -207,7 +210,13 @@ class LocalEncounterRequestModule(RuleModule):
                 "tick": int(event.params.get("tick", event.tick)),
                 "from_space_id": from_location.space_id,
                 "from_location": from_location.to_dict(),
+                "context": self._optional_string(event.params.get("context")),
                 "trigger": self._optional_string(event.params.get("trigger")),
+                "location": copy.deepcopy(event.params.get("location")),
+                "roll": self._optional_int(event.params.get("roll")),
+                "category": self._optional_string(event.params.get("category")),
+                "table_id": self._optional_string(event.params.get("table_id")),
+                "entry_id": self._optional_string(event.params.get("entry_id")),
                 "encounter": {
                     "table_id": self._optional_string(event.params.get("table_id")),
                     "entry_id": self._optional_string(event.params.get("entry_id")),
@@ -241,7 +250,7 @@ class LocalEncounterRequestModule(RuleModule):
 
 
 class LocalEncounterInstanceModule(RuleModule):
-    """Phase 6B bridge: deterministic local encounter instancing and transition.
+    """Phase 6C bridge: deterministic local encounter instancing and structural template application.
 
     Applies to both space roles:
     - campaign role emits `local_encounter_request` upstream.
@@ -252,6 +261,18 @@ class LocalEncounterInstanceModule(RuleModule):
     _STATE_PROCESSED_REQUEST_IDS = "processed_request_ids"
     _STATE_ACTIVE_BY_LOCAL_SPACE = "active_by_local_space"
     _STATE_PROCESSED_END_ACTION_UIDS = "processed_end_action_uids"
+    _STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE = "applied_template_by_local_space"
+
+    def __init__(self, local_arenas_path: str = DEFAULT_LOCAL_ARENAS_PATH) -> None:
+        self._template_by_id: dict[str, LocalArenaTemplate] = {}
+        self._default_template_id: str | None = None
+        self._load_failure_reason: str | None = None
+        try:
+            registry = load_local_arena_templates_json(local_arenas_path)
+            self._template_by_id = registry.by_id()
+            self._default_template_id = registry.default_template_id
+        except Exception:
+            self._load_failure_reason = "invalid_template_payload"
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
@@ -331,7 +352,6 @@ class LocalEncounterInstanceModule(RuleModule):
         self._on_local_encounter_end(sim, event)
 
     def _on_local_encounter_request(self, sim: Simulation, event: SimEvent) -> None:
-
         state = self._rules_state(sim)
         processed_ids = list(state[self._STATE_PROCESSED_REQUEST_IDS])
         request_id = str(event.event_id)
@@ -375,20 +395,45 @@ class LocalEncounterInstanceModule(RuleModule):
             )
             sim.state.world.spaces[local_space_id] = local_space
 
+        template_id, selection_reason = self._select_template(event.params)
+        applied_template_map = dict(state[self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE])
+        template_applied, template_reason = self._apply_template(
+            local_space=local_space,
+            local_space_id=local_space_id,
+            template_id=template_id,
+            applied_template_map=applied_template_map,
+            selection_reason=selection_reason,
+        )
+        if template_applied:
+            applied_template_map[local_space_id] = template_id
+
         entity_id = self._select_entity_id(sim=sim, from_space_id=from_space_id)
         transition_applied = False
         from_location_payload = event.params.get("from_location")
         if entity_id is not None:
             entity = sim.state.entities[entity_id]
             from_location_payload = sim._entity_location_ref(entity).to_dict()
-            to_spawn_coord = local_space.default_spawn_coord()
+            to_spawn_coord = self._spawn_coord(local_space)
             next_x, next_y = sim._coord_to_world_xy(space=local_space, coord=to_spawn_coord)
             entity.space_id = local_space.space_id
             entity.position_x = next_x
             entity.position_y = next_y
             transition_applied = True
         else:
-            to_spawn_coord = local_space.default_spawn_coord()
+            to_spawn_coord = self._spawn_coord(local_space)
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=LOCAL_ARENA_TEMPLATE_APPLIED_EVENT_TYPE,
+            params={
+                "tick": int(event.tick),
+                "request_event_id": request_id,
+                "local_space_id": local_space_id,
+                "template_id": template_id,
+                "applied": template_applied,
+                "reason": template_reason,
+            },
+        )
 
         sim.schedule_event_at(
             tick=event.tick,
@@ -401,6 +446,9 @@ class LocalEncounterInstanceModule(RuleModule):
                 "from_location": copy.deepcopy(from_location_payload),
                 "to_spawn_coord": dict(to_spawn_coord),
                 "transition_applied": transition_applied,
+                "template_id": template_id,
+                "template_selection_reason": selection_reason,
+                "encounter_context_passthrough": self._encounter_passthrough_blob(event.params),
             },
         )
 
@@ -413,14 +461,128 @@ class LocalEncounterInstanceModule(RuleModule):
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
                 "started_tick": int(event.tick),
             }
-            ordered_space_ids = sorted(active_by_local_space.keys())
-            state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
-                space_id: active_by_local_space[space_id] for space_id in ordered_space_ids[-MAX_ACTIVE_LOCAL_ENCOUNTERS:]
-            }
 
+        ordered_space_ids = sorted(active_by_local_space.keys())
+        state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
+            space_id: active_by_local_space[space_id] for space_id in ordered_space_ids[-MAX_ACTIVE_LOCAL_ENCOUNTERS:]
+        }
+        state[self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE] = {
+            space_id: applied_template_map[space_id] for space_id in sorted(applied_template_map)
+        }
         processed_ids.append(request_id)
         state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
         sim.set_rules_state(self.name, state)
+
+    def _select_template(self, params: dict[str, Any]) -> tuple[str, str]:
+        suggested = params.get("suggested_local_template_id")
+        suggested_id = str(suggested) if isinstance(suggested, str) and suggested else None
+        if suggested_id is not None and suggested_id in self._template_by_id:
+            return suggested_id, "suggested"
+        if self._default_template_id and self._default_template_id in self._template_by_id:
+            if suggested_id is not None:
+                return self._default_template_id, "unknown_template"
+            return self._default_template_id, "default"
+        if self._load_failure_reason is not None:
+            return "__fallback_minimal__", self._load_failure_reason
+        return "__fallback_minimal__", "missing_default"
+
+    def _apply_template(
+        self,
+        *,
+        local_space: SpaceState,
+        local_space_id: str,
+        template_id: str,
+        applied_template_map: dict[str, str],
+        selection_reason: str,
+    ) -> tuple[bool, str]:
+        if applied_template_map.get(local_space_id) == template_id:
+            return False, "already_applied"
+        if template_id == "__fallback_minimal__":
+            self._apply_minimal_fallback(local_space)
+            return True, selection_reason
+        template = self._template_by_id.get(template_id)
+        if template is None:
+            self._apply_minimal_fallback(local_space)
+            return True, "unknown_template"
+        self._apply_structural_template(local_space=local_space, template=template)
+        return True, "applied"
+
+    def _apply_structural_template(self, *, local_space: SpaceState, template: LocalArenaTemplate) -> None:
+        local_space.topology_type = template.topology_type
+        local_space.role = LOCAL_SPACE_ROLE
+        local_space.topology_params = copy.deepcopy(dict(template.topology_params))
+        local_space.anchors = {}
+        for anchor in template.anchors:
+            anchor_id = str(anchor["anchor_id"])
+            metadata = copy.deepcopy(dict(anchor.get("metadata", {})))
+            metadata["tags"] = list(anchor.get("tags", []))
+            local_space.anchors[anchor_id] = AnchorRecord(
+                anchor_id=anchor_id,
+                space_id=local_space.space_id,
+                coord=copy.deepcopy(dict(anchor["coord"])),
+                kind="transition",
+                target={"type": "space", "space_id": local_space.space_id},
+                metadata=metadata,
+            )
+
+        local_space.doors = {}
+        for row in template.doors:
+            payload = dict(row)
+            door_id = str(payload.get("door_id", ""))
+            if not door_id:
+                continue
+            payload["door_id"] = door_id
+            payload["space_id"] = local_space.space_id
+            local_space.doors[door_id] = DoorRecord.from_dict(payload)
+
+        local_space.interactables = {}
+        for row in template.interactables:
+            payload = dict(row)
+            interactable_id = str(payload.get("interactable_id", ""))
+            if not interactable_id:
+                continue
+            payload["interactable_id"] = interactable_id
+            payload["space_id"] = local_space.space_id
+            local_space.interactables[interactable_id] = InteractableRecord.from_dict(payload)
+
+    def _apply_minimal_fallback(self, local_space: SpaceState) -> None:
+        local_space.topology_type = SQUARE_GRID_TOPOLOGY
+        local_space.role = LOCAL_SPACE_ROLE
+        local_space.topology_params = {"width": 8, "height": 8, "origin": {"x": 0, "y": 0}}
+        local_space.doors = {}
+        local_space.interactables = {}
+        local_space.anchors = {
+            "entry": AnchorRecord(
+                anchor_id="entry",
+                space_id=local_space.space_id,
+                coord={"x": 0, "y": 0},
+                kind="transition",
+                target={"type": "space", "space_id": local_space.space_id},
+                metadata={"tags": ["entry"], "fallback": True},
+            )
+        }
+
+
+    @staticmethod
+    def _spawn_coord(local_space: SpaceState) -> dict[str, int]:
+        entry = local_space.anchors.get("entry")
+        if entry is not None and local_space.is_valid_cell(entry.coord):
+            return copy.deepcopy(entry.coord)
+        return local_space.default_spawn_coord()
+
+    def _encounter_passthrough_blob(self, params: dict[str, Any]) -> dict[str, Any]:
+        blob = {
+            "tick": params.get("tick"),
+            "context": params.get("context"),
+            "trigger": params.get("trigger"),
+            "location": params.get("location"),
+            "roll": params.get("roll"),
+            "category": params.get("category"),
+            "table_id": params.get("table_id"),
+            "entry_id": params.get("entry_id"),
+            "tags": params.get("tags"),
+        }
+        return json.loads(json.dumps(blob, sort_keys=True))
 
     def _on_local_encounter_end(self, sim: Simulation, event: SimEvent) -> None:
         state = self._rules_state(sim)
@@ -493,12 +655,15 @@ class LocalEncounterInstanceModule(RuleModule):
         raw_processed = state.get(self._STATE_PROCESSED_REQUEST_IDS, [])
         raw_processed_end = state.get(self._STATE_PROCESSED_END_ACTION_UIDS, [])
         raw_active_by_local_space = state.get(self._STATE_ACTIVE_BY_LOCAL_SPACE, {})
+        raw_applied_template_by_local_space = state.get(self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE, {})
         if not isinstance(raw_processed, list):
             raise ValueError("local_encounter_instance.processed_request_ids must be a list")
         if not isinstance(raw_processed_end, list):
             raise ValueError("local_encounter_instance.processed_end_action_uids must be a list")
         if not isinstance(raw_active_by_local_space, dict):
             raise ValueError("local_encounter_instance.active_by_local_space must be an object")
+        if not isinstance(raw_applied_template_by_local_space, dict):
+            raise ValueError("local_encounter_instance.applied_template_by_local_space must be an object")
         normalized = [str(value) for value in raw_processed if str(value)]
         normalized_processed_end = [str(value) for value in raw_processed_end if str(value)]
         normalized_active_by_local_space: dict[str, dict[str, Any]] = {}
@@ -530,6 +695,11 @@ class LocalEncounterInstanceModule(RuleModule):
         ordered_space_ids = sorted(normalized_active_by_local_space.keys())
         state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
             space_id: normalized_active_by_local_space[space_id] for space_id in ordered_space_ids[-MAX_ACTIVE_LOCAL_ENCOUNTERS:]
+        }
+        state[self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE] = {
+            str(space_id): str(template_id)
+            for space_id, template_id in sorted(raw_applied_template_by_local_space.items())
+            if isinstance(space_id, str) and space_id and isinstance(template_id, str) and template_id
         }
         return state
 
