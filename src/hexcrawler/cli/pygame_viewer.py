@@ -68,6 +68,7 @@ INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
 CONTEXT_MENU_ROW_HEIGHT = 28
+CONTEXT_MENU_TEXT_PADDING_X = 10
 LOCAL_VIEWPORT_FILL_RATIO = 0.72
 
 MARKER_SCATTER_RADIUS_MIN = 8.0
@@ -200,6 +201,16 @@ class SimulationController:
                     "target": {"kind": target_kind, "id": target_id},
                     "duration_ticks": duration_ticks,
                 },
+            )
+        )
+
+    def end_local_encounter(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="end_local_encounter_intent",
+                params={"entity_id": self.entity_id},
             )
         )
 
@@ -827,6 +838,21 @@ def _active_local_arena_template_id(sim: Simulation, active_space_id: str, activ
     return "unknown"
 
 
+def _get_return_context_for_space(sim: Simulation, local_space_id: str) -> dict[str, Any] | None:
+    local_encounter_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    if not isinstance(local_encounter_state, dict):
+        return None
+    active_by_local_space = local_encounter_state.get("active_by_local_space")
+    if not isinstance(active_by_local_space, dict):
+        return None
+    context = active_by_local_space.get(local_space_id)
+    if not isinstance(context, dict):
+        return None
+    if not isinstance(context.get("from_space_id"), str) or not context.get("from_space_id"):
+        return None
+    return context
+
+
 def _draw_local_arena_overlay(
     screen: pygame.Surface,
     sim: Simulation,
@@ -1086,9 +1112,31 @@ def _draw_context_menu(
     for index, item in enumerate(menu_state.items):
         row_rect = pygame.Rect(menu_rect.x, menu_rect.y + (index * CONTEXT_MENU_ROW_HEIGHT), menu_rect.width, CONTEXT_MENU_ROW_HEIGHT)
         pygame.draw.line(screen, (64, 68, 84), (row_rect.x, row_rect.bottom), (row_rect.right, row_rect.bottom), 1)
-        label = font.render(item.label, True, (245, 245, 245))
-        screen.blit(label, (row_rect.x + 10, row_rect.y + 5))
+        max_label_width = menu_rect.width - (2 * CONTEXT_MENU_TEXT_PADDING_X)
+        label_text = _truncate_text_to_pixel_width(item.label, font, max_label_width)
+        label = font.render(label_text, True, (245, 245, 245))
+        screen.blit(label, (row_rect.x + CONTEXT_MENU_TEXT_PADDING_X, row_rect.y + 5))
     return menu_rect
+
+
+def _truncate_text_to_pixel_width(text: str, font: Any, max_width: int) -> str:
+    normalized = text.strip() if isinstance(text, str) else ""
+    if not normalized:
+        return "?"
+    if max_width <= 0:
+        return "..."
+    if font.size(normalized)[0] <= max_width:
+        return normalized
+    ellipsis = "..."
+    if font.size(ellipsis)[0] > max_width:
+        return ellipsis
+    limit = len(normalized)
+    while limit > 0:
+        candidate = f"{normalized[:limit]}{ellipsis}"
+        if font.size(candidate)[0] <= max_width:
+            return candidate
+        limit -= 1
+    return ellipsis
 
 
 def _world_to_pixel(world_x: float, world_y: float, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
@@ -1449,6 +1497,8 @@ def run_pygame_viewer(
 
     def build_context_menu(event_pos: tuple[int, int]) -> ContextMenuState | None:
         items: list[ContextMenuItem] = []
+        player = sim.state.entities.get(PLAYER_ID)
+        active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
         if viewport_rect.collidepoint(event_pos):
             markers = _find_world_marker_candidates_at_pixel(sim, event_pos, world_center, world_zoom_scale)
             if markers:
@@ -1502,6 +1552,26 @@ def run_pygame_viewer(
                     items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
                     items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
                     items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+        if active_space is not None and str(getattr(active_space, "role", "")) == "local":
+            return_context = _get_return_context_for_space(sim, active_space.space_id)
+            if return_context is None:
+                items.append(ContextMenuItem(label="Return to origin (unavailable)", action="noop"))
+                items.append(ContextMenuItem(label=f"No active return context for {active_space.space_id}", action="noop"))
+            else:
+                from_space_id = str(return_context.get("from_space_id", "?"))
+                detail_parts = [from_space_id]
+                from_location = return_context.get("from_location")
+                if isinstance(from_location, dict):
+                    detail_parts.append(_format_location(from_location))
+                request_event_id = return_context.get("request_event_id")
+                if isinstance(request_event_id, str) and request_event_id:
+                    detail_parts.append(f"req={request_event_id}")
+                items.append(
+                    ContextMenuItem(
+                        label=f"Return to origin ({' | '.join(detail_parts)})",
+                        action="return_to_origin",
+                    )
+                )
         items.extend(build_recent_save_items())
         if not items:
             return None
@@ -1611,6 +1681,8 @@ def run_pygame_viewer(
                         elif item.action == "interaction" and item.payload is not None:
                             interaction_type, target_kind, target_id, duration_str = item.payload.split(":", 3)
                             controller.interaction_intent(interaction_type, target_kind, target_id, int(duration_str))
+                        elif item.action == "return_to_origin":
+                            controller.end_local_encounter()
                 context_menu = None
 
         move_x, move_y = _current_input_vector()
