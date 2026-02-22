@@ -11,10 +11,12 @@ SUPPORTED_LOCAL_ARENA_TOPOLOGIES = {"square_grid"}
 
 
 def _is_json_primitive(value: Any) -> bool:
-    return value is None or isinstance(value, (bool, int, float, str))
+    return value is None or isinstance(value, (bool, int, str))
 
 
 def _normalize_json_value(value: Any, *, field_name: str) -> Any:
+    if isinstance(value, float):
+        raise ValueError(f"{field_name} must not contain float values")
     if _is_json_primitive(value):
         return value
     if isinstance(value, list):
@@ -84,6 +86,7 @@ def validate_local_arena_templates_payload(payload: dict[str, Any]) -> None:
         topology_params = template.get("topology_params")
         if not isinstance(topology_params, dict):
             raise ValueError(f"templates[{index}] field topology_params must be an object")
+        _normalize_json_value(topology_params, field_name=f"templates[{index}].topology_params")
         width = topology_params.get("width")
         height = topology_params.get("height")
         if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
@@ -131,9 +134,21 @@ def validate_local_arena_templates_payload(payload: dict[str, Any]) -> None:
             rows = template.get(field, [])
             if not isinstance(rows, list):
                 raise ValueError(f"templates[{index}] field {field} must be a list when present")
+            seen_row_ids: set[str] = set()
             for row_index, row in enumerate(rows):
                 if not isinstance(row, dict):
                     raise ValueError(f"templates[{index}].{field}[{row_index}] must be an object")
+                if field == "doors":
+                    row_id = row.get("door_id")
+                    id_field = "door_id"
+                else:
+                    row_id = row.get("interactable_id")
+                    id_field = "interactable_id"
+                if not isinstance(row_id, str) or not row_id:
+                    raise ValueError(f"templates[{index}].{field}[{row_index}].{id_field} must be non-empty string")
+                if row_id in seen_row_ids:
+                    raise ValueError(f"templates[{index}] duplicate {id_field}: {row_id}")
+                seen_row_ids.add(row_id)
                 _normalize_json_value(row, field_name=f"templates[{index}].{field}[{row_index}]")
 
         _normalize_json_value(template.get("metadata", {}), field_name=f"templates[{index}].metadata")
@@ -171,12 +186,12 @@ def _registry_from_payload(payload: dict[str, Any]) -> LocalArenaTemplateRegistr
                 anchors=tuple(normalized_anchors),
                 doors=tuple(
                     _normalize_json_value(door, field_name="door")
-                    for door in sorted(row.get("doors", []), key=lambda value: str(value.get("door_id", "")))
+                    for door in sorted(row.get("doors", []), key=lambda value: str(value["door_id"]))
                 ),
                 interactables=tuple(
                     _normalize_json_value(interactable, field_name="interactable")
                     for interactable in sorted(
-                        row.get("interactables", []), key=lambda value: str(value.get("interactable_id", ""))
+                        row.get("interactables", []), key=lambda value: str(value["interactable_id"])
                     )
                 ),
                 metadata=_normalize_json_value(row.get("metadata", {}), field_name="metadata"),
