@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M5 — SiteEffects substrate adds deterministic per-site pending effects markers scheduled from stale transitions.
-- **Next action:** Phase 6D-M6 deterministic consumption policy design for pending site effects (still marker-only; no random encounter spawning).
+- **Current phase:** Phase 6D-M6 — deterministic pending-effect consumption/apply for site re-entry (marker-only; no random encounter spawning).
+- **Next action:** Phase 6D-M7 — extend consumption handlers with additional marker-only effect types / alternate reinhabitation policies while preserving deterministic dispatch and idempotence.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Extended serialized/hash-covered `site_state_by_key` records with bounded `pending_effects` (JSON-safe normalization + deterministic FIFO drop-oldest via tail retention when over cap).
-- Added deterministic stale-transition scheduling for one marker effect (`reinhabitation_pending`, source `stale_policy`) with duplicate prevention and `site_effect_scheduled` forensic emission.
-- Added focused Phase 6D-M5 tests for one-time scheduling, save/load stability, and pending-effect boundedness behavior.
+- Extended serialized/hash-covered per-site state with deterministic `rehab_generation` (default `0` on legacy loads) and preserved canonical `pending_effects` normalization behavior.
+- Added deterministic site-entry consumption dispatch for marker effects (`reinhabitation_pending`), with idempotent consume-once semantics, `site_effect_consumed` forensics, and deterministic rejection for malformed consumption state.
+- Implemented first apply-policy (`reinhabitation_pending` => replace participants) using generation-scoped deterministic hostile IDs and added focused Phase 6D-M6 save/load + replay-hash tests (still marker-only; no random spawn tables).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`

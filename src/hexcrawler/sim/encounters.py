@@ -30,6 +30,8 @@ LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
 LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
 SITE_STATE_TICK_EVENT_TYPE = "site_state_tick"
 SITE_EFFECT_SCHEDULED_EVENT_TYPE = "site_effect_scheduled"
+SITE_EFFECT_CONSUMED_EVENT_TYPE = "site_effect_consumed"
+SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE = "site_effect_consumption_rejected"
 LOCAL_ARENA_TEMPLATE_APPLIED_EVENT_TYPE = "local_arena_template_applied"
 LOCAL_ENCOUNTER_ENEMY_ENTRY_ANCHOR_ID = "enemy_entry"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
@@ -503,6 +505,14 @@ class LocalEncounterInstanceModule(RuleModule):
             )
             sim.state.world.spaces[local_space_id] = local_space
 
+        if reused_existing:
+            consumption_result = self._consume_pending_site_effect_for_entry(
+                site_key=normalized_site_key,
+                site_state_by_key=site_state_by_key,
+            )
+        else:
+            consumption_result = {"status": "none"}
+
         template_id, selection_reason = self._select_template(event.params)
         applied_template_map = dict(state[self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE])
         template_applied, template_reason = self._apply_template(
@@ -547,19 +557,30 @@ class LocalEncounterInstanceModule(RuleModule):
                         participant_reason = "local_encounter_participant_id_conflict"
                         to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
                     elif reused_existing:
-                        existing_participant_ids = sorted(
-                            candidate_id
-                            for candidate_id, candidate in sim.state.entities.items()
-                            if candidate.space_id == local_space.space_id and candidate.template_id == "encounter_hostile_v1"
-                        )
-                        participant_spawn_records = [
-                            {
-                                "entity_id": participant_id,
-                                "coord": copy.deepcopy(sim._entity_location_ref(sim.state.entities[participant_id]).coord),
-                                "placement_rule": "reuse_existing",
-                            }
-                            for participant_id in existing_participant_ids
-                        ]
+                        existing_participant_ids = self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id)
+                        if consumption_result["status"] == "consumed":
+                            replacement = self._spawn_reinhabitation_generation(
+                                sim=sim,
+                                local_space=local_space,
+                                site_key=normalized_site_key,
+                                generation=int(consumption_result["generation_after"]),
+                                occupied_coords=(resolved_spawn_coord,),
+                            )
+                            if replacement is None:
+                                participant_reason = "reinhabitation_replace_failed"
+                                consumption_result = {"status": "rejected", "reason": "participant_replace_failed"}
+                            else:
+                                participant_spawn_records = replacement
+                                site_state_by_key = consumption_result["site_state_by_key"]
+                        else:
+                            participant_spawn_records = [
+                                {
+                                    "entity_id": participant_id,
+                                    "coord": copy.deepcopy(sim._entity_location_ref(sim.state.entities[participant_id]).coord),
+                                    "placement_rule": "reuse_existing",
+                                }
+                                for participant_id in existing_participant_ids
+                            ]
                         entity.space_id = local_space.space_id
                         entity.position_x = next_x
                         entity.position_y = next_y
@@ -620,6 +641,30 @@ class LocalEncounterInstanceModule(RuleModule):
                 "reason": template_reason,
             },
         )
+
+        if consumption_result["status"] == "consumed":
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=SITE_EFFECT_CONSUMED_EVENT_TYPE,
+                params={
+                    "site_key": copy.deepcopy(normalized_site_key),
+                    "effect_type": REINHABITATION_PENDING_EFFECT_TYPE,
+                    "source": "entry_policy",
+                    "generation_after": int(consumption_result["generation_after"]),
+                    "tick": int(event.tick),
+                },
+            )
+        elif consumption_result["status"] == "rejected":
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
+                params={
+                    "site_key": copy.deepcopy(normalized_site_key),
+                    "source": "entry_policy",
+                    "reason": str(consumption_result["reason"]),
+                    "tick": int(event.tick),
+                },
+            )
 
         sim.schedule_event_at(
             tick=event.tick,
@@ -1191,6 +1236,9 @@ class LocalEncounterInstanceModule(RuleModule):
         pending_effects: list[Any] = []
         if isinstance(existing, dict):
             pending_effects = self._normalize_pending_effects(existing.get("pending_effects", []))
+        rehab_generation = 0
+        if isinstance(existing, dict):
+            rehab_generation = max(0, int(existing.get("rehab_generation", 0)))
         site_state_by_key[site_key_json] = {
             "site_key": copy.deepcopy(site_key),
             "status": status,
@@ -1198,6 +1246,7 @@ class LocalEncounterInstanceModule(RuleModule):
             "next_check_tick": int(next_check_tick),
             "tags": tags,
             "pending_effects": pending_effects,
+            "rehab_generation": rehab_generation,
         }
         return site_state_by_key
 
@@ -1216,6 +1265,7 @@ class LocalEncounterInstanceModule(RuleModule):
         if status == "stale":
             tags = self._normalize_tags([*tags, "stale"])
         pending_effects = self._normalize_pending_effects(payload.get("pending_effects", []))
+        rehab_generation = max(0, int(payload.get("rehab_generation", 0)))
         return {
             "site_key": copy.deepcopy(site_key),
             "status": status,
@@ -1223,7 +1273,117 @@ class LocalEncounterInstanceModule(RuleModule):
             "next_check_tick": next_check_tick,
             "tags": tags,
             "pending_effects": pending_effects,
+            "rehab_generation": rehab_generation,
         }
+
+    def _consume_pending_site_effect_for_entry(
+        self,
+        *,
+        site_key: dict[str, Any],
+        site_state_by_key: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        site_key_json = self._site_key_json(site_key)
+        existing = site_state_by_key.get(site_key_json)
+        if not isinstance(existing, dict):
+            return {"status": "rejected", "reason": "missing_site_state"}
+        pending_effects = existing.get("pending_effects")
+        if not isinstance(pending_effects, list):
+            return {"status": "rejected", "reason": "invalid_pending_effects_schema"}
+
+        normalized_site_state = self._normalize_site_state_payload(existing)
+        if normalized_site_state is None:
+            return {"status": "rejected", "reason": "invalid_site_state_payload"}
+
+        handlers = self._site_effect_entry_handlers()
+        consumed_index: int | None = None
+        consumed_result: dict[str, Any] | None = None
+        for idx, effect in enumerate(normalized_site_state["pending_effects"]):
+            effect_type = str(effect.get("effect_type", ""))
+            handler = handlers.get(effect_type)
+            if handler is None:
+                continue
+            consumed_index = idx
+            consumed_result = handler(site_state=normalized_site_state)
+            break
+        if consumed_index is None or consumed_result is None:
+            return {"status": "none"}
+
+        updated_effects = list(normalized_site_state["pending_effects"])
+        del updated_effects[consumed_index]
+        normalized_site_state["pending_effects"] = updated_effects
+        normalized_site_state["rehab_generation"] = int(consumed_result["generation_after"])
+        updated_state_by_key = dict(site_state_by_key)
+        updated_state_by_key[site_key_json] = normalized_site_state
+        return {
+            "status": "consumed",
+            "generation_after": int(consumed_result["generation_after"]),
+            "site_state_by_key": updated_state_by_key,
+        }
+
+    def _site_effect_entry_handlers(self) -> dict[str, Any]:
+        return {
+            REINHABITATION_PENDING_EFFECT_TYPE: self._consume_reinhabitation_pending_effect,
+        }
+
+    @staticmethod
+    def _consume_reinhabitation_pending_effect(*, site_state: dict[str, Any]) -> dict[str, Any]:
+        return {"generation_after": int(site_state.get("rehab_generation", 0)) + 1}
+
+    def _spawn_reinhabitation_generation(
+        self,
+        *,
+        sim: Simulation,
+        local_space: SpaceState,
+        site_key: dict[str, Any],
+        generation: int,
+        occupied_coords: tuple[dict[str, int], ...],
+    ) -> list[dict[str, Any]] | None:
+        participant_coord, participant_placement_rule = self._resolve_participant_placement(
+            local_space=local_space,
+            occupied_coords=occupied_coords,
+        )
+        if participant_coord is None:
+            return None
+        try:
+            spawn_x, spawn_y = sim._coord_to_world_xy(space=local_space, coord=participant_coord)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        spawn_entity_id = self._generation_scoped_participant_id(site_key=site_key, generation=generation, index=0)
+        if spawn_entity_id in sim.state.entities:
+            return None
+
+        for participant_id in self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id):
+            sim.state.entities.pop(participant_id, None)
+        sim.add_entity(
+            EntityState(
+                entity_id=spawn_entity_id,
+                position_x=spawn_x,
+                position_y=spawn_y,
+                space_id=local_space.space_id,
+                template_id="encounter_hostile_v1",
+            )
+        )
+        return [
+            {
+                "entity_id": spawn_entity_id,
+                "coord": copy.deepcopy(participant_coord),
+                "placement_rule": participant_placement_rule,
+            }
+        ]
+
+    @staticmethod
+    def _hostile_participant_ids_for_space(*, sim: Simulation, local_space_id: str) -> list[str]:
+        return sorted(
+            candidate_id
+            for candidate_id, candidate in sim.state.entities.items()
+            if candidate.space_id == local_space_id and candidate.template_id == "encounter_hostile_v1"
+        )
+
+    @staticmethod
+    def _generation_scoped_participant_id(*, site_key: dict[str, Any], generation: int, index: int) -> str:
+        site_hash = hashlib.sha256(json.dumps(site_key, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+        return f"{SPAWN_ENTITY_ID_PREFIX}:{site_hash}:gen{int(generation)}:{int(index)}"
 
     def _schedule_site_effect_once(
         self,
