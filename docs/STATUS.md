@@ -8,9 +8,9 @@
 
 
 ## What changed in this commit
-- Extended serialized/hash-covered per-site state with deterministic `rehab_generation` (default `0` on legacy loads) and preserved canonical `pending_effects` normalization behavior.
-- Added deterministic site-entry consumption dispatch for marker effects (`reinhabitation_pending`), with idempotent consume-once semantics, `site_effect_consumed` forensics, and deterministic rejection for malformed consumption state.
-- Implemented first apply-policy (`reinhabitation_pending` => replace participants) using generation-scoped deterministic hostile IDs and added focused Phase 6D-M6 save/load + replay-hash tests (still marker-only; no random spawn tables).
+- Hotfixed Phase 6D-M6 local re-entry atomicity so rejection paths (including reinhabitation replacement failure) do not partially mutate actor location, participants, or pending-effect generation state.
+- Hardened the deterministic regression by constructing the reinhabitation replacement spawn-ID conflict with an explicit canonical `spawn:<site_hash>:gen1:0` ID, avoiding any iteration-order dependency in failure setup.
+- Verified the hotfix with `PYTHONPATH=src pytest -q` and focused site-effect regression coverage.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`

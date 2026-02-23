@@ -532,8 +532,11 @@ class LocalEncounterInstanceModule(RuleModule):
         resolved_spawn_coord, placement_rule = self._resolve_entry_placement(local_space)
         participant_spawn_records: list[dict[str, Any]] = []
         participant_entities: list[EntityState] = []
+        participant_remove_ids: list[str] = []
         participant_reason = "resolved"
         from_location_payload = event.params.get("from_location")
+        transition_plan: dict[str, Any] | None = None
+        to_spawn_coord: dict[str, int] | None = None
         if entity_id is not None and resolved_spawn_coord is not None:
             entity = sim.state.entities[entity_id]
             from_location_payload = sim._entity_location_ref(entity).to_dict()
@@ -557,9 +560,12 @@ class LocalEncounterInstanceModule(RuleModule):
                         participant_reason = "local_encounter_participant_id_conflict"
                         to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
                     elif reused_existing:
-                        existing_participant_ids = self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id)
+                        existing_participant_ids = self._hostile_participant_ids_for_space(
+                            sim=sim,
+                            local_space_id=local_space.space_id,
+                        )
                         if consumption_result["status"] == "consumed":
-                            replacement = self._spawn_reinhabitation_generation(
+                            replacement = self._plan_reinhabitation_generation(
                                 sim=sim,
                                 local_space=local_space,
                                 site_key=normalized_site_key,
@@ -570,8 +576,9 @@ class LocalEncounterInstanceModule(RuleModule):
                                 participant_reason = "reinhabitation_replace_failed"
                                 consumption_result = {"status": "rejected", "reason": "participant_replace_failed"}
                             else:
-                                participant_spawn_records = replacement
-                                site_state_by_key = consumption_result["site_state_by_key"]
+                                participant_spawn_records = replacement["spawn_records"]
+                                participant_entities = replacement["spawn_entities"]
+                                participant_remove_ids = replacement["remove_ids"]
                         else:
                             participant_spawn_records = [
                                 {
@@ -581,19 +588,13 @@ class LocalEncounterInstanceModule(RuleModule):
                                 }
                                 for participant_id in existing_participant_ids
                             ]
-                        entity.space_id = local_space.space_id
-                        entity.position_x = next_x
-                        entity.position_y = next_y
-                        transition_applied = True
-                        placement_reason = "resolved"
-                        participant_reason = "resolved"
-                        to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+                        if participant_reason == "resolved":
+                            transition_plan = {
+                                "actor_space_id": local_space.space_id,
+                                "actor_position": {"x": next_x, "y": next_y},
+                                "to_spawn_coord": copy.deepcopy(resolved_spawn_coord),
+                            }
                     else:
-                        entity.space_id = local_space.space_id
-                        entity.position_x = next_x
-                        entity.position_y = next_y
-                        transition_applied = True
-                        placement_reason = "resolved"
                         participant_entities.append(
                             EntityState(
                                 entity_id=spawn_entity_id,
@@ -611,7 +612,11 @@ class LocalEncounterInstanceModule(RuleModule):
                                 "placement_rule": participant_placement_rule,
                             }
                         )
-                        to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+                        transition_plan = {
+                            "actor_space_id": local_space.space_id,
+                            "actor_position": {"x": next_x, "y": next_y},
+                            "to_spawn_coord": copy.deepcopy(resolved_spawn_coord),
+                        }
 
         elif resolved_spawn_coord is None:
             placement_reason = "local_encounter_entry_placement_failed"
@@ -624,6 +629,22 @@ class LocalEncounterInstanceModule(RuleModule):
             transition_applied = False
             participant_spawn_records = []
             participant_entities = []
+            participant_remove_ids = []
+            transition_plan = None
+
+        if placement_reason == "resolved" and transition_plan is not None and entity_id is not None:
+            entity = sim.state.entities[entity_id]
+            entity.space_id = transition_plan["actor_space_id"]
+            entity.position_x = float(transition_plan["actor_position"]["x"])
+            entity.position_y = float(transition_plan["actor_position"]["y"])
+            to_spawn_coord = copy.deepcopy(transition_plan["to_spawn_coord"])
+            if reused_existing and consumption_result["status"] == "consumed":
+                for participant_id in participant_remove_ids:
+                    sim.state.entities.pop(participant_id, None)
+                site_state_by_key = consumption_result["site_state_by_key"]
+            transition_applied = True
+        elif placement_reason == "resolved" and to_spawn_coord is None:
+            to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
 
         if transition_applied:
             for participant in participant_entities:
@@ -1329,7 +1350,7 @@ class LocalEncounterInstanceModule(RuleModule):
     def _consume_reinhabitation_pending_effect(*, site_state: dict[str, Any]) -> dict[str, Any]:
         return {"generation_after": int(site_state.get("rehab_generation", 0)) + 1}
 
-    def _spawn_reinhabitation_generation(
+    def _plan_reinhabitation_generation(
         self,
         *,
         sim: Simulation,
@@ -1337,7 +1358,7 @@ class LocalEncounterInstanceModule(RuleModule):
         site_key: dict[str, Any],
         generation: int,
         occupied_coords: tuple[dict[str, int], ...],
-    ) -> list[dict[str, Any]] | None:
+    ) -> dict[str, Any] | None:
         participant_coord, participant_placement_rule = self._resolve_participant_placement(
             local_space=local_space,
             occupied_coords=occupied_coords,
@@ -1353,24 +1374,25 @@ class LocalEncounterInstanceModule(RuleModule):
         if spawn_entity_id in sim.state.entities:
             return None
 
-        for participant_id in self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id):
-            sim.state.entities.pop(participant_id, None)
-        sim.add_entity(
-            EntityState(
-                entity_id=spawn_entity_id,
-                position_x=spawn_x,
-                position_y=spawn_y,
-                space_id=local_space.space_id,
-                template_id="encounter_hostile_v1",
-            )
-        )
-        return [
-            {
-                "entity_id": spawn_entity_id,
-                "coord": copy.deepcopy(participant_coord),
-                "placement_rule": participant_placement_rule,
-            }
-        ]
+        return {
+            "remove_ids": self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id),
+            "spawn_entities": [
+                EntityState(
+                    entity_id=spawn_entity_id,
+                    position_x=spawn_x,
+                    position_y=spawn_y,
+                    space_id=local_space.space_id,
+                    template_id="encounter_hostile_v1",
+                )
+            ],
+            "spawn_records": [
+                {
+                    "entity_id": spawn_entity_id,
+                    "coord": copy.deepcopy(participant_coord),
+                    "placement_rule": participant_placement_rule,
+                }
+            ],
+        }
 
     @staticmethod
     def _hostile_participant_ids_for_space(*, sim: Simulation, local_space_id: str) -> list[str]:

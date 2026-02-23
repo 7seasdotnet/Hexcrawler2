@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
@@ -7,6 +10,7 @@ from hexcrawler.sim.encounters import (
     REINHABITATION_PENDING_EFFECT_TYPE,
     SITE_CHECK_INTERVAL_TICKS,
     SITE_EFFECT_CONSUMED_EVENT_TYPE,
+    SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
     SITE_EFFECT_SCHEDULED_EVENT_TYPE,
     STALE_TICKS,
     EncounterActionExecutionModule,
@@ -186,6 +190,56 @@ def test_m6_consumption_uses_first_retained_reinhabitation_marker() -> None:
     )
     assert len(participant_ids) == 1
 
+
+
+
+def test_m6_reinhabitation_rejection_is_atomic_and_does_not_move_actor() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=505)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_key = state["site_state_by_key"][site_key_json]["site_key"]
+    site_hash = hashlib.sha256(json.dumps(site_key, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+    conflict_entity_id = f"spawn:{site_hash}:gen1:0"
+    if conflict_entity_id not in sim.state.entities:
+        sim.add_entity(
+            EntityState(
+                entity_id=conflict_entity_id,
+                position_x=0.0,
+                position_y=0.0,
+                space_id="overworld",
+                template_id="encounter_hostile_v1",
+            )
+        )
+
+    player_before = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    before_space_id = player_before.space_id
+    before_position = (player_before.position_x, player_before.position_y)
+
+    _schedule_local_encounter(sim, "phase6d-m6-reenter-reject")
+    sim.advance_ticks(5)
+
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[-1]["params"]
+    assert begin["reuse"] is True
+    assert begin["transition_applied"] is False
+    assert begin["reason"] == "reinhabitation_replace_failed"
+
+    player_after = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    assert player_after.space_id == before_space_id
+    assert (player_after.position_x, player_after.position_y) == before_position
+
+    participant_ids_after = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after == old_ids
+
+    site_state = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert site_state["rehab_generation"] == 0
+    assert any(effect["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE for effect in site_state["pending_effects"])
+
+    rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
+    assert rejected[-1]["params"]["reason"] == "participant_replace_failed"
 
 def test_m6_save_load_midflow_consumes_once_after_reload() -> None:
     sim, _, site_key_json, _ = _setup_with_pending_effect(seed=504)
