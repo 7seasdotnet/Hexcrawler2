@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M0 — Minimal Encounter → Local Encounter Request binding.
-- **Next action:** broader encounter→arena semantic binding (spawn composition and richer context mapping) deferred to subsequent milestones.
-- **Phase status:** ✅ Phase 6D-M0 adds deterministic encounter action binding that emits `local_encounter_request` and exercises campaign→local instancing/return seams without adding combat/content semantics.
+- **Current phase:** Phase 6D-M1 — Deterministic local encounter entry placement semantics.
+- **Next action:** broaden encounter→arena semantic binding context (spawn composition and richer contextual mapping) while preserving deterministic placement/rejection contracts.
+- **Phase status:** ✅ Phase 6D-M1 adds deterministic local entry placement priority (`entry` anchor → deterministic fallback) plus explicit deterministic rejection for unresolved local placement.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added `tests/test_phase6d_binding_contract.py` with one canonical end-to-end contract test for encounter→arena binding and single-hop return semantics.
-- Locked deterministic anti-nesting and return assertions in one run (including forensic `encounter_action_outcome` checks and no local→local return unwinding).
-- Added save/load round-trip trace/hash stability assertions for the binding contract path.
+- Added deterministic Phase 6D-M1 entry placement selection in `LocalEncounterInstanceModule`: use valid `entry` anchor first, else deterministic `default_spawn` fallback with explicit `placement_rule` forensic metadata.
+- Added deterministic rejection semantics for unresolved local entry placement with explicit `applied=false` / `reason="local_encounter_entry_placement_failed"` and forensic identifiers (`entity_id`, `space_id`, `request_event_id`, `tick`, `action_uid`) in `local_encounter_begin`.
+- Extended Phase 6D binding contract tests to assert entry-anchor placement, deterministic fallback placement without an `entry` anchor, and save/load-stable traces for placement outcomes.
 
 
 ## What Exists (folders / entry points)

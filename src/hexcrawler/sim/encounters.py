@@ -423,18 +423,28 @@ class LocalEncounterInstanceModule(RuleModule):
 
         entity_id = self._select_entity_id(sim=sim, from_space_id=from_space_id)
         transition_applied = False
+        placement_reason = "resolved"
+        resolved_spawn_coord, placement_rule = self._resolve_entry_placement(local_space)
         from_location_payload = event.params.get("from_location")
-        if entity_id is not None:
+        if entity_id is not None and resolved_spawn_coord is not None:
             entity = sim.state.entities[entity_id]
             from_location_payload = sim._entity_location_ref(entity).to_dict()
-            to_spawn_coord = self._spawn_coord(local_space)
-            next_x, next_y = sim._coord_to_world_xy(space=local_space, coord=to_spawn_coord)
-            entity.space_id = local_space.space_id
-            entity.position_x = next_x
-            entity.position_y = next_y
-            transition_applied = True
+            try:
+                next_x, next_y = sim._coord_to_world_xy(space=local_space, coord=resolved_spawn_coord)
+            except (KeyError, TypeError, ValueError):
+                placement_reason = "local_encounter_entry_placement_failed"
+            else:
+                entity.space_id = local_space.space_id
+                entity.position_x = next_x
+                entity.position_y = next_y
+                transition_applied = True
+                placement_reason = "resolved"
+            to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+        elif resolved_spawn_coord is None:
+            placement_reason = "local_encounter_entry_placement_failed"
+            to_spawn_coord = None
         else:
-            to_spawn_coord = self._spawn_coord(local_space)
+            to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
 
         sim.schedule_event_at(
             tick=event.tick,
@@ -458,10 +468,16 @@ class LocalEncounterInstanceModule(RuleModule):
                 "to_space_id": local_space_id,
                 "entity_id": entity_id,
                 "from_location": copy.deepcopy(from_location_payload),
-                "to_spawn_coord": dict(to_spawn_coord),
+                "to_spawn_coord": copy.deepcopy(to_spawn_coord),
                 "transition_applied": transition_applied,
+                "applied": transition_applied,
+                "reason": placement_reason,
+                "tick": int(event.tick),
+                "action_uid": self._optional_non_empty_string(event.params.get("action_uid")),
+                "space_id": from_space_id,
                 "template_id": template_id,
                 "template_selection_reason": selection_reason,
+                "placement_rule": placement_rule,
                 "encounter_context_passthrough": self._encounter_passthrough_blob(event.params),
             },
         )
@@ -587,11 +603,25 @@ class LocalEncounterInstanceModule(RuleModule):
 
 
     @staticmethod
-    def _spawn_coord(local_space: SpaceState) -> dict[str, int]:
+    def _resolve_entry_placement(local_space: SpaceState) -> tuple[dict[str, int] | None, str]:
         entry = local_space.anchors.get("entry")
         if entry is not None and local_space.is_valid_cell(entry.coord):
-            return copy.deepcopy(entry.coord)
-        return local_space.default_spawn_coord()
+            return copy.deepcopy(entry.coord), "entry_anchor"
+
+        fallback = local_space.default_spawn_coord()
+        if local_space.is_valid_cell(fallback):
+            return copy.deepcopy(fallback), "default_spawn"
+
+        return None, "unresolved"
+
+    @staticmethod
+    def _optional_non_empty_string(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
 
     def _encounter_passthrough_blob(self, params: dict[str, Any]) -> dict[str, Any]:
         blob = {
