@@ -239,9 +239,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added `rehab_policy` to serialized `site_state_by_key` payloads with deterministic default `replace` for legacy state.
-- Added policy-dispatched reinhabitation application (`replace` and `add`) behind the existing `reinhabitation_pending` effect handler seam.
-- Added focused deterministic policy-selection and atomicity regression coverage; phase remains marker-only with no random spawn tables.
+- Hardened `rehab_policy` validation to reject invalid values early with diagnostic forensics.
+- Kept backward-compatible `rehab_policy` defaulting (`missing`/`None` => `replace`) while preventing silent coercion of invalid values.
+- Extended site-effect consumption regression tests for invalid-string and invalid-non-string policy rejection atomicity.
 
 
 ## Troubleshooting
