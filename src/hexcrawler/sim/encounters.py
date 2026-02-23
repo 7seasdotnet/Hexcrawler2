@@ -55,6 +55,9 @@ MAX_SITE_STATE_TAGS = 8
 MAX_PENDING_EFFECTS_PER_SITE = 8
 REINHABITATION_PENDING_EFFECT_TYPE = "reinhabitation_pending"
 STALE_POLICY_EFFECT_SOURCE = "stale_policy"
+REHAB_POLICY_REPLACE = "replace"
+REHAB_POLICY_ADD = "add"
+REHAB_POLICY_ALLOWED = {REHAB_POLICY_REPLACE, REHAB_POLICY_ADD}
 
 
 class EncounterSelectionModule(RuleModule):
@@ -564,21 +567,43 @@ class LocalEncounterInstanceModule(RuleModule):
                             sim=sim,
                             local_space_id=local_space.space_id,
                         )
-                        if consumption_result["status"] == "consumed":
-                            replacement = self._plan_reinhabitation_generation(
-                                sim=sim,
-                                local_space=local_space,
-                                site_key=normalized_site_key,
-                                generation=int(consumption_result["generation_after"]),
-                                occupied_coords=(resolved_spawn_coord,),
-                            )
-                            if replacement is None:
-                                participant_reason = "reinhabitation_replace_failed"
-                                consumption_result = {"status": "rejected", "reason": "participant_replace_failed"}
+                        if consumption_result["status"] == "rejected":
+                            participant_reason = str(consumption_result.get("reason", "site_effect_rejected"))
+                        elif consumption_result["status"] == "consumed":
+                            rehab_policy = str(consumption_result.get("rehab_policy", REHAB_POLICY_REPLACE))
+                            if rehab_policy == REHAB_POLICY_REPLACE:
+                                replacement = self._apply_reinhabitation_replace(
+                                    sim=sim,
+                                    local_space=local_space,
+                                    site_key=normalized_site_key,
+                                    generation=int(consumption_result["generation_after"]),
+                                    occupied_coords=(resolved_spawn_coord,),
+                                )
+                                if replacement is None:
+                                    participant_reason = "reinhabitation_replace_failed"
+                                    consumption_result = {"status": "rejected", "reason": "participant_replace_failed"}
+                                else:
+                                    participant_spawn_records = replacement["spawn_records"]
+                                    participant_entities = replacement["spawn_entities"]
+                                    participant_remove_ids = replacement["remove_ids"]
+                            elif rehab_policy == REHAB_POLICY_ADD:
+                                replacement = self._apply_reinhabitation_add(
+                                    sim=sim,
+                                    local_space=local_space,
+                                    site_key=normalized_site_key,
+                                    generation=int(consumption_result["generation_after"]),
+                                    occupied_coords=(resolved_spawn_coord,),
+                                )
+                                if replacement is None:
+                                    participant_reason = "reinhabitation_add_failed"
+                                    consumption_result = {"status": "rejected", "reason": "participant_add_failed"}
+                                else:
+                                    participant_spawn_records = replacement["spawn_records"]
+                                    participant_entities = replacement["spawn_entities"]
+                                    participant_remove_ids = replacement["remove_ids"]
                             else:
-                                participant_spawn_records = replacement["spawn_records"]
-                                participant_entities = replacement["spawn_entities"]
-                                participant_remove_ids = replacement["remove_ids"]
+                                participant_reason = "invalid_rehab_policy"
+                                consumption_result = {"status": "rejected", "reason": "invalid_rehab_policy"}
                         else:
                             participant_spawn_records = [
                                 {
@@ -672,6 +697,7 @@ class LocalEncounterInstanceModule(RuleModule):
                     "effect_type": REINHABITATION_PENDING_EFFECT_TYPE,
                     "source": "entry_policy",
                     "generation_after": int(consumption_result["generation_after"]),
+                    "rehab_policy": str(consumption_result.get("rehab_policy", REHAB_POLICY_REPLACE)),
                     "tick": int(event.tick),
                 },
             )
@@ -1268,6 +1294,7 @@ class LocalEncounterInstanceModule(RuleModule):
             "tags": tags,
             "pending_effects": pending_effects,
             "rehab_generation": rehab_generation,
+            "rehab_policy": self._normalize_rehab_policy(existing.get("rehab_policy")) if isinstance(existing, dict) else REHAB_POLICY_REPLACE,
         }
         return site_state_by_key
 
@@ -1287,6 +1314,9 @@ class LocalEncounterInstanceModule(RuleModule):
             tags = self._normalize_tags([*tags, "stale"])
         pending_effects = self._normalize_pending_effects(payload.get("pending_effects", []))
         rehab_generation = max(0, int(payload.get("rehab_generation", 0)))
+        rehab_policy = self._normalize_rehab_policy(payload.get("rehab_policy"))
+        if rehab_policy is None:
+            return None
         return {
             "site_key": copy.deepcopy(site_key),
             "status": status,
@@ -1295,6 +1325,7 @@ class LocalEncounterInstanceModule(RuleModule):
             "tags": tags,
             "pending_effects": pending_effects,
             "rehab_generation": rehab_generation,
+            "rehab_policy": rehab_policy,
         }
 
     def _consume_pending_site_effect_for_entry(
@@ -1325,6 +1356,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 continue
             consumed_index = idx
             consumed_result = handler(site_state=normalized_site_state)
+            if consumed_result.get("status") == "rejected":
+                return {
+                    "status": "rejected",
+                    "reason": str(consumed_result.get("reason", "site_effect_rejected")),
+                }
             break
         if consumed_index is None or consumed_result is None:
             return {"status": "none"}
@@ -1338,6 +1374,7 @@ class LocalEncounterInstanceModule(RuleModule):
         return {
             "status": "consumed",
             "generation_after": int(consumed_result["generation_after"]),
+            "rehab_policy": str(consumed_result.get("rehab_policy", REHAB_POLICY_REPLACE)),
             "site_state_by_key": updated_state_by_key,
         }
 
@@ -1348,7 +1385,22 @@ class LocalEncounterInstanceModule(RuleModule):
 
     @staticmethod
     def _consume_reinhabitation_pending_effect(*, site_state: dict[str, Any]) -> dict[str, Any]:
-        return {"generation_after": int(site_state.get("rehab_generation", 0)) + 1}
+        policy = site_state.get("rehab_policy", REHAB_POLICY_REPLACE)
+        if not isinstance(policy, str) or policy not in REHAB_POLICY_ALLOWED:
+            return {"status": "rejected", "reason": "invalid_rehab_policy"}
+        return {
+            "status": "consumed",
+            "generation_after": int(site_state.get("rehab_generation", 0)) + 1,
+            "rehab_policy": policy,
+        }
+
+    @staticmethod
+    def _normalize_rehab_policy(value: Any) -> str | None:
+        if value is None:
+            return REHAB_POLICY_REPLACE
+        if not isinstance(value, str):
+            return None
+        return value
 
     def _plan_reinhabitation_generation(
         self,
@@ -1358,6 +1410,7 @@ class LocalEncounterInstanceModule(RuleModule):
         site_key: dict[str, Any],
         generation: int,
         occupied_coords: tuple[dict[str, int], ...],
+        remove_existing: bool,
     ) -> dict[str, Any] | None:
         participant_coord, participant_placement_rule = self._resolve_participant_placement(
             local_space=local_space,
@@ -1375,7 +1428,9 @@ class LocalEncounterInstanceModule(RuleModule):
             return None
 
         return {
-            "remove_ids": self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id),
+            "remove_ids": self._hostile_participant_ids_for_space(sim=sim, local_space_id=local_space.space_id)
+            if remove_existing
+            else [],
             "spawn_entities": [
                 EntityState(
                     entity_id=spawn_entity_id,
@@ -1393,6 +1448,42 @@ class LocalEncounterInstanceModule(RuleModule):
                 }
             ],
         }
+
+    def _apply_reinhabitation_replace(
+        self,
+        *,
+        sim: Simulation,
+        local_space: SpaceState,
+        site_key: dict[str, Any],
+        generation: int,
+        occupied_coords: tuple[dict[str, int], ...],
+    ) -> dict[str, Any] | None:
+        return self._plan_reinhabitation_generation(
+            sim=sim,
+            local_space=local_space,
+            site_key=site_key,
+            generation=generation,
+            occupied_coords=occupied_coords,
+            remove_existing=True,
+        )
+
+    def _apply_reinhabitation_add(
+        self,
+        *,
+        sim: Simulation,
+        local_space: SpaceState,
+        site_key: dict[str, Any],
+        generation: int,
+        occupied_coords: tuple[dict[str, int], ...],
+    ) -> dict[str, Any] | None:
+        return self._plan_reinhabitation_generation(
+            sim=sim,
+            local_space=local_space,
+            site_key=site_key,
+            generation=generation,
+            occupied_coords=occupied_coords,
+            remove_existing=False,
+        )
 
     @staticmethod
     def _hostile_participant_ids_for_space(*, sim: Simulation, local_space_id: str) -> list[str]:

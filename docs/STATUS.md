@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M6 — deterministic pending-effect consumption/apply for site re-entry (marker-only; no random encounter spawning).
-- **Next action:** Phase 6D-M7 — extend consumption handlers with additional marker-only effect types / alternate reinhabitation policies while preserving deterministic dispatch and idempotence.
+- **Current phase:** Phase 6D-M7 — deterministic data-driven reinhabitation policy selection with replace/add consumption handlers (marker-only; no random encounter spawning tables).
+- **Next action:** Phase 6D-M8 — extend marker-only site-effect extensibility (policy parametrization or additional deterministic effect types) while preserving atomicity and no random spawn tables.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Hotfixed Phase 6D-M6 local re-entry atomicity so rejection paths (including reinhabitation replacement failure) do not partially mutate actor location, participants, or pending-effect generation state.
-- Hardened the deterministic regression by constructing the reinhabitation replacement spawn-ID conflict with an explicit canonical `spawn:<site_hash>:gen1:0` ID, avoiding any iteration-order dependency in failure setup.
-- Verified the hotfix with `PYTHONPATH=src pytest -q` and focused site-effect regression coverage.
+- Added serialized `rehab_policy` selection to per-site state with deterministic legacy default `"replace"` and explicit policy validation on consumption.
+- Extended `reinhabitation_pending` handling to dispatch `replace` vs `add` policy paths while preserving M6 plan-then-apply atomicity (rejection implies zero mutation).
+- Expanded deterministic tests for replace/add selection, invalid-policy rejection, add-policy failure atomicity, and save/load hash stability; scope remains marker-only with no random encounter spawn tables.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -239,9 +239,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added deterministic local encounter `site_key` payload/state handling so campaign-origin requests can resolve persistent local-space reuse across save/load boundaries.
-- Updated local encounter end/return semantics to preserve local spaces/entities, mark instance state inactive with `last_active_tick`, and clear return-in-progress flags without deleting encounter context.
-- Added Phase 6D binding-contract regression coverage for return-time persistence and deterministic re-entry reuse (same local space, no duplicate participant spawn) across save/load.
+- Added `rehab_policy` to serialized `site_state_by_key` payloads with deterministic default `replace` for legacy state.
+- Added policy-dispatched reinhabitation application (`replace` and `add`) behind the existing `reinhabitation_pending` effect handler seam.
+- Added focused deterministic policy-selection and atomicity regression coverage; phase remains marker-only with no random spawn tables.
 
 
 ## Troubleshooting
