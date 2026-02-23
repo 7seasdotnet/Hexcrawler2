@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M8 — deterministic multi-effect pending marker consumption ordering with extensible marker-only handlers (`reinhabitation_pending` + `fortification_pending`) while preserving atomicity and no random encounter spawning tables.
-- **Next action:** Phase 6D-M9 — extend marker-only effect evolution (explicit effect priority field, additional deterministic marker types, or tightly scoped policy parametrization) without introducing random spawn tables.
+- **Current phase:** Phase 6D-M9 — deterministic pending-effect priority ordering (`priority` default `0`) with highest-priority-first selection, index tie-breaks, atomic rejection semantics, and marker-only handlers (`reinhabitation_pending` + `fortification_pending`) without random encounter spawning tables.
+- **Next action:** Phase 6D-M10 — content-authored priority usage and/or additional marker-only effect types while preserving deterministic atomic marker consumption and no random spawn tables.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Codified a deterministic pending-effect entry ordering contract: iterate `pending_effects` by lowest index, reject malformed markers atomically, skip unsupported marker types with deterministic forensic diagnostics, and consume/apply at most one supported effect per site entry (skip is pure observation and does not mutate site-state markers).
-- Added marker-only `fortification_pending` consumption support with serialized per-site `fortified: bool` state mutation and `site_effect_consumed` forensics, while preserving no-spawn/no-probability semantics.
-- Extended deterministic regression coverage for multi-effect ordering, order reversal behavior, unsupported-marker diagnostics, malformed-marker atomic rejection, and save/load hash-stability equivalence; scope remains marker-only with no random encounter spawn tables.
+- Added optional marker `priority: int` support (`-1000..1000`, default `0`) to pending-effect consumption, with deterministic highest-priority-first ordering and stable index tie-break semantics.
+- Preserved atomic plan/apply guarantees by rejecting invalid marker priority deterministically (`invalid_effect_priority`) with bounded forensic diagnostics, while unsupported marker types remain skip-only/non-mutating.
+- Extended deterministic tests for legacy default-priority behavior, priority overrides, tie-break stability, unsupported-high-priority skip behavior, invalid-priority atomic rejection, and save/load simulation-hash equivalence (still marker-only, no random spawn tables/probabilities).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -239,9 +239,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Codified deterministic multi-effect pending marker consumption ordering (first valid supported marker by index; malformed rejects atomically; unsupported markers emit deterministic diagnostics and remain pending).
-- Added marker-only `fortification_pending` effect handling with serialized `site_state["fortified"]` mutation and consumption forensics (no random spawn tables/probabilities introduced).
-- Added focused deterministic tests for multi-effect ordering, reversed ordering, unsupported/malformed marker handling, repeated unsupported-only retry stability (index stays stable, no marker mutation), and save/load equivalence.
+- Added optional pending-effect marker `priority` support with deterministic ordering by highest priority first, then lowest original list index.
+- Added deterministic invalid-priority rejection for out-of-range/non-integer values (`invalid_effect_priority`) with bounded forensic diagnostics while keeping malformed/unsupported behavior atomic and non-mutating.
+- Added focused deterministic Phase 6D-M9 tests (legacy default priority, priority override, tie-break stability, unsupported skip continuity, invalid-priority atomic rejection, save/load hash stability), and reaffirmed marker-only handling with no random spawn tables/probability logic.
 
 
 ## Troubleshooting

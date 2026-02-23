@@ -596,3 +596,173 @@ def test_m8_malformed_marker_rejects_atomically() -> None:
 
     rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
     assert rejected[-1]["params"]["reason"] == "malformed_pending_effect_marker"
+
+
+def test_m9_legacy_absent_priority_defaults_to_zero_ordering() -> None:
+    sim, _, site_key_json, _ = _setup_with_pending_effect(seed=515)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test"},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test"},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m9-legacy-first")
+    sim.advance_ticks(5)
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed[-1]["params"]["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE
+    assert consumed[-1]["params"]["index"] == 0
+    assert consumed[-1]["params"]["priority"] == 0
+
+    _end_local(sim)
+    sim.advance_ticks(4)
+    _schedule_local_encounter(sim, "phase6d-m9-legacy-second")
+    sim.advance_ticks(5)
+
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed[-1]["params"]["effect_type"] == FORTIFICATION_PENDING_EFFECT_TYPE
+    assert consumed[-1]["params"]["index"] == 0
+    assert consumed[-1]["params"]["priority"] == 0
+
+
+def test_m9_priority_overrides_index_ordering() -> None:
+    sim, _, site_key_json, _ = _setup_with_pending_effect(seed=516)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test", "priority": 0},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test", "priority": 10},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m9-priority-1")
+    sim.advance_ticks(5)
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed[-1]["params"]["effect_type"] == FORTIFICATION_PENDING_EFFECT_TYPE
+    assert consumed[-1]["params"]["index"] == 1
+    assert consumed[-1]["params"]["priority"] == 10
+
+    _end_local(sim)
+    sim.advance_ticks(4)
+    _schedule_local_encounter(sim, "phase6d-m9-priority-2")
+    sim.advance_ticks(5)
+
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed[-1]["params"]["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE
+    assert consumed[-1]["params"]["priority"] == 0
+
+
+def test_m9_equal_priority_uses_index_tie_break() -> None:
+    sim, _, site_key_json, _ = _setup_with_pending_effect(seed=517)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test", "priority": 5},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test", "priority": 5},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m9-tie-break")
+    sim.advance_ticks(5)
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed[-1]["params"]["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE
+    assert consumed[-1]["params"]["index"] == 0
+    assert consumed[-1]["params"]["priority"] == 5
+
+
+def test_m9_unsupported_high_priority_skips_without_mutation_then_consumes_supported() -> None:
+    sim, _, site_key_json, _ = _setup_with_pending_effect(seed=518)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": "future_effect_v9", "created_tick": 1, "source": "test", "priority": 999},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test", "priority": 0},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m9-unsupported-priority")
+    sim.advance_ticks(5)
+
+    site_state_after = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert site_state_after["pending_effects"] == [{"effect_type": "future_effect_v9", "created_tick": 1, "source": "test", "priority": 999}]
+
+    rejections = [entry for entry in _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE) if entry["params"].get("reason") == "unsupported_site_effect_type"]
+    assert rejections[-1]["params"]["index"] == 0
+    assert rejections[-1]["params"]["priority"] == 999
+
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed[-1]["params"]["effect_type"] == FORTIFICATION_PENDING_EFFECT_TYPE
+
+
+def test_m9_invalid_priority_rejects_atomically() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=519)
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test", "priority": "high"},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test", "priority": 0},
+    ]
+    site_state["fortified"] = False
+    before_pending = json.dumps(site_state["pending_effects"], sort_keys=True)
+    before_generation = int(site_state.get("rehab_generation", 0))
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m9-invalid-priority")
+    sim.advance_ticks(5)
+
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[-1]["params"]
+    assert begin["transition_applied"] is False
+    assert begin["reason"] == "invalid_effect_priority"
+
+    participant_ids_after = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after == old_ids
+
+    site_state_after = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert json.dumps(site_state_after["pending_effects"], sort_keys=True) == before_pending
+    assert int(site_state_after.get("rehab_generation", 0)) == before_generation
+
+    rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
+    assert rejected[-1]["params"]["reason"] == "invalid_effect_priority"
+    assert rejected[-1]["params"]["index"] == 0
+    assert rejected[-1]["params"]["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE
+    assert rejected[-1]["params"]["invalid_priority_value"] == "str:\"high\""
+
+
+def test_m9_priority_save_load_hash_stability() -> None:
+    sim_a, _, _, _ = _setup_with_pending_effect(seed=520)
+    sim_b = Simulation.from_simulation_payload(sim_a.simulation_payload())
+    sim_b.register_rule_module(EncounterActionExecutionModule())
+    sim_b.register_rule_module(LocalEncounterInstanceModule())
+
+    for sim in (sim_a, sim_b):
+        state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        site_key_json = next(iter(state["site_state_by_key"]))
+        site_state = state["site_state_by_key"][site_key_json]
+        site_state["pending_effects"] = [
+            {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test", "priority": 1},
+            {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test", "priority": 10},
+        ]
+        site_state["fortified"] = False
+        sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+        _schedule_local_encounter(sim, "phase6d-m9-save-load-1")
+        sim.advance_ticks(5)
+        _end_local(sim)
+        sim.advance_ticks(4)
+        _schedule_local_encounter(sim, "phase6d-m9-save-load-2")
+        sim.advance_ticks(5)
+
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
