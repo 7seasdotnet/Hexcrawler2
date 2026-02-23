@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M7 — deterministic data-driven reinhabitation policy selection with replace/add consumption handlers (marker-only; no random encounter spawning tables).
-- **Next action:** Phase 6D-M8 — extend marker-only site-effect extensibility (policy parametrization or additional deterministic effect types) while preserving atomicity and no random spawn tables.
+- **Current phase:** Phase 6D-M8 — deterministic multi-effect pending marker consumption ordering with extensible marker-only handlers (`reinhabitation_pending` + `fortification_pending`) while preserving atomicity and no random encounter spawning tables.
+- **Next action:** Phase 6D-M9 — extend marker-only effect evolution (explicit effect priority field, additional deterministic marker types, or tightly scoped policy parametrization) without introducing random spawn tables.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added serialized `rehab_policy` selection to per-site state with deterministic legacy default `"replace"` and explicit policy validation on consumption.
-- Extended `reinhabitation_pending` handling to dispatch `replace` vs `add` policy paths while preserving M6 plan-then-apply atomicity (rejection implies zero mutation).
-- Expanded deterministic tests for replace/add selection, invalid-policy rejection, add-policy failure atomicity, and save/load hash stability; scope remains marker-only with no random encounter spawn tables.
+- Codified a deterministic pending-effect entry ordering contract: iterate `pending_effects` by lowest index, reject malformed markers atomically, skip unsupported marker types with deterministic forensic diagnostics, and consume/apply at most one supported effect per site entry (skip is pure observation and does not mutate site-state markers).
+- Added marker-only `fortification_pending` consumption support with serialized per-site `fortified: bool` state mutation and `site_effect_consumed` forensics, while preserving no-spawn/no-probability semantics.
+- Extended deterministic regression coverage for multi-effect ordering, order reversal behavior, unsupported-marker diagnostics, malformed-marker atomic rejection, and save/load hash-stability equivalence; scope remains marker-only with no random encounter spawn tables.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -239,9 +239,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Hardened `rehab_policy` validation to reject invalid values early with diagnostic forensics.
-- Kept backward-compatible `rehab_policy` defaulting (`missing`/`None` => `replace`) while preventing silent coercion of invalid values.
-- Extended site-effect consumption regression tests for invalid-string and invalid-non-string policy rejection atomicity.
+- Codified deterministic multi-effect pending marker consumption ordering (first valid supported marker by index; malformed rejects atomically; unsupported markers emit deterministic diagnostics and remain pending).
+- Added marker-only `fortification_pending` effect handling with serialized `site_state["fortified"]` mutation and consumption forensics (no random spawn tables/probabilities introduced).
+- Added focused deterministic tests for multi-effect ordering, reversed ordering, unsupported/malformed marker handling, repeated unsupported-only retry stability (index stays stable, no marker mutation), and save/load equivalence.
 
 
 ## Troubleshooting

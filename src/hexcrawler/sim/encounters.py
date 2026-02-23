@@ -54,6 +54,7 @@ MAX_SITE_CHECKS_PER_TICK = 8
 MAX_SITE_STATE_TAGS = 8
 MAX_PENDING_EFFECTS_PER_SITE = 8
 REINHABITATION_PENDING_EFFECT_TYPE = "reinhabitation_pending"
+FORTIFICATION_PENDING_EFFECT_TYPE = "fortification_pending"
 STALE_POLICY_EFFECT_SOURCE = "stale_policy"
 REHAB_POLICY_REPLACE = "replace"
 REHAB_POLICY_ADD = "add"
@@ -571,40 +572,54 @@ class LocalEncounterInstanceModule(RuleModule):
                         if consumption_result["status"] == "rejected":
                             participant_reason = str(consumption_result.get("reason", "site_effect_rejected"))
                         elif consumption_result["status"] == "consumed":
-                            rehab_policy = str(consumption_result.get("rehab_policy", REHAB_POLICY_REPLACE))
-                            if rehab_policy == REHAB_POLICY_REPLACE:
-                                replacement = self._apply_reinhabitation_replace(
-                                    sim=sim,
-                                    local_space=local_space,
-                                    site_key=normalized_site_key,
-                                    generation=int(consumption_result["generation_after"]),
-                                    occupied_coords=(resolved_spawn_coord,),
-                                )
-                                if replacement is None:
-                                    participant_reason = "reinhabitation_replace_failed"
-                                    consumption_result = {"status": "rejected", "reason": "participant_replace_failed"}
+                            consumed_effect_type = str(consumption_result.get("effect_type", ""))
+                            if consumed_effect_type == REINHABITATION_PENDING_EFFECT_TYPE:
+                                rehab_policy = str(consumption_result.get("rehab_policy", REHAB_POLICY_REPLACE))
+                                if rehab_policy == REHAB_POLICY_REPLACE:
+                                    replacement = self._apply_reinhabitation_replace(
+                                        sim=sim,
+                                        local_space=local_space,
+                                        site_key=normalized_site_key,
+                                        generation=int(consumption_result["generation_after"]),
+                                        occupied_coords=(resolved_spawn_coord,),
+                                    )
+                                    if replacement is None:
+                                        participant_reason = "reinhabitation_replace_failed"
+                                        consumption_result = {"status": "rejected", "reason": "participant_replace_failed"}
+                                    else:
+                                        participant_spawn_records = replacement["spawn_records"]
+                                        participant_entities = replacement["spawn_entities"]
+                                        participant_remove_ids = replacement["remove_ids"]
+                                elif rehab_policy == REHAB_POLICY_ADD:
+                                    replacement = self._apply_reinhabitation_add(
+                                        sim=sim,
+                                        local_space=local_space,
+                                        site_key=normalized_site_key,
+                                        generation=int(consumption_result["generation_after"]),
+                                        occupied_coords=(resolved_spawn_coord,),
+                                    )
+                                    if replacement is None:
+                                        participant_reason = "reinhabitation_add_failed"
+                                        consumption_result = {"status": "rejected", "reason": "participant_add_failed"}
+                                    else:
+                                        participant_spawn_records = replacement["spawn_records"]
+                                        participant_entities = replacement["spawn_entities"]
+                                        participant_remove_ids = replacement["remove_ids"]
                                 else:
-                                    participant_spawn_records = replacement["spawn_records"]
-                                    participant_entities = replacement["spawn_entities"]
-                                    participant_remove_ids = replacement["remove_ids"]
-                            elif rehab_policy == REHAB_POLICY_ADD:
-                                replacement = self._apply_reinhabitation_add(
-                                    sim=sim,
-                                    local_space=local_space,
-                                    site_key=normalized_site_key,
-                                    generation=int(consumption_result["generation_after"]),
-                                    occupied_coords=(resolved_spawn_coord,),
-                                )
-                                if replacement is None:
-                                    participant_reason = "reinhabitation_add_failed"
-                                    consumption_result = {"status": "rejected", "reason": "participant_add_failed"}
-                                else:
-                                    participant_spawn_records = replacement["spawn_records"]
-                                    participant_entities = replacement["spawn_entities"]
-                                    participant_remove_ids = replacement["remove_ids"]
+                                    participant_reason = "invalid_rehab_policy"
+                                    consumption_result = {"status": "rejected", "reason": "invalid_rehab_policy"}
+                            elif consumed_effect_type == FORTIFICATION_PENDING_EFFECT_TYPE:
+                                participant_spawn_records = [
+                                    {
+                                        "entity_id": participant_id,
+                                        "coord": copy.deepcopy(sim._entity_location_ref(sim.state.entities[participant_id]).coord),
+                                        "placement_rule": "reuse_existing",
+                                    }
+                                    for participant_id in existing_participant_ids
+                                ]
                             else:
-                                participant_reason = "invalid_rehab_policy"
-                                consumption_result = {"status": "rejected", "reason": "invalid_rehab_policy"}
+                                participant_reason = "unsupported_site_effect_type"
+                                consumption_result = {"status": "rejected", "reason": "unsupported_site_effect_type"}
                         else:
                             participant_spawn_records = [
                                 {
@@ -695,12 +710,26 @@ class LocalEncounterInstanceModule(RuleModule):
                 event_type=SITE_EFFECT_CONSUMED_EVENT_TYPE,
                 params={
                     "site_key": copy.deepcopy(normalized_site_key),
-                    "effect_type": REINHABITATION_PENDING_EFFECT_TYPE,
+                    "effect_type": str(consumption_result.get("effect_type", "")),
                     "source": "entry_policy",
                     "generation_after": int(consumption_result["generation_after"]),
                     "rehab_policy": str(consumption_result.get("rehab_policy", REHAB_POLICY_REPLACE)),
+                    "fortified": bool(consumption_result.get("fortified", False)),
                     "tick": int(event.tick),
                 },
+            )
+            self._emit_site_effect_diagnostics(
+                sim=sim,
+                tick=int(event.tick),
+                site_key=normalized_site_key,
+                diagnostics=consumption_result.get("diagnostics", []),
+            )
+        elif consumption_result["status"] == "none":
+            self._emit_site_effect_diagnostics(
+                sim=sim,
+                tick=int(event.tick),
+                site_key=normalized_site_key,
+                diagnostics=consumption_result.get("diagnostics", []),
             )
         elif consumption_result["status"] == "rejected":
             rejection_params = {
@@ -712,6 +741,12 @@ class LocalEncounterInstanceModule(RuleModule):
             invalid_rehab_policy_value = consumption_result.get("invalid_rehab_policy_value")
             if isinstance(invalid_rehab_policy_value, str):
                 rejection_params["invalid_rehab_policy_value"] = invalid_rehab_policy_value
+            index = consumption_result.get("index")
+            if isinstance(index, int):
+                rejection_params["index"] = int(index)
+            effect_type = consumption_result.get("effect_type")
+            if isinstance(effect_type, str) and effect_type:
+                rejection_params["effect_type"] = effect_type
             sim.schedule_event_at(
                 tick=event.tick,
                 event_type=SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
@@ -1173,6 +1208,7 @@ class LocalEncounterInstanceModule(RuleModule):
                     "next_check_tick": last_active_tick + SITE_CHECK_INTERVAL_TICKS,
                     "tags": ["stale"] if default_status == "stale" else [],
                     "pending_effects": [],
+                    "fortified": False,
                 }
                 continue
             existing["site_key"] = copy.deepcopy(normalized_site_key)
@@ -1299,6 +1335,7 @@ class LocalEncounterInstanceModule(RuleModule):
             "tags": tags,
             "pending_effects": pending_effects,
             "rehab_generation": rehab_generation,
+            "fortified": bool(existing.get("fortified", False)) if isinstance(existing, dict) else False,
             "rehab_policy": (
                 REHAB_POLICY_REPLACE
                 if not isinstance(existing, dict) or existing.get("rehab_policy") is None
@@ -1335,6 +1372,7 @@ class LocalEncounterInstanceModule(RuleModule):
             "tags": tags,
             "pending_effects": pending_effects,
             "rehab_generation": rehab_generation,
+            "fortified": bool(payload.get("fortified", False)),
             "rehab_policy": rehab_policy,
         }
 
@@ -1366,10 +1404,24 @@ class LocalEncounterInstanceModule(RuleModule):
         handlers = self._site_effect_entry_handlers()
         consumed_index: int | None = None
         consumed_result: dict[str, Any] | None = None
-        for idx, effect in enumerate(normalized_site_state["pending_effects"]):
+        diagnostics: list[dict[str, Any]] = []
+        # Deterministic ordering contract (Phase 6D-M8): iterate pending_effects in
+        # lowest-index order, reject malformed markers, skip unsupported marker types
+        # with deterministic diagnostics, and consume/apply at most one supported marker.
+        for idx, raw_effect in enumerate(existing["pending_effects"]):
+            effect = self._normalize_pending_effect_payload(raw_effect)
+            if effect is None:
+                return {"status": "rejected", "reason": "malformed_pending_effect_marker", "index": int(idx)}
             effect_type = str(effect.get("effect_type", ""))
             handler = handlers.get(effect_type)
             if handler is None:
+                diagnostics.append(
+                    {
+                        "reason": "unsupported_site_effect_type",
+                        "effect_type": effect_type,
+                        "index": int(idx),
+                    }
+                )
                 continue
             consumed_index = idx
             consumed_result = handler(site_state=normalized_site_state)
@@ -1381,24 +1433,60 @@ class LocalEncounterInstanceModule(RuleModule):
                 }
             break
         if consumed_index is None or consumed_result is None:
-            return {"status": "none"}
+            return {"status": "none", "diagnostics": diagnostics}
 
         updated_effects = list(normalized_site_state["pending_effects"])
         del updated_effects[consumed_index]
         normalized_site_state["pending_effects"] = updated_effects
         normalized_site_state["rehab_generation"] = int(consumed_result["generation_after"])
+        normalized_site_state["fortified"] = bool(consumed_result.get("fortified", normalized_site_state.get("fortified", False)))
         updated_state_by_key = dict(site_state_by_key)
         updated_state_by_key[site_key_json] = normalized_site_state
         return {
             "status": "consumed",
+            "effect_type": str(consumed_result.get("effect_type", "")),
             "generation_after": int(consumed_result["generation_after"]),
             "rehab_policy": str(consumed_result.get("rehab_policy", REHAB_POLICY_REPLACE)),
+            "fortified": bool(consumed_result.get("fortified", False)),
+            "diagnostics": diagnostics,
             "site_state_by_key": updated_state_by_key,
         }
+
+    def _emit_site_effect_diagnostics(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        site_key: dict[str, Any],
+        diagnostics: list[Any],
+    ) -> None:
+        for diagnostic in diagnostics:
+            if not isinstance(diagnostic, dict):
+                continue
+            reason = diagnostic.get("reason")
+            if not isinstance(reason, str) or not reason:
+                continue
+            rejection_params = {
+                "site_key": copy.deepcopy(site_key),
+                "source": "entry_policy",
+                "reason": reason,
+                "tick": int(tick),
+            }
+            effect_type = diagnostic.get("effect_type")
+            if isinstance(effect_type, str) and effect_type:
+                rejection_params["effect_type"] = effect_type
+            if isinstance(diagnostic.get("index"), int):
+                rejection_params["index"] = int(diagnostic["index"])
+            sim.schedule_event_at(
+                tick=int(tick),
+                event_type=SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
+                params=rejection_params,
+            )
 
     def _site_effect_entry_handlers(self) -> dict[str, Any]:
         return {
             REINHABITATION_PENDING_EFFECT_TYPE: self._consume_reinhabitation_pending_effect,
+            FORTIFICATION_PENDING_EFFECT_TYPE: self._consume_fortification_pending_effect,
         }
 
     @staticmethod
@@ -1412,8 +1500,20 @@ class LocalEncounterInstanceModule(RuleModule):
             }
         return {
             "status": "consumed",
+            "effect_type": REINHABITATION_PENDING_EFFECT_TYPE,
             "generation_after": int(site_state.get("rehab_generation", 0)) + 1,
             "rehab_policy": policy,
+            "fortified": bool(site_state.get("fortified", False)),
+        }
+
+    @staticmethod
+    def _consume_fortification_pending_effect(*, site_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": "consumed",
+            "effect_type": FORTIFICATION_PENDING_EFFECT_TYPE,
+            "generation_after": int(site_state.get("rehab_generation", 0)),
+            "rehab_policy": str(site_state.get("rehab_policy", REHAB_POLICY_REPLACE)),
+            "fortified": True,
         }
 
     @staticmethod
@@ -1563,12 +1663,25 @@ class LocalEncounterInstanceModule(RuleModule):
             return []
         normalized: list[dict[str, Any]] = []
         for item in value:
-            effect = self._normalize_pending_effect_payload(item)
+            effect = self._normalize_pending_effect_storage_payload(item)
             if effect is None:
                 continue
             normalized.append(effect)
         if len(normalized) > MAX_PENDING_EFFECTS_PER_SITE:
             normalized = normalized[-MAX_PENDING_EFFECTS_PER_SITE:]
+        return normalized
+
+    def _normalize_pending_effect_storage_payload(self, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        normalized: dict[str, Any] = {}
+        for key in sorted(payload):
+            if not isinstance(key, str):
+                continue
+            normalized_value = self._normalize_json_value(payload[key])
+            if normalized_value is None and payload[key] is not None:
+                continue
+            normalized[key] = normalized_value
         return normalized
 
     def _normalize_pending_effect_payload(self, payload: Any) -> dict[str, Any] | None:

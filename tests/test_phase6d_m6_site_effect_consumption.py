@@ -6,6 +6,7 @@ from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, SimComman
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE,
     END_LOCAL_ENCOUNTER_INTENT,
+    FORTIFICATION_PENDING_EFFECT_TYPE,
     LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
     REHAB_POLICY_ADD,
     REHAB_POLICY_REPLACE,
@@ -373,3 +374,225 @@ def test_m6_schedules_reinhabitation_effect_once() -> None:
     sim, _, _, _ = _setup_with_pending_effect(seed=508)
     scheduled = _trace(sim, SITE_EFFECT_SCHEDULED_EVENT_TYPE)
     assert len(scheduled) == 1
+
+
+def test_m8_multi_effect_order_consumes_reinhabitation_then_fortification() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=509)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test"},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test"},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m8-reenter-1")
+    sim.advance_ticks(5)
+
+    site_state_after_first = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert site_state_after_first["fortified"] is False
+    assert [effect["effect_type"] for effect in site_state_after_first["pending_effects"]] == [FORTIFICATION_PENDING_EFFECT_TYPE]
+
+    first_participants = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert len(first_participants) == 1
+    assert first_participants[0] not in old_ids
+
+    consumed_after_first = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed_after_first[-1]["params"]["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE
+
+    _end_local(sim)
+    sim.advance_ticks(4)
+    _schedule_local_encounter(sim, "phase6d-m8-reenter-2")
+    sim.advance_ticks(5)
+
+    site_state_after_second = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert site_state_after_second["fortified"] is True
+    assert site_state_after_second["pending_effects"] == []
+
+    second_participants = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert second_participants == first_participants
+
+    consumed_after_second = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed_after_second[-1]["params"]["effect_type"] == FORTIFICATION_PENDING_EFFECT_TYPE
+    assert consumed_after_second[-1]["params"]["fortified"] is True
+
+
+def test_m8_ordering_reversal_consumes_fortification_before_reinhabitation() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=510)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test"},
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test"},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m8-reversed-1")
+    sim.advance_ticks(5)
+
+    first_site_state = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert first_site_state["fortified"] is True
+    assert [effect["effect_type"] for effect in first_site_state["pending_effects"]] == [REINHABITATION_PENDING_EFFECT_TYPE]
+    participants_after_first = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participants_after_first == old_ids
+
+    _end_local(sim)
+    sim.advance_ticks(4)
+    _schedule_local_encounter(sim, "phase6d-m8-reversed-2")
+    sim.advance_ticks(5)
+
+    participants_after_second = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert len(participants_after_second) == 1
+    assert participants_after_second[0] not in old_ids
+    assert participants_after_second != participants_after_first
+
+
+def test_m8_save_load_midsequence_matches_no_save_path() -> None:
+    sim_a, _, _, _ = _setup_with_pending_effect(seed=511)
+    sim_b = Simulation.from_simulation_payload(sim_a.simulation_payload())
+    sim_b.register_rule_module(EncounterActionExecutionModule())
+    sim_b.register_rule_module(LocalEncounterInstanceModule())
+
+    for sim in (sim_a, sim_b):
+        state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        site_key_json = next(iter(state["site_state_by_key"]))
+        site_state = state["site_state_by_key"][site_key_json]
+        site_state["pending_effects"] = [
+            {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 1, "source": "test"},
+            {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test"},
+        ]
+        site_state["fortified"] = False
+        sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+        _schedule_local_encounter(sim, "phase6d-m8-save-load-1")
+        sim.advance_ticks(5)
+        _end_local(sim)
+        sim.advance_ticks(4)
+        _schedule_local_encounter(sim, "phase6d-m8-save-load-2")
+        sim.advance_ticks(5)
+
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
+
+
+def test_m8_skip_unsupported_marker_with_diagnostic_then_consume_supported() -> None:
+    sim, _, site_key_json, _ = _setup_with_pending_effect(seed=512)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": "future_effect_v9", "created_tick": 1, "source": "test"},
+        {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test"},
+    ]
+    site_state["fortified"] = False
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m8-unsupported-skip")
+    sim.advance_ticks(5)
+
+    site_state_after = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert site_state_after["fortified"] is True
+    assert [effect["effect_type"] for effect in site_state_after["pending_effects"]] == ["future_effect_v9"]
+
+    rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
+    assert rejected[-1]["params"]["reason"] == "unsupported_site_effect_type"
+    assert rejected[-1]["params"]["effect_type"] == "future_effect_v9"
+    assert rejected[-1]["params"]["index"] == 0
+
+
+
+
+def test_m8_unsupported_only_skip_is_pure_observation_across_retries() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=514)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": "future_effect_v9", "created_tick": 1, "source": "test"},
+    ]
+    site_state["fortified"] = False
+    before_pending_effects = json.dumps(site_state["pending_effects"], sort_keys=True)
+    before_fortified = bool(site_state.get("fortified", False))
+    before_rehab_generation = int(site_state.get("rehab_generation", 0))
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    _schedule_local_encounter(sim, "phase6d-m8-unsupported-only-1")
+    sim.advance_ticks(5)
+    _end_local(sim)
+    sim.advance_ticks(4)
+    _schedule_local_encounter(sim, "phase6d-m8-unsupported-only-2")
+    sim.advance_ticks(5)
+
+    after_state = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert json.dumps(after_state["pending_effects"], sort_keys=True) == before_pending_effects
+    assert bool(after_state.get("fortified", False)) is before_fortified
+    assert int(after_state.get("rehab_generation", 0)) == before_rehab_generation
+
+    participant_ids_after = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after == old_ids
+
+    rejections = [
+        entry for entry in _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE) if entry["params"].get("reason") == "unsupported_site_effect_type"
+    ]
+    assert len(rejections) == 2
+    assert all(entry["params"].get("index") == 0 for entry in rejections)
+    assert all(entry["params"].get("effect_type") == "future_effect_v9" for entry in rejections)
+
+def test_m8_malformed_marker_rejects_atomically() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=513)
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state["site_state_by_key"][site_key_json]
+    site_state["pending_effects"] = [
+        {"effect_type": "", "created_tick": 1, "source": "test"},
+        {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "created_tick": 2, "source": "test"},
+    ]
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    player_before = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    before_space_id = player_before.space_id
+    before_position = (player_before.position_x, player_before.position_y)
+
+    _schedule_local_encounter(sim, "phase6d-m8-malformed")
+    sim.advance_ticks(5)
+
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[-1]["params"]
+    assert begin["transition_applied"] is False
+    assert begin["reason"] == "malformed_pending_effect_marker"
+    player_after = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    assert player_after.space_id == before_space_id
+    assert (player_after.position_x, player_after.position_y) == before_position
+
+    participant_ids_after = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after == old_ids
+    pending_after = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]["pending_effects"]
+    assert pending_after[0]["effect_type"] == ""
+
+    rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
+    assert rejected[-1]["params"]["reason"] == "malformed_pending_effect_marker"
