@@ -28,6 +28,7 @@ END_LOCAL_ENCOUNTER_INTENT = "end_local_encounter_intent"
 END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE = "end_local_encounter_outcome"
 LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
 LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
+SITE_STATE_TICK_EVENT_TYPE = "site_state_tick"
 LOCAL_ARENA_TEMPLATE_APPLIED_EVENT_TYPE = "local_arena_template_applied"
 LOCAL_ENCOUNTER_ENEMY_ENTRY_ANCHOR_ID = "enemy_entry"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
@@ -44,6 +45,10 @@ RUMOR_TTL_TICKS = 200
 LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX = 64
 LOCAL_ENCOUNTER_END_LEDGER_MAX = 64
 MAX_ACTIVE_LOCAL_ENCOUNTERS = 8
+SITE_CHECK_INTERVAL_TICKS = 120
+STALE_TICKS = 600
+MAX_SITE_CHECKS_PER_TICK = 8
+MAX_SITE_STATE_TAGS = 8
 
 
 class EncounterSelectionModule(RuleModule):
@@ -292,6 +297,7 @@ class LocalEncounterInstanceModule(RuleModule):
     _STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE = "applied_template_by_local_space"
     _STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE = "return_in_progress_by_local_space"
     _STATE_SITE_KEY_BY_LOCAL_SPACE = "site_key_by_local_space"
+    _STATE_SITE_STATE_BY_KEY = "site_state_by_key"
 
     def __init__(self, local_arenas_path: str = DEFAULT_LOCAL_ARENAS_PATH) -> None:
         self._template_by_id: dict[str, LocalArenaTemplate] = {}
@@ -306,6 +312,9 @@ class LocalEncounterInstanceModule(RuleModule):
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
+
+    def on_tick_start(self, sim: Simulation, tick: int) -> None:
+        self._process_site_state_ticks(sim, tick=tick)
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
         if command.command_type != END_LOCAL_ENCOUNTER_INTENT:
@@ -428,6 +437,7 @@ class LocalEncounterInstanceModule(RuleModule):
 
         active_by_local_space = dict(state[self._STATE_ACTIVE_BY_LOCAL_SPACE])
         site_key_by_local_space = dict(state[self._STATE_SITE_KEY_BY_LOCAL_SPACE])
+        site_state_by_key = dict(state[self._STATE_SITE_STATE_BY_KEY])
         local_space_id = self._local_space_id_for_site_key(site_key_by_local_space, normalized_site_key)
         if local_space_id is None and len([ctx for ctx in active_by_local_space.values() if bool(ctx.get("is_active", True))]) >= MAX_ACTIVE_LOCAL_ENCOUNTERS:
             sim.schedule_event_at(
@@ -654,6 +664,13 @@ class LocalEncounterInstanceModule(RuleModule):
                 "last_active_tick": int(event.tick),
             }
             site_key_by_local_space[local_space_id] = copy.deepcopy(normalized_site_key)
+            site_state_by_key = self._upsert_site_state(
+                site_state_by_key=site_state_by_key,
+                site_key=normalized_site_key,
+                status="active",
+                last_active_tick=int(event.tick),
+                next_check_tick=int(event.tick) + SITE_CHECK_INTERVAL_TICKS,
+            )
 
         ordered_space_ids = sorted(active_by_local_space.keys())
         state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
@@ -667,6 +684,7 @@ class LocalEncounterInstanceModule(RuleModule):
             for space_id in sorted(site_key_by_local_space)
             if isinstance(space_id, str) and space_id and isinstance(site_key_by_local_space[space_id], dict)
         }
+        state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
         processed_ids.append(request_id)
         state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
         sim.set_rules_state(self.name, state)
@@ -827,6 +845,7 @@ class LocalEncounterInstanceModule(RuleModule):
         local_space_id = str(event.params.get("local_space_id", ""))
         active_by_local_space = dict(state[self._STATE_ACTIVE_BY_LOCAL_SPACE])
         return_in_progress_by_local_space = dict(state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE])
+        site_state_by_key = dict(state[self._STATE_SITE_STATE_BY_KEY])
         context = active_by_local_space.get(local_space_id)
         entity_id = str(event.params.get("entity_id", "")) if isinstance(event.params.get("entity_id"), str) else None
         applied = False
@@ -884,6 +903,15 @@ class LocalEncounterInstanceModule(RuleModule):
             preserved_context["is_active"] = False
             preserved_context["last_active_tick"] = int(event.tick)
             active_by_local_space[local_space_id] = preserved_context
+            normalized_site_key = self._normalize_site_key_payload(preserved_context.get("site_key"))
+            if normalized_site_key is not None:
+                site_state_by_key = self._upsert_site_state(
+                    site_state_by_key=site_state_by_key,
+                    site_key=normalized_site_key,
+                    status="inactive",
+                    last_active_tick=int(event.tick),
+                    next_check_tick=int(event.tick) + SITE_CHECK_INTERVAL_TICKS,
+                )
         if local_space_id in return_in_progress_by_local_space:
             del return_in_progress_by_local_space[local_space_id]
 
@@ -895,6 +923,7 @@ class LocalEncounterInstanceModule(RuleModule):
             for space_id in sorted(return_in_progress_by_local_space)
             if bool(return_in_progress_by_local_space[space_id])
         }
+        state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
         sim.set_rules_state(self.name, state)
 
         sim.schedule_event_at(
@@ -930,6 +959,7 @@ class LocalEncounterInstanceModule(RuleModule):
         raw_applied_template_by_local_space = state.get(self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE, {})
         raw_return_in_progress_by_local_space = state.get(self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE, {})
         raw_site_key_by_local_space = state.get(self._STATE_SITE_KEY_BY_LOCAL_SPACE, {})
+        raw_site_state_by_key = state.get(self._STATE_SITE_STATE_BY_KEY, {})
         if not isinstance(raw_processed, list):
             raise ValueError("local_encounter_instance.processed_request_ids must be a list")
         if not isinstance(raw_processed_end, list):
@@ -942,6 +972,8 @@ class LocalEncounterInstanceModule(RuleModule):
             raise ValueError("local_encounter_instance.return_in_progress_by_local_space must be an object")
         if not isinstance(raw_site_key_by_local_space, dict):
             raise ValueError("local_encounter_instance.site_key_by_local_space must be an object")
+        if not isinstance(raw_site_state_by_key, dict):
+            raise ValueError("local_encounter_instance.site_state_by_key must be an object")
         normalized = [str(value) for value in raw_processed if str(value)]
         normalized_processed_end = [str(value) for value in raw_processed_end if str(value)]
         normalized_active_by_local_space: dict[str, dict[str, Any]] = {}
@@ -1017,7 +1049,162 @@ class LocalEncounterInstanceModule(RuleModule):
                 continue
             normalized_site_key_by_local_space[space_id] = normalized_site_key
         state[self._STATE_SITE_KEY_BY_LOCAL_SPACE] = normalized_site_key_by_local_space
+        normalized_site_state_by_key: dict[str, dict[str, Any]] = {}
+        for site_key_json, site_state in sorted(raw_site_state_by_key.items()):
+            normalized_site_state = self._normalize_site_state_payload(site_state)
+            if normalized_site_state is None:
+                continue
+            normalized_site_state_by_key[site_key_json] = normalized_site_state
+        for context in state[self._STATE_ACTIVE_BY_LOCAL_SPACE].values():
+            normalized_site_key = self._normalize_site_key_payload(context.get("site_key"))
+            if normalized_site_key is None:
+                continue
+            site_key_json = self._site_key_json(normalized_site_key)
+            existing = normalized_site_state_by_key.get(site_key_json)
+            last_active_tick = int(context.get("last_active_tick", context.get("started_tick", 0)))
+            default_status = "active" if bool(context.get("is_active", True)) else "inactive"
+            if existing is None:
+                normalized_site_state_by_key[site_key_json] = {
+                    "site_key": copy.deepcopy(normalized_site_key),
+                    "status": default_status,
+                    "last_active_tick": last_active_tick,
+                    "next_check_tick": last_active_tick + SITE_CHECK_INTERVAL_TICKS,
+                    "tags": ["stale"] if default_status == "stale" else [],
+                }
+                continue
+            existing["site_key"] = copy.deepcopy(normalized_site_key)
+            existing["last_active_tick"] = max(int(existing.get("last_active_tick", 0)), last_active_tick)
+            if bool(context.get("is_active", True)):
+                existing["status"] = "active"
+                existing["next_check_tick"] = max(
+                    int(existing.get("next_check_tick", 0)),
+                    last_active_tick + SITE_CHECK_INTERVAL_TICKS,
+                )
+            elif str(existing.get("status", "inactive")) == "active":
+                existing["status"] = "inactive"
+            existing["tags"] = self._normalize_tags(existing.get("tags", []))
+        state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(normalized_site_state_by_key.items()))
         return state
+
+    def _process_site_state_ticks(self, sim: Simulation, *, tick: int) -> None:
+        state = self._rules_state(sim)
+        site_state_by_key = dict(state[self._STATE_SITE_STATE_BY_KEY])
+        eligible = [
+            site_key_json
+            for site_key_json, site_state in sorted(site_state_by_key.items())
+            if int(site_state.get("next_check_tick", 0)) <= int(tick)
+        ]
+        if not eligible:
+            return
+
+        processed_count = 0
+        for site_key_json in eligible:
+            if processed_count >= MAX_SITE_CHECKS_PER_TICK:
+                break
+            site_state = copy.deepcopy(site_state_by_key[site_key_json])
+            prior_status = str(site_state.get("status", "inactive"))
+            if prior_status not in {"active", "inactive", "stale"}:
+                prior_status = "inactive"
+            last_active_tick = int(site_state.get("last_active_tick", 0))
+            age = int(tick) - last_active_tick
+            is_stale = age >= STALE_TICKS
+            new_status = prior_status
+            if prior_status != "active":
+                new_status = "stale" if is_stale else "inactive"
+
+            tags = self._normalize_tags(site_state.get("tags", []))
+            if new_status == "stale":
+                tags = self._normalize_tags([*tags, "stale"])
+
+            next_check_tick = int(tick) + SITE_CHECK_INTERVAL_TICKS
+            site_state["status"] = new_status
+            site_state["last_active_tick"] = last_active_tick
+            site_state["next_check_tick"] = next_check_tick
+            site_state["tags"] = tags
+            site_state_by_key[site_key_json] = site_state
+            processed_count += 1
+
+            sim.schedule_event_at(
+                tick=tick,
+                event_type=SITE_STATE_TICK_EVENT_TYPE,
+                params={
+                    "site_key": copy.deepcopy(site_state["site_key"]),
+                    "tick": int(tick),
+                    "prior_status": prior_status,
+                    "new_status": new_status,
+                    "is_stale": is_stale,
+                    "last_active_tick": last_active_tick,
+                    "next_check_tick": next_check_tick,
+                },
+            )
+
+        state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
+        sim.set_rules_state(self.name, state)
+
+    def _upsert_site_state(
+        self,
+        *,
+        site_state_by_key: dict[str, dict[str, Any]],
+        site_key: dict[str, Any],
+        status: str,
+        last_active_tick: int,
+        next_check_tick: int,
+    ) -> dict[str, dict[str, Any]]:
+        site_key_json = self._site_key_json(site_key)
+        existing = site_state_by_key.get(site_key_json)
+        tags: list[str] = []
+        if isinstance(existing, dict):
+            tags = self._normalize_tags(existing.get("tags", []))
+        if status == "stale":
+            tags = self._normalize_tags([*tags, "stale"])
+        site_state_by_key[site_key_json] = {
+            "site_key": copy.deepcopy(site_key),
+            "status": status,
+            "last_active_tick": int(last_active_tick),
+            "next_check_tick": int(next_check_tick),
+            "tags": tags,
+        }
+        return site_state_by_key
+
+    def _normalize_site_state_payload(self, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        site_key = self._normalize_site_key_payload(payload.get("site_key"))
+        if site_key is None:
+            return None
+        status = str(payload.get("status", "inactive"))
+        if status not in {"active", "inactive", "stale"}:
+            status = "inactive"
+        last_active_tick = max(0, int(payload.get("last_active_tick", 0)))
+        next_check_tick = max(0, int(payload.get("next_check_tick", 0)))
+        tags = self._normalize_tags(payload.get("tags", []))
+        if status == "stale":
+            tags = self._normalize_tags([*tags, "stale"])
+        return {
+            "site_key": copy.deepcopy(site_key),
+            "status": status,
+            "last_active_tick": last_active_tick,
+            "next_check_tick": next_check_tick,
+            "tags": tags,
+        }
+
+    @staticmethod
+    def _normalize_tags(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        unique_tags: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            tag = str(item)
+            if not tag or tag in seen:
+                continue
+            seen.add(tag)
+            unique_tags.append(tag)
+        return unique_tags[:MAX_SITE_STATE_TAGS]
+
+    @staticmethod
+    def _site_key_json(site_key: dict[str, Any]) -> str:
+        return json.dumps(site_key, sort_keys=True, separators=(",", ":"))
 
     @staticmethod
     def _local_space_id_for_site_key(site_key_by_local_space: dict[str, dict[str, Any]], site_key: dict[str, Any]) -> str | None:

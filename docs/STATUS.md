@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M3 — Persistent local encounters + deterministic re-entry reuse.
-- **Next action:** harden local encounter lifecycle policies (repopulation/GC and explicit cleared-state semantics) without weakening deterministic reuse contracts.
+- **Current phase:** Phase 6D-M4 — World time acts on persistent sites via deterministic SiteState timers + stale policy.
+- **Next action:** Phase 6D-M5 repopulation/clear-state policy design on top of the SiteState timer substrate without introducing nondeterministic encounter semantics.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added deterministic local encounter participant composition in `LocalEncounterInstanceModule`: on successful begin, spawn one deterministic hostile participant (`encounter_participant:<request_event_id>:0`) into the instantiated local space.
-- Added deterministic participant placement semantics: prefer `enemy_entry` anchor when valid, else use deterministic last-valid-cell fallback, and emit explicit forensics (`spawned_entities` with `entity_id`, `coord`, `placement_rule`) in `local_encounter_begin`.
-- Extended Phase 6D contract tests to assert participant existence, anchor/fallback placement coordinates, forensic payload stability, and save/load-stable traces.
+- Added deterministic serialized `site_state_by_key` substrate under `rules_state["local_encounter_instance"]` with normalized JSON-safe `site_key/status/last_active_tick/next_check_tick/tags` records (hash-covered and save/load-stable).
+- Added deterministic world-time site timer processing in `LocalEncounterInstanceModule` with stable ordering, `MAX_SITE_CHECKS_PER_TICK` bounded processing, and per-site forensic `site_state_tick` outcomes.
+- Implemented Phase 6D-M4 minimal stale policy (`(tick - last_active_tick) >= STALE_TICKS` → `status="stale"` + `"stale"` tag) and added focused tests for threshold behavior, save/load stability, and bounded deterministic deferral.
 
 
 ## What Exists (folders / entry points)
@@ -191,6 +191,7 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_local_encounter_site_state.py`
 - `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
 - `PYTHONPATH=src pytest -q tests/test_interaction_execution_module.py`
 - `PYTHONPATH=src python -m hexcrawler.cli.new_save_from_map content/examples/viewer_map.json saves/space_topology_demo.json --seed 7 --force`
