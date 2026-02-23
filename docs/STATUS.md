@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M2 — Deterministic local encounter participant spawn composition at begin-time.
-- **Next action:** extend local encounter semantic binding beyond static participant placement while preserving deterministic save/load/replay guarantees.
+- **Current phase:** Phase 6D-M3 — Persistent local encounters + deterministic re-entry reuse.
+- **Next action:** harden local encounter lifecycle policies (repopulation/GC and explicit cleared-state semantics) without weakening deterministic reuse contracts.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
@@ -239,9 +239,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Enforced campaign-origin role gating for `local_encounter_intent` so local-role actors cannot instantiate nested local encounters.
-- Added deterministic rejection forensics to `encounter_action_outcome` with explicit `reason`, `entity_id`, `space_id`, and `tick` fields when gating blocks apply.
-- Added deterministic regression coverage for local-space rejection and save/load-stable outcome traces.
+- Added deterministic local encounter `site_key` payload/state handling so campaign-origin requests can resolve persistent local-space reuse across save/load boundaries.
+- Updated local encounter end/return semantics to preserve local spaces/entities, mark instance state inactive with `last_active_tick`, and clear return-in-progress flags without deleting encounter context.
+- Added Phase 6D binding-contract regression coverage for return-time persistence and deterministic re-entry reuse (same local space, no duplicate participant spawn) across save/load.
 
 
 ## Troubleshooting

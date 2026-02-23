@@ -95,7 +95,7 @@ def test_local_encounter_return_happy_path() -> None:
     }
 
     rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
-    assert local_space_id not in rules_state["active_by_local_space"]
+    assert rules_state["active_by_local_space"][local_space_id]["is_active"] is False
 
 
 def test_local_encounter_return_idempotent_across_save_load() -> None:

@@ -88,6 +88,12 @@ def test_campaign_space_emits_local_encounter_request() -> None:
             "roll": 33,
         },
         "suggested_local_template_id": "local_template_forest",
+        "site_key": {
+            "origin_space_id": CAMPAIGN_SPACE_ID,
+            "origin_coord": {"x": 1, "y": 2},
+            "template_id": "local_template_forest",
+            "encounter_entry_id": "wolves_1",
+        },
         "tags": ["night", "rain"],
     }
 
