@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M1 — Deterministic local encounter entry placement semantics.
-- **Next action:** broaden encounter→arena semantic binding context (spawn composition and richer contextual mapping) while preserving deterministic placement/rejection contracts.
-- **Phase status:** ✅ Phase 6D-M1 adds deterministic local entry placement priority (`entry` anchor → deterministic fallback) plus explicit deterministic rejection for unresolved local placement.
+- **Current phase:** Phase 6D-M2 — Deterministic local encounter participant spawn composition at begin-time.
+- **Next action:** extend local encounter semantic binding beyond static participant placement while preserving deterministic save/load/replay guarantees.
+- **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added deterministic Phase 6D-M1 entry placement selection in `LocalEncounterInstanceModule`: use valid `entry` anchor first, else deterministic `default_spawn` fallback with explicit `placement_rule` forensic metadata.
-- Added deterministic rejection semantics for unresolved local entry placement with explicit `applied=false` / `reason="local_encounter_entry_placement_failed"` and forensic identifiers (`entity_id`, `space_id`, `request_event_id`, `tick`, `action_uid`) in `local_encounter_begin`.
-- Extended Phase 6D binding contract tests to assert entry-anchor placement, deterministic fallback placement without an `entry` anchor, and save/load-stable traces for placement outcomes.
+- Added deterministic local encounter participant composition in `LocalEncounterInstanceModule`: on successful begin, spawn one deterministic hostile participant (`encounter_participant:<request_event_id>:0`) into the instantiated local space.
+- Added deterministic participant placement semantics: prefer `enemy_entry` anchor when valid, else use deterministic last-valid-cell fallback, and emit explicit forensics (`spawned_entities` with `entity_id`, `coord`, `placement_rule`) in `local_encounter_begin`.
+- Extended Phase 6D contract tests to assert participant existence, anchor/fallback placement coordinates, forensic payload stability, and save/load-stable traces.
 
 
 ## What Exists (folders / entry points)

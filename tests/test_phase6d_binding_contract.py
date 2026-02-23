@@ -77,6 +77,13 @@ def test_phase6d_encounter_to_arena_binding_contract_roundtrip() -> None:
     assert begin["applied"] is True
     assert begin["reason"] == "resolved"
     assert begin["placement_rule"] == "entry_anchor"
+    assert begin["spawned_entities"] == [
+        {"entity_id": "encounter_participant:evt-00000002:0", "coord": {"x": 15, "y": 11}, "placement_rule": "enemy_fallback_last_cell"}
+    ]
+
+    spawned_enemy = sim.state.entities["encounter_participant:evt-00000002:0"]
+    assert spawned_enemy.space_id == local_space_id
+    assert world_xy_to_square_grid_cell(spawned_enemy.position_x, spawned_enemy.position_y) == {"x": 15, "y": 11}
 
     request_events_before_nested = _trace_by_type(sim, LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE)
     assert len(request_events_before_nested) == 1
@@ -141,6 +148,49 @@ def test_phase6d_encounter_to_arena_binding_contract_roundtrip() -> None:
     assert local_space_id not in rules_state["return_in_progress_by_local_space"]
 
 
+def test_phase6d_local_encounter_enemy_anchor_priority(tmp_path) -> None:
+    payload = {
+        "schema_version": 1,
+        "default_template_id": "enemy_anchor_arena",
+        "templates": [
+            {
+                "template_id": "enemy_anchor_arena",
+                "topology_type": "square_grid",
+                "topology_params": {"width": 5, "height": 5, "origin": {"x": 20, "y": 8}},
+                "role": "local",
+                "anchors": [
+                    {"anchor_id": "entry", "coord": {"x": 20, "y": 8}, "tags": ["entry"]},
+                    {"anchor_id": "enemy_entry", "coord": {"x": 24, "y": 12}, "tags": ["enemy"]},
+                ],
+                "doors": [],
+                "interactables": [],
+                "metadata": {"description": "enemy anchor precedence"},
+            }
+        ],
+    }
+    arenas_path = tmp_path / "local_arenas_enemy_anchor.json"
+    arenas_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    sim = _build_phase6d_contract_sim(seed=911, local_arenas_path=str(arenas_path))
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE,
+        params=_local_encounter_execute_params(source_event_id="evt-phase6d-enemy-anchor", template_id="enemy_anchor_arena"),
+    )
+    sim.advance_ticks(5)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
+    assert begin["applied"] is True
+    assert begin["spawned_entities"] == [
+        {
+            "entity_id": "encounter_participant:evt-00000002:0",
+            "coord": {"x": 24, "y": 12},
+            "placement_rule": "enemy_entry_anchor",
+        }
+    ]
+    spawned_enemy = sim.state.entities["encounter_participant:evt-00000002:0"]
+    assert world_xy_to_square_grid_cell(spawned_enemy.position_x, spawned_enemy.position_y) == {"x": 24, "y": 12}
+
 def test_phase6d_local_encounter_fallback_placement_without_entry_anchor(tmp_path) -> None:
     payload = {
         "schema_version": 1,
@@ -178,6 +228,9 @@ def test_phase6d_local_encounter_fallback_placement_without_entry_anchor(tmp_pat
     assert begin["reason"] == "resolved"
     assert begin["placement_rule"] == "default_spawn"
     assert begin["to_spawn_coord"] == {"x": 11, "y": 5}
+    assert begin["spawned_entities"] == [
+        {"entity_id": "encounter_participant:evt-00000002:0", "coord": {"x": 14, "y": 7}, "placement_rule": "enemy_fallback_last_cell"}
+    ]
 
     local_space_id = begin["to_space_id"]
     assert isinstance(local_space_id, str) and local_space_id.startswith("local_encounter:")
@@ -186,6 +239,8 @@ def test_phase6d_local_encounter_fallback_placement_without_entry_anchor(tmp_pat
         sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_x,
         sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_y,
     ) == {"x": 11, "y": 5}
+    spawned_enemy = sim.state.entities["encounter_participant:evt-00000002:0"]
+    assert world_xy_to_square_grid_cell(spawned_enemy.position_x, spawned_enemy.position_y) == {"x": 14, "y": 7}
 
     payload_after = sim.simulation_payload()
     loaded = Simulation.from_simulation_payload(payload_after)
