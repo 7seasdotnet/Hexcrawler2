@@ -60,6 +60,9 @@ REHAB_POLICY_REPLACE = "replace"
 REHAB_POLICY_ADD = "add"
 REHAB_POLICY_ALLOWED = {REHAB_POLICY_REPLACE, REHAB_POLICY_ADD}
 INVALID_REHAB_POLICY_DIAGNOSTIC_MAX_LEN = 128
+EFFECT_PRIORITY_MIN = -1000
+EFFECT_PRIORITY_MAX = 1000
+INVALID_EFFECT_PRIORITY_DIAGNOSTIC_MAX_LEN = 128
 
 
 class EncounterSelectionModule(RuleModule):
@@ -715,6 +718,8 @@ class LocalEncounterInstanceModule(RuleModule):
                     "generation_after": int(consumption_result["generation_after"]),
                     "rehab_policy": str(consumption_result.get("rehab_policy", REHAB_POLICY_REPLACE)),
                     "fortified": bool(consumption_result.get("fortified", False)),
+                    "index": int(consumption_result.get("index", 0)),
+                    "priority": int(consumption_result.get("priority", 0)),
                     "tick": int(event.tick),
                 },
             )
@@ -744,9 +749,15 @@ class LocalEncounterInstanceModule(RuleModule):
             index = consumption_result.get("index")
             if isinstance(index, int):
                 rejection_params["index"] = int(index)
+            priority = consumption_result.get("priority")
+            if isinstance(priority, int):
+                rejection_params["priority"] = int(priority)
             effect_type = consumption_result.get("effect_type")
             if isinstance(effect_type, str) and effect_type:
                 rejection_params["effect_type"] = effect_type
+            invalid_priority_value = consumption_result.get("invalid_priority_value")
+            if isinstance(invalid_priority_value, str):
+                rejection_params["invalid_priority_value"] = invalid_priority_value
             sim.schedule_event_at(
                 tick=event.tick,
                 event_type=SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
@@ -1405,13 +1416,45 @@ class LocalEncounterInstanceModule(RuleModule):
         consumed_index: int | None = None
         consumed_result: dict[str, Any] | None = None
         diagnostics: list[dict[str, Any]] = []
-        # Deterministic ordering contract (Phase 6D-M8): iterate pending_effects in
-        # lowest-index order, reject malformed markers, skip unsupported marker types
-        # with deterministic diagnostics, and consume/apply at most one supported marker.
+        candidate_order: list[dict[str, Any]] = []
         for idx, raw_effect in enumerate(existing["pending_effects"]):
+            priority_resolution = self._resolve_effect_priority(raw_effect)
+            candidate_order.append(
+                {
+                    "index": int(idx),
+                    "raw_effect": raw_effect,
+                    "priority_resolution": priority_resolution,
+                    "sort_priority": int(priority_resolution.get("sort_priority", 0)),
+                }
+            )
+        candidate_order.sort(key=lambda item: (-item["sort_priority"], item["index"]))
+
+        # Deterministic ordering contract (Phase 6D-M9): iterate pending effects by
+        # descending resolved priority (default 0), tie-break by ascending index.
+        # Malformed markers reject atomically, unsupported markers are skip-only
+        # diagnostics, and consume/apply at most one supported marker.
+        for candidate in candidate_order:
+            idx = int(candidate["index"])
+            raw_effect = candidate["raw_effect"]
+            priority_resolution = candidate["priority_resolution"]
+            priority = int(priority_resolution.get("priority", 0))
             effect = self._normalize_pending_effect_payload(raw_effect)
             if effect is None:
-                return {"status": "rejected", "reason": "malformed_pending_effect_marker", "index": int(idx)}
+                return {
+                    "status": "rejected",
+                    "reason": "malformed_pending_effect_marker",
+                    "index": int(idx),
+                    "priority": int(priority),
+                }
+            if not bool(priority_resolution.get("valid", False)):
+                return {
+                    "status": "rejected",
+                    "reason": "invalid_effect_priority",
+                    "index": int(idx),
+                    "priority": int(priority),
+                    "effect_type": str(effect.get("effect_type", "")),
+                    "invalid_priority_value": priority_resolution.get("invalid_priority_value"),
+                }
             effect_type = str(effect.get("effect_type", ""))
             handler = handlers.get(effect_type)
             if handler is None:
@@ -1420,6 +1463,7 @@ class LocalEncounterInstanceModule(RuleModule):
                         "reason": "unsupported_site_effect_type",
                         "effect_type": effect_type,
                         "index": int(idx),
+                        "priority": int(priority),
                     }
                 )
                 continue
@@ -1430,6 +1474,9 @@ class LocalEncounterInstanceModule(RuleModule):
                     "status": "rejected",
                     "reason": str(consumed_result.get("reason", "site_effect_rejected")),
                     "invalid_rehab_policy_value": consumed_result.get("invalid_rehab_policy_value"),
+                    "index": int(idx),
+                    "priority": int(priority),
+                    "effect_type": effect_type,
                 }
             break
         if consumed_index is None or consumed_result is None:
@@ -1448,6 +1495,8 @@ class LocalEncounterInstanceModule(RuleModule):
             "generation_after": int(consumed_result["generation_after"]),
             "rehab_policy": str(consumed_result.get("rehab_policy", REHAB_POLICY_REPLACE)),
             "fortified": bool(consumed_result.get("fortified", False)),
+            "index": int(consumed_index),
+            "priority": int(self._resolve_effect_priority(existing["pending_effects"][consumed_index]).get("priority", 0)),
             "diagnostics": diagnostics,
             "site_state_by_key": updated_state_by_key,
         }
@@ -1477,11 +1526,57 @@ class LocalEncounterInstanceModule(RuleModule):
                 rejection_params["effect_type"] = effect_type
             if isinstance(diagnostic.get("index"), int):
                 rejection_params["index"] = int(diagnostic["index"])
+            if isinstance(diagnostic.get("priority"), int):
+                rejection_params["priority"] = int(diagnostic["priority"])
+            invalid_priority_value = diagnostic.get("invalid_priority_value")
+            if isinstance(invalid_priority_value, str):
+                rejection_params["invalid_priority_value"] = invalid_priority_value
             sim.schedule_event_at(
                 tick=int(tick),
                 event_type=SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
                 params=rejection_params,
             )
+
+    @staticmethod
+    def _bounded_invalid_priority_value(value: Any) -> str:
+        value_type = type(value).__name__
+        try:
+            rendered_value = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        except (TypeError, ValueError):
+            rendered_value = "<non_json_serializable>"
+        rendered = f"{value_type}:{rendered_value}"
+        if len(rendered) <= INVALID_EFFECT_PRIORITY_DIAGNOSTIC_MAX_LEN:
+            return rendered
+        return f"{rendered[: INVALID_EFFECT_PRIORITY_DIAGNOSTIC_MAX_LEN - 3]}..."
+
+    def _resolve_effect_priority(self, payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict) or "priority" not in payload:
+            return {
+                "valid": True,
+                "priority": 0,
+                "sort_priority": 0,
+            }
+
+        priority = payload.get("priority")
+        if isinstance(priority, bool) or not isinstance(priority, int):
+            return {
+                "valid": False,
+                "priority": 0,
+                "sort_priority": EFFECT_PRIORITY_MAX + 1,
+                "invalid_priority_value": self._bounded_invalid_priority_value(priority),
+            }
+        if priority < EFFECT_PRIORITY_MIN or priority > EFFECT_PRIORITY_MAX:
+            return {
+                "valid": False,
+                "priority": int(priority),
+                "sort_priority": int(priority),
+                "invalid_priority_value": self._bounded_invalid_priority_value(priority),
+            }
+        return {
+            "valid": True,
+            "priority": int(priority),
+            "sort_priority": int(priority),
+        }
 
     def _site_effect_entry_handlers(self) -> dict[str, Any]:
         return {
