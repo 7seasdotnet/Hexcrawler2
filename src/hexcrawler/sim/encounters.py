@@ -204,6 +204,14 @@ class LocalEncounterRequestModule(RuleModule):
         if from_space is None or from_space.role != CAMPAIGN_SPACE_ROLE:
             return
 
+        suggested_local_template_id = self._optional_string(event.params.get("suggested_local_template_id"))
+        site_key = self._site_key(
+            origin_space_id=from_location.space_id,
+            origin_coord=copy.deepcopy(from_location.coord),
+            template_id=suggested_local_template_id,
+            encounter_entry_id=self._optional_string(event.params.get("entry_id")),
+        )
+
         sim.schedule_event_at(
             tick=event.tick + 1,
             event_type=LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE,
@@ -224,7 +232,8 @@ class LocalEncounterRequestModule(RuleModule):
                     "category": self._optional_string(event.params.get("category")),
                     "roll": self._optional_int(event.params.get("roll")),
                 },
-                "suggested_local_template_id": self._optional_string(event.params.get("suggested_local_template_id")),
+                "suggested_local_template_id": suggested_local_template_id,
+                "site_key": site_key,
                 "tags": self._normalized_tags(event.params.get("tags")),
             },
         )
@@ -249,6 +258,24 @@ class LocalEncounterRequestModule(RuleModule):
             raise ValueError("local_encounter_request tags must be a list when present")
         return [str(tag) for tag in value]
 
+    @staticmethod
+    def _site_key(
+        *,
+        origin_space_id: str,
+        origin_coord: dict[str, Any],
+        template_id: str | None,
+        encounter_entry_id: str | None,
+    ) -> dict[str, Any]:
+        resolved_template_id = template_id if isinstance(template_id, str) and template_id else "__default__"
+        key = {
+            "origin_space_id": origin_space_id,
+            "origin_coord": copy.deepcopy(origin_coord),
+            "template_id": resolved_template_id,
+        }
+        if isinstance(encounter_entry_id, str) and encounter_entry_id:
+            key["encounter_entry_id"] = encounter_entry_id
+        return key
+
 
 class LocalEncounterInstanceModule(RuleModule):
     """Phase 6C bridge: deterministic local encounter instancing and structural template application.
@@ -264,6 +291,7 @@ class LocalEncounterInstanceModule(RuleModule):
     _STATE_PROCESSED_END_ACTION_UIDS = "processed_end_action_uids"
     _STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE = "applied_template_by_local_space"
     _STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE = "return_in_progress_by_local_space"
+    _STATE_SITE_KEY_BY_LOCAL_SPACE = "site_key_by_local_space"
 
     def __init__(self, local_arenas_path: str = DEFAULT_LOCAL_ARENAS_PATH) -> None:
         self._template_by_id: dict[str, LocalArenaTemplate] = {}
@@ -312,6 +340,8 @@ class LocalEncounterInstanceModule(RuleModule):
                 active_context = state[self._STATE_ACTIVE_BY_LOCAL_SPACE].get(local_space_id)
                 if active_context is None:
                     reason = "no_active_local_encounter"
+                elif not bool(active_context.get("is_active", True)):
+                    reason = "no_active_local_encounter"
                 elif state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE].get(local_space_id, False):
                     reason = "already_returning"
                 else:
@@ -337,6 +367,7 @@ class LocalEncounterInstanceModule(RuleModule):
                             "origin_space_id": str(active_context.get("origin_space_id", active_context["from_space_id"])),
                             "origin_location": origin_location,
                             "from_location": copy.deepcopy(active_context["from_location"]),
+                            "site_key": copy.deepcopy(active_context.get("site_key")),
                             "tags": list(normalized_tags),
                         },
                     )
@@ -373,8 +404,32 @@ class LocalEncounterInstanceModule(RuleModule):
         if request_id in processed_ids:
             return
 
+        normalized_site_key = self._normalize_site_key_payload(event.params.get("site_key"))
+        if normalized_site_key is None:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+                params={
+                    "request_event_id": request_id,
+                    "from_space_id": str(event.params.get("from_space_id", "")),
+                    "to_space_id": None,
+                    "entity_id": None,
+                    "from_location": copy.deepcopy(event.params.get("from_location")),
+                    "to_spawn_coord": None,
+                    "transition_applied": False,
+                    "reason": "invalid_site_key",
+                    "site_key": copy.deepcopy(event.params.get("site_key")),
+                },
+            )
+            processed_ids.append(request_id)
+            state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
+            sim.set_rules_state(self.name, state)
+            return
+
         active_by_local_space = dict(state[self._STATE_ACTIVE_BY_LOCAL_SPACE])
-        if len(active_by_local_space) >= MAX_ACTIVE_LOCAL_ENCOUNTERS:
+        site_key_by_local_space = dict(state[self._STATE_SITE_KEY_BY_LOCAL_SPACE])
+        local_space_id = self._local_space_id_for_site_key(site_key_by_local_space, normalized_site_key)
+        if local_space_id is None and len([ctx for ctx in active_by_local_space.values() if bool(ctx.get("is_active", True))]) >= MAX_ACTIVE_LOCAL_ENCOUNTERS:
             sim.schedule_event_at(
                 tick=event.tick,
                 event_type=LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
@@ -387,6 +442,7 @@ class LocalEncounterInstanceModule(RuleModule):
                     "to_spawn_coord": None,
                     "transition_applied": False,
                     "reason": "active_local_encounter_cap_reached",
+                    "site_key": copy.deepcopy(normalized_site_key),
                 },
             )
             processed_ids.append(request_id)
@@ -395,8 +451,30 @@ class LocalEncounterInstanceModule(RuleModule):
             return
 
         from_space_id = str(event.params.get("from_space_id", ""))
-        local_space_id = f"local_encounter:{request_id}"
+        reused_existing = local_space_id is not None
+        if local_space_id is None:
+            local_space_id = f"local_encounter:{request_id}"
         local_space = sim.state.world.spaces.get(local_space_id)
+        if reused_existing and local_space is None:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+                params={
+                    "request_event_id": request_id,
+                    "from_space_id": from_space_id,
+                    "to_space_id": None,
+                    "entity_id": None,
+                    "from_location": copy.deepcopy(event.params.get("from_location")),
+                    "to_spawn_coord": None,
+                    "transition_applied": False,
+                    "reason": "invalid_reuse_state_missing_space",
+                    "site_key": copy.deepcopy(normalized_site_key),
+                },
+            )
+            processed_ids.append(request_id)
+            state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
+            sim.set_rules_state(self.name, state)
+            return
         if local_space is None:
             local_space = SpaceState(
                 space_id=local_space_id,
@@ -450,29 +528,55 @@ class LocalEncounterInstanceModule(RuleModule):
                 except (KeyError, TypeError, ValueError):
                     participant_reason = "local_encounter_participant_placement_failed"
                 else:
-                    entity.space_id = local_space.space_id
-                    entity.position_x = next_x
-                    entity.position_y = next_y
-                    transition_applied = True
-                    placement_reason = "resolved"
-                    participant_entities.append(
-                        EntityState(
-                            entity_id=spawn_entity_id,
-                            position_x=spawn_x,
-                            position_y=spawn_y,
-                            space_id=local_space.space_id,
-                            template_id="encounter_hostile_v1",
-                            source_action_uid=self._optional_non_empty_string(event.params.get("action_uid")),
+                    if reused_existing and spawn_entity_id in sim.state.entities:
+                        participant_reason = "local_encounter_participant_id_conflict"
+                        to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+                    elif reused_existing:
+                        existing_participant_ids = sorted(
+                            candidate_id
+                            for candidate_id, candidate in sim.state.entities.items()
+                            if candidate.space_id == local_space.space_id and candidate.template_id == "encounter_hostile_v1"
                         )
-                    )
-                    participant_spawn_records.append(
-                        {
-                            "entity_id": spawn_entity_id,
-                            "coord": copy.deepcopy(participant_coord),
-                            "placement_rule": participant_placement_rule,
-                        }
-                    )
-            to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+                        participant_spawn_records = [
+                            {
+                                "entity_id": participant_id,
+                                "coord": copy.deepcopy(sim._entity_location_ref(sim.state.entities[participant_id]).coord),
+                                "placement_rule": "reuse_existing",
+                            }
+                            for participant_id in existing_participant_ids
+                        ]
+                        entity.space_id = local_space.space_id
+                        entity.position_x = next_x
+                        entity.position_y = next_y
+                        transition_applied = True
+                        placement_reason = "resolved"
+                        participant_reason = "resolved"
+                        to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+                    else:
+                        entity.space_id = local_space.space_id
+                        entity.position_x = next_x
+                        entity.position_y = next_y
+                        transition_applied = True
+                        placement_reason = "resolved"
+                        participant_entities.append(
+                            EntityState(
+                                entity_id=spawn_entity_id,
+                                position_x=spawn_x,
+                                position_y=spawn_y,
+                                space_id=local_space.space_id,
+                                template_id="encounter_hostile_v1",
+                                source_action_uid=self._optional_non_empty_string(event.params.get("action_uid")),
+                            )
+                        )
+                        participant_spawn_records.append(
+                            {
+                                "entity_id": spawn_entity_id,
+                                "coord": copy.deepcopy(participant_coord),
+                                "placement_rule": participant_placement_rule,
+                            }
+                        )
+                        to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+
         elif resolved_spawn_coord is None:
             placement_reason = "local_encounter_entry_placement_failed"
             to_spawn_coord = None
@@ -522,6 +626,8 @@ class LocalEncounterInstanceModule(RuleModule):
                 "template_selection_reason": selection_reason,
                 "placement_rule": placement_rule,
                 "spawned_entities": copy.deepcopy(participant_spawn_records),
+                "reuse": reused_existing,
+                "site_key": copy.deepcopy(normalized_site_key),
                 "encounter_context_passthrough": self._encounter_passthrough_blob(event.params),
             },
         )
@@ -543,7 +649,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_location": copy.deepcopy(origin_location),
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
                 "started_tick": int(event.tick),
+                "site_key": copy.deepcopy(normalized_site_key),
+                "is_active": True,
+                "last_active_tick": int(event.tick),
             }
+            site_key_by_local_space[local_space_id] = copy.deepcopy(normalized_site_key)
 
         ordered_space_ids = sorted(active_by_local_space.keys())
         state[self._STATE_ACTIVE_BY_LOCAL_SPACE] = {
@@ -551,6 +661,11 @@ class LocalEncounterInstanceModule(RuleModule):
         }
         state[self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE] = {
             space_id: applied_template_map[space_id] for space_id in sorted(applied_template_map)
+        }
+        state[self._STATE_SITE_KEY_BY_LOCAL_SPACE] = {
+            space_id: copy.deepcopy(site_key_by_local_space[space_id])
+            for space_id in sorted(site_key_by_local_space)
+            if isinstance(space_id, str) and space_id and isinstance(site_key_by_local_space[space_id], dict)
         }
         processed_ids.append(request_id)
         state[self._STATE_PROCESSED_REQUEST_IDS] = processed_ids[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
@@ -765,7 +880,10 @@ class LocalEncounterInstanceModule(RuleModule):
             actor_space_id_after = actor_space_id_before
 
         if context is not None:
-            del active_by_local_space[local_space_id]
+            preserved_context = copy.deepcopy(context)
+            preserved_context["is_active"] = False
+            preserved_context["last_active_tick"] = int(event.tick)
+            active_by_local_space[local_space_id] = preserved_context
         if local_space_id in return_in_progress_by_local_space:
             del return_in_progress_by_local_space[local_space_id]
 
@@ -790,6 +908,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "request_event_id": str(event.params.get("request_event_id", "")),
                 "local_space_id": local_space_id,
                 "origin_space_id": origin_space_id,
+                "site_key": copy.deepcopy(event.params.get("site_key")),
                 "from_space_id": local_space_id,
                 "to_space_id": to_space_id,
                 "actor_space_id_before": actor_space_id_before,
@@ -798,6 +917,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "to_coord": to_coord,
                 "applied": applied,
                 "reason": reason,
+                "space_persisted": True,
                 "tags": [str(tag) for tag in event.params.get("tags", [])] if isinstance(event.params.get("tags"), list) else [],
             },
         )
@@ -809,6 +929,7 @@ class LocalEncounterInstanceModule(RuleModule):
         raw_active_by_local_space = state.get(self._STATE_ACTIVE_BY_LOCAL_SPACE, {})
         raw_applied_template_by_local_space = state.get(self._STATE_APPLIED_TEMPLATE_BY_LOCAL_SPACE, {})
         raw_return_in_progress_by_local_space = state.get(self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE, {})
+        raw_site_key_by_local_space = state.get(self._STATE_SITE_KEY_BY_LOCAL_SPACE, {})
         if not isinstance(raw_processed, list):
             raise ValueError("local_encounter_instance.processed_request_ids must be a list")
         if not isinstance(raw_processed_end, list):
@@ -819,6 +940,8 @@ class LocalEncounterInstanceModule(RuleModule):
             raise ValueError("local_encounter_instance.applied_template_by_local_space must be an object")
         if not isinstance(raw_return_in_progress_by_local_space, dict):
             raise ValueError("local_encounter_instance.return_in_progress_by_local_space must be an object")
+        if not isinstance(raw_site_key_by_local_space, dict):
+            raise ValueError("local_encounter_instance.site_key_by_local_space must be an object")
         normalized = [str(value) for value in raw_processed if str(value)]
         normalized_processed_end = [str(value) for value in raw_processed_end if str(value)]
         normalized_active_by_local_space: dict[str, dict[str, Any]] = {}
@@ -860,6 +983,9 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_location": copy.deepcopy(origin_location),
                 "return_spawn_coord": copy.deepcopy(return_spawn_coord),
                 "started_tick": int(context.get("started_tick", 0)),
+                "site_key": self._normalize_site_key_payload(context.get("site_key")),
+                "is_active": bool(context.get("is_active", True)),
+                "last_active_tick": int(context.get("last_active_tick", context.get("started_tick", 0))),
             }
         state[self._STATE_PROCESSED_REQUEST_IDS] = normalized[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
         state[self._STATE_PROCESSED_END_ACTION_UIDS] = normalized_processed_end[-LOCAL_ENCOUNTER_END_LEDGER_MAX:]
@@ -877,7 +1003,58 @@ class LocalEncounterInstanceModule(RuleModule):
             for space_id, in_progress in sorted(raw_return_in_progress_by_local_space.items())
             if isinstance(space_id, str) and space_id and bool(in_progress)
         }
+        normalized_site_key_by_local_space: dict[str, dict[str, Any]] = {}
+        for space_id, site_key in sorted(raw_site_key_by_local_space.items()):
+            if not isinstance(space_id, str) or not space_id:
+                continue
+            normalized_site_key = self._normalize_site_key_payload(site_key)
+            if normalized_site_key is None:
+                continue
+            normalized_site_key_by_local_space[space_id] = normalized_site_key
+        for space_id, context in state[self._STATE_ACTIVE_BY_LOCAL_SPACE].items():
+            normalized_site_key = self._normalize_site_key_payload(context.get("site_key"))
+            if normalized_site_key is None:
+                continue
+            normalized_site_key_by_local_space[space_id] = normalized_site_key
+        state[self._STATE_SITE_KEY_BY_LOCAL_SPACE] = normalized_site_key_by_local_space
         return state
+
+    @staticmethod
+    def _local_space_id_for_site_key(site_key_by_local_space: dict[str, dict[str, Any]], site_key: dict[str, Any]) -> str | None:
+        canonical_key = json.dumps(site_key, sort_keys=True, separators=(",", ":"))
+        for local_space_id, existing_site_key in sorted(site_key_by_local_space.items()):
+            if not isinstance(existing_site_key, dict):
+                continue
+            if json.dumps(existing_site_key, sort_keys=True, separators=(",", ":")) == canonical_key:
+                return local_space_id
+        return None
+
+    def _normalize_site_key_payload(self, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        origin_space_id = payload.get("origin_space_id")
+        origin_coord = payload.get("origin_coord")
+        template_id = payload.get("template_id")
+        if not isinstance(origin_space_id, str) or not origin_space_id:
+            return None
+        if not isinstance(template_id, str) or not template_id:
+            return None
+        if not isinstance(origin_coord, dict):
+            return None
+        topology_type = self._infer_topology_type_from_coord(origin_coord)
+        if topology_type is None:
+            return None
+
+        normalized = {
+            "origin_space_id": origin_space_id,
+            "origin_coord": copy.deepcopy(origin_coord),
+            "origin_topology_type": topology_type,
+            "template_id": template_id,
+        }
+        encounter_entry_id = payload.get("encounter_entry_id")
+        if isinstance(encounter_entry_id, str) and encounter_entry_id:
+            normalized["encounter_entry_id"] = encounter_entry_id
+        return normalized
 
     @staticmethod
     def _infer_topology_type_from_coord(coord: Any) -> str | None:
@@ -1077,6 +1254,14 @@ class EncounterActionExecutionModule(RuleModule):
                     suggested_local_template_id = self._optional_non_empty_string(
                         params.get("suggested_local_template_id", template_id)
                     )
+                    site_key = {
+                        "origin_space_id": from_space_id,
+                        "origin_coord": copy.deepcopy(from_location.get("coord")),
+                        "template_id": suggested_local_template_id or "__default__",
+                    }
+                    encounter_entry_id = self._optional_non_empty_string(passthrough.get("entry_id"))
+                    if encounter_entry_id is not None:
+                        site_key["encounter_entry_id"] = encounter_entry_id
                     sim.schedule_event_at(
                         tick=event.tick + 1,
                         event_type=LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE,
@@ -1085,6 +1270,7 @@ class EncounterActionExecutionModule(RuleModule):
                             "from_space_id": from_space_id,
                             "from_location": from_location,
                             "suggested_local_template_id": suggested_local_template_id,
+                            "site_key": site_key,
                             "encounter_context_passthrough": passthrough,
                             "tick": passthrough.get("tick"),
                             "context": passthrough.get("context"),

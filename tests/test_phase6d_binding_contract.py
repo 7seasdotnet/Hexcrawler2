@@ -247,3 +247,80 @@ def test_phase6d_local_encounter_fallback_placement_without_entry_anchor(tmp_pat
     loaded.register_rule_module(EncounterActionExecutionModule())
     loaded.register_rule_module(LocalEncounterInstanceModule(local_arenas_path=str(arenas_path)))
     assert loaded.get_event_trace() == sim.get_event_trace()
+
+
+def test_phase6d_local_encounter_persists_and_reuses_on_reentry_after_save_load() -> None:
+    sim = _build_phase6d_contract_sim(seed=777)
+
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE,
+        params=_local_encounter_execute_params(source_event_id="evt-phase6d-persistent-enter"),
+    )
+    sim.advance_ticks(5)
+
+    begin_events = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)
+    assert len(begin_events) == 1
+    first_begin = begin_events[0]["params"]
+    local_space_id = first_begin["to_space_id"]
+    assert first_begin["reuse"] is False
+    assert first_begin["reason"] == "resolved"
+
+    participant_ids_before = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_before == ["encounter_participant:evt-00000002:0"]
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=END_LOCAL_ENCOUNTER_INTENT,
+            params={"intent": END_LOCAL_ENCOUNTER_INTENT, "entity_id": DEFAULT_PLAYER_ENTITY_ID, "tags": []},
+        )
+    )
+    sim.advance_ticks(4)
+
+    assert sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].space_id == "overworld"
+    assert local_space_id in sim.state.world.spaces
+    participant_ids_after_return = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after_return == participant_ids_before
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(EncounterActionExecutionModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    loaded.schedule_event_at(
+        tick=loaded.state.tick,
+        event_type=ENCOUNTER_ACTION_EXECUTE_EVENT_TYPE,
+        params=_local_encounter_execute_params(source_event_id="evt-phase6d-persistent-reenter"),
+    )
+    loaded.advance_ticks(5)
+
+    begin_events_loaded = _trace_by_type(loaded, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)
+    assert len(begin_events_loaded) == 2
+    second_begin = begin_events_loaded[-1]["params"]
+    assert second_begin["reuse"] is True
+    assert second_begin["to_space_id"] == local_space_id
+    assert second_begin["spawned_entities"] == [
+        {
+            "entity_id": "encounter_participant:evt-00000002:0",
+            "coord": {"x": 15, "y": 11},
+            "placement_rule": "reuse_existing",
+        }
+    ]
+
+    participant_ids_after_reentry = sorted(
+        entity_id
+        for entity_id, entity in loaded.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after_reentry == participant_ids_before
+    assert loaded.state.entities[DEFAULT_PLAYER_ENTITY_ID].space_id == local_space_id
