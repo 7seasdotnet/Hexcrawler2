@@ -58,6 +58,7 @@ STALE_POLICY_EFFECT_SOURCE = "stale_policy"
 REHAB_POLICY_REPLACE = "replace"
 REHAB_POLICY_ADD = "add"
 REHAB_POLICY_ALLOWED = {REHAB_POLICY_REPLACE, REHAB_POLICY_ADD}
+INVALID_REHAB_POLICY_DIAGNOSTIC_MAX_LEN = 128
 
 
 class EncounterSelectionModule(RuleModule):
@@ -702,15 +703,19 @@ class LocalEncounterInstanceModule(RuleModule):
                 },
             )
         elif consumption_result["status"] == "rejected":
+            rejection_params = {
+                "site_key": copy.deepcopy(normalized_site_key),
+                "source": "entry_policy",
+                "reason": str(consumption_result["reason"]),
+                "tick": int(event.tick),
+            }
+            invalid_rehab_policy_value = consumption_result.get("invalid_rehab_policy_value")
+            if isinstance(invalid_rehab_policy_value, str):
+                rejection_params["invalid_rehab_policy_value"] = invalid_rehab_policy_value
             sim.schedule_event_at(
                 tick=event.tick,
                 event_type=SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE,
-                params={
-                    "site_key": copy.deepcopy(normalized_site_key),
-                    "source": "entry_policy",
-                    "reason": str(consumption_result["reason"]),
-                    "tick": int(event.tick),
-                },
+                params=rejection_params,
             )
 
         sim.schedule_event_at(
@@ -1294,7 +1299,11 @@ class LocalEncounterInstanceModule(RuleModule):
             "tags": tags,
             "pending_effects": pending_effects,
             "rehab_generation": rehab_generation,
-            "rehab_policy": self._normalize_rehab_policy(existing.get("rehab_policy")) if isinstance(existing, dict) else REHAB_POLICY_REPLACE,
+            "rehab_policy": (
+                REHAB_POLICY_REPLACE
+                if not isinstance(existing, dict) or existing.get("rehab_policy") is None
+                else copy.deepcopy(existing.get("rehab_policy"))
+            ),
         }
         return site_state_by_key
 
@@ -1314,9 +1323,10 @@ class LocalEncounterInstanceModule(RuleModule):
             tags = self._normalize_tags([*tags, "stale"])
         pending_effects = self._normalize_pending_effects(payload.get("pending_effects", []))
         rehab_generation = max(0, int(payload.get("rehab_generation", 0)))
-        rehab_policy = self._normalize_rehab_policy(payload.get("rehab_policy"))
+        rehab_policy_raw = payload.get("rehab_policy")
+        rehab_policy = self._normalize_rehab_policy(rehab_policy_raw)
         if rehab_policy is None:
-            return None
+            rehab_policy = copy.deepcopy(rehab_policy_raw)
         return {
             "site_key": copy.deepcopy(site_key),
             "status": status,
@@ -1344,6 +1354,13 @@ class LocalEncounterInstanceModule(RuleModule):
 
         normalized_site_state = self._normalize_site_state_payload(existing)
         if normalized_site_state is None:
+            invalid_rehab_policy_value = self._bounded_invalid_rehab_policy_value(existing.get("rehab_policy"))
+            if invalid_rehab_policy_value is not None:
+                return {
+                    "status": "rejected",
+                    "reason": "invalid_rehab_policy",
+                    "invalid_rehab_policy_value": invalid_rehab_policy_value,
+                }
             return {"status": "rejected", "reason": "invalid_site_state_payload"}
 
         handlers = self._site_effect_entry_handlers()
@@ -1360,6 +1377,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 return {
                     "status": "rejected",
                     "reason": str(consumed_result.get("reason", "site_effect_rejected")),
+                    "invalid_rehab_policy_value": consumed_result.get("invalid_rehab_policy_value"),
                 }
             break
         if consumed_index is None or consumed_result is None:
@@ -1387,7 +1405,11 @@ class LocalEncounterInstanceModule(RuleModule):
     def _consume_reinhabitation_pending_effect(*, site_state: dict[str, Any]) -> dict[str, Any]:
         policy = site_state.get("rehab_policy", REHAB_POLICY_REPLACE)
         if not isinstance(policy, str) or policy not in REHAB_POLICY_ALLOWED:
-            return {"status": "rejected", "reason": "invalid_rehab_policy"}
+            return {
+                "status": "rejected",
+                "reason": "invalid_rehab_policy",
+                "invalid_rehab_policy_value": LocalEncounterInstanceModule._bounded_invalid_rehab_policy_value(policy),
+            }
         return {
             "status": "consumed",
             "generation_after": int(site_state.get("rehab_generation", 0)) + 1,
@@ -1400,7 +1422,25 @@ class LocalEncounterInstanceModule(RuleModule):
             return REHAB_POLICY_REPLACE
         if not isinstance(value, str):
             return None
+        if value not in REHAB_POLICY_ALLOWED:
+            return None
         return value
+
+    @staticmethod
+    def _bounded_invalid_rehab_policy_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            rendered = value
+        else:
+            value_type = type(value).__name__
+            try:
+                rendered = f"{value_type}:{json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)}"
+            except (TypeError, ValueError):
+                rendered = f"{value_type}:<non_json_serializable>"
+        if len(rendered) <= INVALID_REHAB_POLICY_DIAGNOSTIC_MAX_LEN:
+            return rendered
+        return f"{rendered[: INVALID_REHAB_POLICY_DIAGNOSTIC_MAX_LEN - 3]}..."
 
     def _plan_reinhabitation_generation(
         self,

@@ -206,6 +206,50 @@ def test_m7_invalid_policy_rejects_atomically_with_forensics() -> None:
 
     rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
     assert rejected[-1]["params"]["reason"] == "invalid_rehab_policy"
+    assert rejected[-1]["params"]["invalid_rehab_policy_value"] == "bogus"
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed == []
+
+
+def test_m7_invalid_non_string_policy_rejects_with_specific_reason() -> None:
+    sim, local_space_id, site_key_json, old_ids = _setup_with_pending_effect(seed=508)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    state["site_state_by_key"][site_key_json]["rehab_policy"] = {"x": 1}
+    sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    player_before = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    before_space_id = player_before.space_id
+    before_position = (player_before.position_x, player_before.position_y)
+
+    _schedule_local_encounter(sim, "phase6d-m7-reenter-invalid-non-string")
+    sim.advance_ticks(5)
+
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[-1]["params"]
+    assert begin["reuse"] is True
+    assert begin["transition_applied"] is False
+    assert begin["reason"] == "invalid_rehab_policy"
+
+    player_after = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    assert player_after.space_id == before_space_id
+    assert (player_after.position_x, player_after.position_y) == before_position
+
+    participant_ids_after = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == "encounter_hostile_v1"
+    )
+    assert participant_ids_after == old_ids
+
+    site_state = sim.get_rules_state(LocalEncounterInstanceModule.name)["site_state_by_key"][site_key_json]
+    assert site_state["rehab_generation"] == 0
+    assert any(effect["effect_type"] == REINHABITATION_PENDING_EFFECT_TYPE for effect in site_state["pending_effects"])
+
+    rejected = _trace(sim, SITE_EFFECT_CONSUMPTION_REJECTED_EVENT_TYPE)
+    assert rejected[-1]["params"]["reason"] == "invalid_rehab_policy"
+    assert rejected[-1]["params"]["invalid_rehab_policy_value"] == 'dict:{"x":1}'
+    consumed = _trace(sim, SITE_EFFECT_CONSUMED_EVENT_TYPE)
+    assert consumed == []
 
 
 def test_m7_add_policy_failure_is_atomic() -> None:
