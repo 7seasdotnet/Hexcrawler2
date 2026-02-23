@@ -29,6 +29,7 @@ END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE = "end_local_encounter_outcome"
 LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
 LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
 SITE_STATE_TICK_EVENT_TYPE = "site_state_tick"
+SITE_EFFECT_SCHEDULED_EVENT_TYPE = "site_effect_scheduled"
 LOCAL_ARENA_TEMPLATE_APPLIED_EVENT_TYPE = "local_arena_template_applied"
 LOCAL_ENCOUNTER_ENEMY_ENTRY_ANCHOR_ID = "enemy_entry"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
@@ -49,6 +50,9 @@ SITE_CHECK_INTERVAL_TICKS = 120
 STALE_TICKS = 600
 MAX_SITE_CHECKS_PER_TICK = 8
 MAX_SITE_STATE_TAGS = 8
+MAX_PENDING_EFFECTS_PER_SITE = 8
+REINHABITATION_PENDING_EFFECT_TYPE = "reinhabitation_pending"
+STALE_POLICY_EFFECT_SOURCE = "stale_policy"
 
 
 class EncounterSelectionModule(RuleModule):
@@ -298,6 +302,7 @@ class LocalEncounterInstanceModule(RuleModule):
     _STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE = "return_in_progress_by_local_space"
     _STATE_SITE_KEY_BY_LOCAL_SPACE = "site_key_by_local_space"
     _STATE_SITE_STATE_BY_KEY = "site_state_by_key"
+    _SITE_EFFECT_REQUIRED_KEYS = ("effect_type", "created_tick", "source")
 
     def __init__(self, local_arenas_path: str = DEFAULT_LOCAL_ARENAS_PATH) -> None:
         self._template_by_id: dict[str, LocalArenaTemplate] = {}
@@ -1070,6 +1075,7 @@ class LocalEncounterInstanceModule(RuleModule):
                     "last_active_tick": last_active_tick,
                     "next_check_tick": last_active_tick + SITE_CHECK_INTERVAL_TICKS,
                     "tags": ["stale"] if default_status == "stale" else [],
+                    "pending_effects": [],
                 }
                 continue
             existing["site_key"] = copy.deepcopy(normalized_site_key)
@@ -1083,6 +1089,7 @@ class LocalEncounterInstanceModule(RuleModule):
             elif str(existing.get("status", "inactive")) == "active":
                 existing["status"] = "inactive"
             existing["tags"] = self._normalize_tags(existing.get("tags", []))
+            existing["pending_effects"] = self._normalize_pending_effects(existing.get("pending_effects", []))
         state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(normalized_site_state_by_key.items()))
         return state
 
@@ -1116,13 +1123,37 @@ class LocalEncounterInstanceModule(RuleModule):
             if new_status == "stale":
                 tags = self._normalize_tags([*tags, "stale"])
 
+            pending_effects = self._normalize_pending_effects(site_state.get("pending_effects", []))
+            scheduled_effect: dict[str, Any] | None = None
+            if prior_status != "stale" and new_status == "stale":
+                pending_effects, scheduled_effect = self._schedule_site_effect_once(
+                    pending_effects=pending_effects,
+                    effect_type=REINHABITATION_PENDING_EFFECT_TYPE,
+                    created_tick=int(tick),
+                    source=STALE_POLICY_EFFECT_SOURCE,
+                )
+
             next_check_tick = int(tick) + SITE_CHECK_INTERVAL_TICKS
             site_state["status"] = new_status
             site_state["last_active_tick"] = last_active_tick
             site_state["next_check_tick"] = next_check_tick
             site_state["tags"] = tags
+            site_state["pending_effects"] = pending_effects
             site_state_by_key[site_key_json] = site_state
             processed_count += 1
+
+            if scheduled_effect is not None:
+                sim.schedule_event_at(
+                    tick=tick,
+                    event_type=SITE_EFFECT_SCHEDULED_EVENT_TYPE,
+                    params={
+                        "site_key": copy.deepcopy(site_state["site_key"]),
+                        "tick": int(tick),
+                        "effect_type": str(scheduled_effect["effect_type"]),
+                        "source": str(scheduled_effect["source"]),
+                        "created_tick": int(scheduled_effect["created_tick"]),
+                    },
+                )
 
             sim.schedule_event_at(
                 tick=tick,
@@ -1157,12 +1188,16 @@ class LocalEncounterInstanceModule(RuleModule):
             tags = self._normalize_tags(existing.get("tags", []))
         if status == "stale":
             tags = self._normalize_tags([*tags, "stale"])
+        pending_effects: list[Any] = []
+        if isinstance(existing, dict):
+            pending_effects = self._normalize_pending_effects(existing.get("pending_effects", []))
         site_state_by_key[site_key_json] = {
             "site_key": copy.deepcopy(site_key),
             "status": status,
             "last_active_tick": int(last_active_tick),
             "next_check_tick": int(next_check_tick),
             "tags": tags,
+            "pending_effects": pending_effects,
         }
         return site_state_by_key
 
@@ -1180,13 +1215,97 @@ class LocalEncounterInstanceModule(RuleModule):
         tags = self._normalize_tags(payload.get("tags", []))
         if status == "stale":
             tags = self._normalize_tags([*tags, "stale"])
+        pending_effects = self._normalize_pending_effects(payload.get("pending_effects", []))
         return {
             "site_key": copy.deepcopy(site_key),
             "status": status,
             "last_active_tick": last_active_tick,
             "next_check_tick": next_check_tick,
             "tags": tags,
+            "pending_effects": pending_effects,
         }
+
+    def _schedule_site_effect_once(
+        self,
+        *,
+        pending_effects: list[dict[str, Any]],
+        effect_type: str,
+        created_tick: int,
+        source: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        normalized = self._normalize_pending_effects(pending_effects)
+        if any(str(effect.get("effect_type", "")) == effect_type for effect in normalized):
+            return normalized, None
+        effect = {
+            "effect_type": effect_type,
+            "created_tick": int(created_tick),
+            "source": source,
+        }
+        combined = [*normalized, effect]
+        bounded = self._normalize_pending_effects(combined)
+        return bounded, effect if any(str(item.get("effect_type", "")) == effect_type for item in bounded) else None
+
+    def _normalize_pending_effects(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in value:
+            effect = self._normalize_pending_effect_payload(item)
+            if effect is None:
+                continue
+            normalized.append(effect)
+        if len(normalized) > MAX_PENDING_EFFECTS_PER_SITE:
+            normalized = normalized[-MAX_PENDING_EFFECTS_PER_SITE:]
+        return normalized
+
+    def _normalize_pending_effect_payload(self, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        effect_type = payload.get("effect_type")
+        source = payload.get("source")
+        if not isinstance(effect_type, str) or not effect_type:
+            return None
+        if not isinstance(source, str) or not source:
+            return None
+        created_tick = max(0, int(payload.get("created_tick", 0)))
+        normalized = {
+            "effect_type": effect_type,
+            "created_tick": created_tick,
+            "source": source,
+        }
+        for key in sorted(payload):
+            if key in self._SITE_EFFECT_REQUIRED_KEYS:
+                continue
+            if not isinstance(key, str):
+                continue
+            normalized_value = self._normalize_json_value(payload[key])
+            if normalized_value is None and payload[key] is not None:
+                continue
+            normalized[key] = normalized_value
+        return normalized
+
+    def _normalize_json_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return value
+        if isinstance(value, list):
+            normalized_items: list[Any] = []
+            for item in value:
+                normalized_item = self._normalize_json_value(item)
+                if normalized_item is None and item is not None:
+                    continue
+                normalized_items.append(normalized_item)
+            return normalized_items
+        if isinstance(value, dict):
+            normalized_obj: dict[str, Any] = {}
+            for key in sorted(value):
+                if not isinstance(key, str):
+                    continue
+                normalized_item = self._normalize_json_value(value[key])
+                if normalized_item is None and value[key] is not None:
+                    continue
+                normalized_obj[key] = normalized_item
+            return normalized_obj
+        return None
 
     @staticmethod
     def _normalize_tags(value: Any) -> list[str]:

@@ -1,17 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M4 — World time acts on persistent sites via deterministic SiteState timers + stale policy.
-- **Next action:** Phase 6D-M5 repopulation/clear-state policy design on top of the SiteState timer substrate without introducing nondeterministic encounter semantics.
+- **Current phase:** Phase 6D-M5 — SiteEffects substrate adds deterministic per-site pending effects markers scheduled from stale transitions.
+- **Next action:** Phase 6D-M6 deterministic consumption policy design for pending site effects (still marker-only; no random encounter spawning).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added deterministic serialized `site_state_by_key` substrate under `rules_state["local_encounter_instance"]` with normalized JSON-safe `site_key/status/last_active_tick/next_check_tick/tags` records (hash-covered and save/load-stable).
-- Added deterministic world-time site timer processing in `LocalEncounterInstanceModule` with stable ordering, `MAX_SITE_CHECKS_PER_TICK` bounded processing, and per-site forensic `site_state_tick` outcomes.
-- Implemented Phase 6D-M4 minimal stale policy (`(tick - last_active_tick) >= STALE_TICKS` → `status="stale"` + `"stale"` tag) and added focused tests for threshold behavior, save/load stability, and bounded deterministic deferral.
-
+- Extended serialized/hash-covered `site_state_by_key` records with bounded `pending_effects` (JSON-safe normalization + deterministic FIFO drop-oldest via tail retention when over cap).
+- Added deterministic stale-transition scheduling for one marker effect (`reinhabitation_pending`, source `stale_policy`) with duplicate prevention and `site_effect_scheduled` forensic emission.
+- Added focused Phase 6D-M5 tests for one-time scheduling, save/load stability, and pending-effect boundedness behavior.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
