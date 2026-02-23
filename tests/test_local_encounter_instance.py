@@ -82,7 +82,11 @@ def test_local_encounter_instance_exactly_once() -> None:
     assert begin_params["from_space_id"] == CAMPAIGN_SPACE_ID
     assert begin_params["to_spawn_coord"] == {"x": 1, "y": 6}
     assert begin_params["transition_applied"] is True
+    assert begin_params["spawned_entities"] == [
+        {"entity_id": "encounter_participant:evt-00000002:0", "coord": {"x": 15, "y": 11}, "placement_rule": "enemy_fallback_last_cell"}
+    ]
     assert sim.state.entities["scout"].space_id == expected_space_id
+    assert sim.state.entities["encounter_participant:evt-00000002:0"].space_id == expected_space_id
 
 
 def test_local_encounter_instance_save_load_idempotent() -> None:

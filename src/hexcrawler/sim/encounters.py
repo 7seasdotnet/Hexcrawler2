@@ -29,6 +29,7 @@ END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE = "end_local_encounter_outcome"
 LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
 LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
 LOCAL_ARENA_TEMPLATE_APPLIED_EVENT_TYPE = "local_arena_template_applied"
+LOCAL_ENCOUNTER_ENEMY_ENTRY_ANCHOR_ID = "enemy_entry"
 SPAWN_ENTITY_ID_PREFIX = "spawn"
 ENCOUNTER_CHECK_INTERVAL = 10
 ENCOUNTER_CONTEXT_GLOBAL = "global"
@@ -421,30 +422,72 @@ class LocalEncounterInstanceModule(RuleModule):
         if template_applied:
             applied_template_map[local_space_id] = template_id
 
+        request_event_id = str(event.event_id)
         entity_id = self._select_entity_id(sim=sim, from_space_id=from_space_id)
         transition_applied = False
         placement_reason = "resolved"
         resolved_spawn_coord, placement_rule = self._resolve_entry_placement(local_space)
+        participant_spawn_records: list[dict[str, Any]] = []
+        participant_entities: list[EntityState] = []
+        participant_reason = "resolved"
         from_location_payload = event.params.get("from_location")
         if entity_id is not None and resolved_spawn_coord is not None:
             entity = sim.state.entities[entity_id]
             from_location_payload = sim._entity_location_ref(entity).to_dict()
-            try:
-                next_x, next_y = sim._coord_to_world_xy(space=local_space, coord=resolved_spawn_coord)
-            except (KeyError, TypeError, ValueError):
-                placement_reason = "local_encounter_entry_placement_failed"
+            spawn_entity_id = f"encounter_participant:{request_event_id}:0"
+            participant_coord, participant_placement_rule = self._resolve_participant_placement(
+                local_space=local_space,
+                occupied_coords=(resolved_spawn_coord,),
+            )
+            if spawn_entity_id in sim.state.entities:
+                participant_reason = "local_encounter_participant_id_conflict"
+            elif participant_coord is None:
+                participant_reason = "local_encounter_participant_placement_failed"
             else:
-                entity.space_id = local_space.space_id
-                entity.position_x = next_x
-                entity.position_y = next_y
-                transition_applied = True
-                placement_reason = "resolved"
+                try:
+                    next_x, next_y = sim._coord_to_world_xy(space=local_space, coord=resolved_spawn_coord)
+                    spawn_x, spawn_y = sim._coord_to_world_xy(space=local_space, coord=participant_coord)
+                except (KeyError, TypeError, ValueError):
+                    participant_reason = "local_encounter_participant_placement_failed"
+                else:
+                    entity.space_id = local_space.space_id
+                    entity.position_x = next_x
+                    entity.position_y = next_y
+                    transition_applied = True
+                    placement_reason = "resolved"
+                    participant_entities.append(
+                        EntityState(
+                            entity_id=spawn_entity_id,
+                            position_x=spawn_x,
+                            position_y=spawn_y,
+                            space_id=local_space.space_id,
+                            template_id="encounter_hostile_v1",
+                            source_action_uid=self._optional_non_empty_string(event.params.get("action_uid")),
+                        )
+                    )
+                    participant_spawn_records.append(
+                        {
+                            "entity_id": spawn_entity_id,
+                            "coord": copy.deepcopy(participant_coord),
+                            "placement_rule": participant_placement_rule,
+                        }
+                    )
             to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
         elif resolved_spawn_coord is None:
             placement_reason = "local_encounter_entry_placement_failed"
             to_spawn_coord = None
         else:
             to_spawn_coord = copy.deepcopy(resolved_spawn_coord)
+
+        if placement_reason == "resolved" and participant_reason != "resolved":
+            placement_reason = participant_reason
+            transition_applied = False
+            participant_spawn_records = []
+            participant_entities = []
+
+        if transition_applied:
+            for participant in participant_entities:
+                sim.add_entity(participant)
 
         sim.schedule_event_at(
             tick=event.tick,
@@ -478,6 +521,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "template_id": template_id,
                 "template_selection_reason": selection_reason,
                 "placement_rule": placement_rule,
+                "spawned_entities": copy.deepcopy(participant_spawn_records),
                 "encounter_context_passthrough": self._encounter_passthrough_blob(event.params),
             },
         )
@@ -612,6 +656,24 @@ class LocalEncounterInstanceModule(RuleModule):
         if local_space.is_valid_cell(fallback):
             return copy.deepcopy(fallback), "default_spawn"
 
+        return None, "unresolved"
+
+    @staticmethod
+    def _resolve_participant_placement(
+        *, local_space: SpaceState, occupied_coords: tuple[dict[str, int], ...]
+    ) -> tuple[dict[str, int] | None, str]:
+        enemy_anchor = local_space.anchors.get(LOCAL_ENCOUNTER_ENEMY_ENTRY_ANCHOR_ID)
+        if enemy_anchor is not None and local_space.is_valid_cell(enemy_anchor.coord):
+            if all(enemy_anchor.coord != occupied for occupied in occupied_coords):
+                return copy.deepcopy(enemy_anchor.coord), "enemy_entry_anchor"
+
+        cells = local_space.iter_cells()
+        for coord in reversed(cells):
+            if not local_space.is_valid_cell(coord):
+                continue
+            if any(coord == occupied for occupied in occupied_coords):
+                continue
+            return copy.deepcopy(coord), "enemy_fallback_last_cell"
         return None, "unresolved"
 
     @staticmethod
