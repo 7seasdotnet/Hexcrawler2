@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M9 — deterministic pending-effect priority ordering (`priority` default `0`) with highest-priority-first selection, index tie-breaks, atomic rejection semantics, and marker-only handlers (`reinhabitation_pending` + `fortification_pending`) without random encounter spawning tables.
-- **Next action:** Phase 6D-M10 — content-authored priority usage and/or additional marker-only effect types while preserving deterministic atomic marker consumption and no random spawn tables.
+- **Current phase:** Phase 6D-M10 — deterministic site ecology scaffolding with persistent campaign groups (`world.groups`), per-site claim anchors (`claimed_by_group_id`, `claimed_tick`), and deterministic growth-step ledger scheduling marker effects (still marker-only, no RNG/random spawn tables).
+- **Next action:** Phase 6D-M11 — introduce deterministic RNG stream usage for growth chance/1dN-like ecology decisions and optional deterministic claim-from-wandering-groups logic (while preserving replay/save-load stability).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added optional marker `priority: int` support (`-1000..1000`, default `0`) to pending-effect consumption, with deterministic highest-priority-first ordering and stable index tie-break semantics.
-- Preserved atomic plan/apply guarantees by rejecting invalid marker priority deterministically (`invalid_effect_priority`) with bounded forensic diagnostics, while unsupported marker types remain skip-only/non-mutating.
-- Extended deterministic tests for legacy default-priority behavior, priority overrides, tie-break stability, unsupported-high-priority skip behavior, invalid-priority atomic rejection, and save/load simulation-hash equivalence (still marker-only, no random spawn tables/probabilities).
+- Added persistent `world.groups` substrate (canonical/hash-covered) with strict JSON-safe validation, deterministic legacy default (`{}`), and save/load key/id integrity checks for campaign-role seed carriers.
+- Extended per-site serialized state with deterministic claim anchors (`claimed_by_group_id`, `claimed_tick`) plus bounded `growth_applied_steps` ledger for ecology idempotence and restart/save-load stability.
+- Added `SiteEcologyModule` deterministic periodic tick scaffolding (stable ordering + bounded processing + deterministic cursor deferral) that schedules marker-only pending effects (`fortification_pending`, `reinhabitation_pending` with explicit priority) and emits deterministic ecology forensics (no RNG/random spawn tables yet).
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -25,7 +25,8 @@
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
-  - Local encounter instancing/return bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, persists serialized return context in `rules_state["local_encounter_instance"].active_by_local_space`, and handles Local-role `end_local_encounter_intent` to schedule deterministic `local_encounter_end`/`local_encounter_return` events back to stored campaign origin space IDs.
+  - Local encounter instancing/return bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, persists serialized return context in `rules_state["local_encounter_instance"].active_by_local_space`, and handles Local-role `end_local_encounter_intent` to schedule deterministic `local_encounter_end`/`local_encounter_return` events back to stored campaign origin space IDs; site state now persists claim anchors and growth-step ledgers for ecology scaffolding.
+  - Site ecology scaffolding module (`SiteEcologyModule`) that runs deterministic campaign-role ecology ticks via serialized periodic events, uses stable-ordered bounded processing with deterministic cursor deferral, schedules marker-only growth effects into pending site effects, and records deterministic ecology scheduling forensics.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
   - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing ingress role-gating (`local` only), then deterministic validation/range/cooldown checks plus local-hex melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
   - Combat seam also consumes `turn_intent` with the same local-only role gate; campaign-role turn intents deterministically reject with `tactical_not_allowed_in_campaign_space` and do not mutate facing.
@@ -37,6 +38,7 @@
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
   - World sites substrate (`WorldState.sites`) with deterministic canonical serialization/hash coverage, legacy load default (`{}`), and deterministic location query helper (`WorldState.get_sites_at_location(...)`).
+  - World groups substrate (`WorldState.groups`) with deterministic canonical serialization/hash coverage, strict JSON-safe validation, and deterministic legacy load default (`{}`).
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
   - Space substrate now serializes explicit `role` metadata (`campaign`/`local`); topology is no longer used as tactical-permission proxy.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
@@ -231,6 +233,7 @@
 - `perceive_signal_intent` (simulation command seam; delayed deterministic signal query with channel/radius filtering and strength reporting)
 - `turn_intent` (simulation command seam; deterministic facing-token update with forensic `turn_outcome`)
 - `end_local_encounter_intent` (simulation command seam; Local-role-only encounter return request with forensic `end_local_encounter_outcome` + `local_encounter_return`)
+- `claim_site_intent` (simulation command seam; deterministic structural site claim anchor set for ecology scaffolding, with forensic `site_claim_outcome`)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -239,9 +242,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added optional pending-effect marker `priority` support with deterministic ordering by highest priority first, then lowest original list index.
-- Added deterministic invalid-priority rejection for out-of-range/non-integer values (`invalid_effect_priority`) with bounded forensic diagnostics while keeping malformed/unsupported behavior atomic and non-mutating.
-- Added focused deterministic Phase 6D-M9 tests (legacy default priority, priority override, tie-break stability, unsupported skip continuity, invalid-priority atomic rejection, save/load hash stability), and reaffirmed marker-only handling with no random spawn tables/probability logic.
+- Added persistent `world.groups` substrate with deterministic serialization/hash coverage, strict load validation, and legacy-default `{}` migration behavior for campaign-role seed carriers.
+- Added deterministic per-site claim anchors (`claimed_by_group_id`, `claimed_tick`) and bounded `growth_applied_steps` ledger to support idempotent ecology growth scheduling across save/load/replay boundaries.
+- Added deterministic `SiteEcologyModule` periodic scaffolding (stable ordering, bounded processing, deterministic cursor deferral) to enqueue marker-only pending effects with deterministic forensics; no random spawn tables/probability logic yet in M10.
 
 
 ## Troubleshooting

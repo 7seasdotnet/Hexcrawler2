@@ -63,6 +63,15 @@ INVALID_REHAB_POLICY_DIAGNOSTIC_MAX_LEN = 128
 EFFECT_PRIORITY_MIN = -1000
 EFFECT_PRIORITY_MAX = 1000
 INVALID_EFFECT_PRIORITY_DIAGNOSTIC_MAX_LEN = 128
+CLAIM_SITE_INTENT = "claim_site_intent"
+SITE_CLAIM_OUTCOME_EVENT_TYPE = "site_claim_outcome"
+SITE_ECOLOGY_TASK_NAME = "site_ecology:tick"
+SITE_ECOLOGY_INTERVAL_DAYS = 1
+SITE_ECOLOGY_MAX_PROCESSED_PER_TICK = 64
+SITE_GROWTH_LEDGER_MAX = 256
+SITE_ECOLOGY_SCHEDULED_EFFECT_EVENT_TYPE = "site_ecology_scheduled_effect"
+SITE_ECOLOGY_TICK_EVENT_TYPE = "site_ecology_tick"
+
 
 
 class EncounterSelectionModule(RuleModule):
@@ -1220,6 +1229,11 @@ class LocalEncounterInstanceModule(RuleModule):
                     "tags": ["stale"] if default_status == "stale" else [],
                     "pending_effects": [],
                     "fortified": False,
+                    "rehab_generation": 0,
+                    "rehab_policy": REHAB_POLICY_REPLACE,
+                    "claimed_by_group_id": None,
+                    "claimed_tick": None,
+                    "growth_applied_steps": [],
                 }
                 continue
             existing["site_key"] = copy.deepcopy(normalized_site_key)
@@ -1352,6 +1366,21 @@ class LocalEncounterInstanceModule(RuleModule):
                 if not isinstance(existing, dict) or existing.get("rehab_policy") is None
                 else copy.deepcopy(existing.get("rehab_policy"))
             ),
+            "claimed_by_group_id": (
+                str(existing.get("claimed_by_group_id"))
+                if isinstance(existing, dict) and existing.get("claimed_by_group_id") is not None
+                else None
+            ),
+            "claimed_tick": (
+                int(existing.get("claimed_tick", 0))
+                if isinstance(existing, dict) and existing.get("claimed_by_group_id") is not None
+                else None
+            ),
+            "growth_applied_steps": (
+                self._normalize_growth_applied_steps(existing.get("growth_applied_steps", []))
+                if isinstance(existing, dict)
+                else []
+            ),
         }
         return site_state_by_key
 
@@ -1375,6 +1404,18 @@ class LocalEncounterInstanceModule(RuleModule):
         rehab_policy = self._normalize_rehab_policy(rehab_policy_raw)
         if rehab_policy is None:
             rehab_policy = copy.deepcopy(rehab_policy_raw)
+        claimed_by_group_id_raw = payload.get("claimed_by_group_id")
+        claimed_by_group_id = None
+        claimed_tick: int | None = None
+        if claimed_by_group_id_raw is not None:
+            if not isinstance(claimed_by_group_id_raw, str) or not claimed_by_group_id_raw:
+                return None
+            claimed_by_group_id = claimed_by_group_id_raw
+            claimed_tick_raw = payload.get("claimed_tick")
+            if isinstance(claimed_tick_raw, bool) or not isinstance(claimed_tick_raw, int):
+                return None
+            claimed_tick = max(0, int(claimed_tick_raw))
+        growth_applied_steps = self._normalize_growth_applied_steps(payload.get("growth_applied_steps", []))
         return {
             "site_key": copy.deepcopy(site_key),
             "status": status,
@@ -1385,6 +1426,9 @@ class LocalEncounterInstanceModule(RuleModule):
             "rehab_generation": rehab_generation,
             "fortified": bool(payload.get("fortified", False)),
             "rehab_policy": rehab_policy,
+            "claimed_by_group_id": claimed_by_group_id,
+            "claimed_tick": claimed_tick,
+            "growth_applied_steps": growth_applied_steps,
         }
 
     def _consume_pending_site_effect_for_entry(
@@ -1843,6 +1887,19 @@ class LocalEncounterInstanceModule(RuleModule):
         return unique_tags[:MAX_SITE_STATE_TAGS]
 
     @staticmethod
+    def _normalize_growth_applied_steps(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item:
+                continue
+            normalized.append(item)
+        if len(normalized) > SITE_GROWTH_LEDGER_MAX:
+            normalized = normalized[-SITE_GROWTH_LEDGER_MAX:]
+        return normalized
+
+    @staticmethod
     def _site_key_json(site_key: dict[str, Any]) -> str:
         return json.dumps(site_key, sort_keys=True, separators=(",", ":"))
 
@@ -2215,6 +2272,216 @@ class EncounterActionExecutionModule(RuleModule):
         return json.loads(json.dumps(blob, sort_keys=True))
 
 
+
+
+
+class SiteEcologyModule(RuleModule):
+    """Phase 6D-M10 deterministic site-ecology scaffolding (campaign-role aware)."""
+
+    name = "site_ecology"
+
+    def on_simulation_start(self, sim: Simulation) -> None:
+        scheduler = sim.get_rule_module(PeriodicScheduler.name)
+        if scheduler is None:
+            scheduler = PeriodicScheduler()
+            sim.register_rule_module(scheduler)
+        if not isinstance(scheduler, PeriodicScheduler):
+            raise TypeError("periodic_scheduler module must be a PeriodicScheduler")
+
+        sim.set_rules_state(self.name, self._rules_state(sim))
+        interval_ticks = max(1, int(sim.state.time.ticks_per_day) * SITE_ECOLOGY_INTERVAL_DAYS)
+        scheduler.register_task(
+            task_name=SITE_ECOLOGY_TASK_NAME,
+            interval_ticks=interval_ticks,
+            start_tick=0,
+        )
+        scheduler.set_task_callback(SITE_ECOLOGY_TASK_NAME, self._build_tick_callback())
+
+    def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type != CLAIM_SITE_INTENT:
+            return False
+
+        tick = int(command.tick)
+        site_key_payload = command.params.get("site_key")
+        group_id = str(command.params.get("group_id", ""))
+        if not isinstance(site_key_payload, dict):
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=None, group_id=group_id, outcome="invalid_site_key")
+            return True
+        site_key = LocalEncounterInstanceModule()._normalize_site_key_payload(site_key_payload)
+        if site_key is None:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key_payload, group_id=group_id, outcome="invalid_site_key")
+            return True
+
+        if group_id not in sim.state.world.groups:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="unknown_group")
+            return True
+
+        local_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        if not isinstance(local_state, dict):
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="missing_site_state_module")
+            return True
+        site_state_by_key = dict(local_state.get(LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY, {}))
+        site_key_json = LocalEncounterInstanceModule._site_key_json(site_key)
+        existing = site_state_by_key.get(site_key_json)
+        normalized = LocalEncounterInstanceModule()._normalize_site_state_payload(existing) if isinstance(existing, dict) else None
+        if normalized is None:
+            normalized = {
+                "site_key": copy.deepcopy(site_key),
+                "status": "inactive",
+                "last_active_tick": 0,
+                "next_check_tick": 0,
+                "tags": [],
+                "pending_effects": [],
+                "rehab_generation": 0,
+                "fortified": False,
+                "rehab_policy": REHAB_POLICY_REPLACE,
+                "claimed_by_group_id": None,
+                "claimed_tick": None,
+                "growth_applied_steps": [],
+            }
+
+        if normalized.get("claimed_by_group_id") is not None:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="already_claimed")
+            return True
+
+        normalized["claimed_by_group_id"] = group_id
+        normalized["claimed_tick"] = tick
+        site_state_by_key[site_key_json] = normalized
+        local_state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
+        sim.set_rules_state(LocalEncounterInstanceModule.name, local_state)
+
+        self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="applied")
+        return True
+
+    def _build_tick_callback(self):
+        def _on_periodic(sim: Simulation, tick: int) -> None:
+            self._process_periodic_tick(sim, tick)
+
+        return _on_periodic
+
+    def _process_periodic_tick(self, sim: Simulation, tick: int) -> None:
+        local_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        if not isinstance(local_state, dict):
+            return
+
+        raw_site_state_by_key = local_state.get(LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY, {})
+        if not isinstance(raw_site_state_by_key, dict):
+            raise ValueError("local_encounter_instance.site_state_by_key must be an object")
+
+        ecology_state = self._rules_state(sim)
+        site_state_by_key = dict(raw_site_state_by_key)
+        ordered_keys = sorted(site_state_by_key)
+        if ordered_keys:
+            start_index = int(ecology_state["next_site_cursor"]) % len(ordered_keys)
+            due_keys = ordered_keys[start_index:] + ordered_keys[:start_index]
+        else:
+            start_index = 0
+            due_keys = []
+        processed = 0
+        scheduled_count = 0
+
+        for site_key_json in due_keys:
+            if processed >= SITE_ECOLOGY_MAX_PROCESSED_PER_TICK:
+                break
+            current_state = site_state_by_key.get(site_key_json)
+            normalized = LocalEncounterInstanceModule()._normalize_site_state_payload(current_state) if isinstance(current_state, dict) else None
+            if normalized is None:
+                continue
+            processed += 1
+
+            claim_group_id = normalized.get("claimed_by_group_id")
+            claimed_tick = normalized.get("claimed_tick")
+            if claim_group_id is None or claimed_tick is None:
+                continue
+
+            age_ticks = max(0, int(tick) - int(claimed_tick))
+            growth_steps = [
+                ("fortify_1", int(sim.state.time.ticks_per_day) * 7, {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "priority": 0}),
+                ("reinforce_1", int(sim.state.time.ticks_per_day) * 30, {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "rehab_policy": REHAB_POLICY_ADD, "priority": 10}),
+            ]
+            applied_steps = list(normalized.get("growth_applied_steps", []))
+            pending_effects = list(normalized.get("pending_effects", []))
+
+            for step_id, threshold_ticks, effect_payload in growth_steps:
+                if step_id in applied_steps:
+                    continue
+                if age_ticks < threshold_ticks:
+                    continue
+                pending_effects = self._schedule_growth_effect(pending_effects, effect_payload)
+                applied_steps.append(step_id)
+                scheduled_count += 1
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=SITE_ECOLOGY_SCHEDULED_EFFECT_EVENT_TYPE,
+                    params={
+                        "tick": tick,
+                        "site_key": copy.deepcopy(normalized["site_key"]),
+                        "group_id": str(claim_group_id),
+                        "step_id": step_id,
+                        "effect_type": str(effect_payload["effect_type"]),
+                    },
+                )
+
+            if len(applied_steps) > SITE_GROWTH_LEDGER_MAX:
+                applied_steps = applied_steps[-SITE_GROWTH_LEDGER_MAX:]
+
+            normalized["growth_applied_steps"] = applied_steps
+            normalized["pending_effects"] = pending_effects
+            site_state_by_key[site_key_json] = normalized
+
+        local_state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
+        sim.set_rules_state(LocalEncounterInstanceModule.name, local_state)
+        if ordered_keys:
+            ecology_state["next_site_cursor"] = (start_index + processed) % len(ordered_keys)
+        else:
+            ecology_state["next_site_cursor"] = 0
+        sim.set_rules_state(self.name, ecology_state)
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=SITE_ECOLOGY_TICK_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "processed_sites": int(processed),
+                "scheduled_effects": int(scheduled_count),
+                "site_cap": SITE_ECOLOGY_MAX_PROCESSED_PER_TICK,
+            },
+        )
+
+    def _schedule_growth_effect(self, pending_effects: list[Any], effect_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        local_module = LocalEncounterInstanceModule()
+        normalized = local_module._normalize_pending_effects(pending_effects)
+        effect_type = str(effect_payload.get("effect_type", ""))
+        if any(str(effect.get("effect_type", "")) == effect_type for effect in normalized):
+            return normalized
+        combined = [*normalized, copy.deepcopy(effect_payload)]
+        return local_module._normalize_pending_effects(combined)
+
+    def _rules_state(self, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        cursor = int(state.get("next_site_cursor", 0))
+        if cursor < 0:
+            cursor = 0
+        return {"next_site_cursor": cursor}
+
+    def _emit_claim_outcome(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        site_key: dict[str, Any] | None,
+        group_id: str,
+        outcome: str,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=SITE_CLAIM_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "site_key": copy.deepcopy(site_key),
+                "group_id": group_id,
+                "outcome": outcome,
+            },
+        )
 
 
 class RumorPipelineModule(RuleModule):

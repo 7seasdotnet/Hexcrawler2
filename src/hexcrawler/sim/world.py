@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import json
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -758,6 +759,69 @@ class SiteRecord:
 
 
 @dataclass
+class GroupRecord:
+    group_id: str
+    group_type: str
+    location: dict[str, Any]
+    strength: int = 0
+    tags: list[str] = field(default_factory=list)
+    home_site_key: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.group_id, str) or not self.group_id:
+            raise ValueError("group_id must be a non-empty string")
+        if not isinstance(self.group_type, str) or not self.group_type:
+            raise ValueError("group_type must be a non-empty string")
+        if not isinstance(self.location, dict):
+            raise ValueError("location must be an object")
+        if not isinstance(self.location.get("space_id"), str) or not self.location.get("space_id"):
+            raise ValueError("location.space_id must be a non-empty string")
+        coord = self.location.get("coord")
+        if not isinstance(coord, dict):
+            raise ValueError("location.coord must be an object")
+        _validate_json_value(coord, field_name="group.location.coord")
+        if isinstance(self.strength, bool) or not isinstance(self.strength, int):
+            raise ValueError("strength must be an integer")
+        if self.strength < 0:
+            raise ValueError("strength must be >= 0")
+        if not isinstance(self.tags, list):
+            raise ValueError("tags must be a list")
+        normalized_tags = sorted({str(tag) for tag in self.tags})
+        self.tags = normalized_tags
+        if self.home_site_key is not None and (not isinstance(self.home_site_key, str) or not self.home_site_key):
+            raise ValueError("home_site_key must be a non-empty string when present")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "group_id": self.group_id,
+            "group_type": self.group_type,
+            "location": {
+                "space_id": str(self.location["space_id"]),
+                "coord": copy.deepcopy(self.location["coord"]),
+            },
+            "strength": int(self.strength),
+            "tags": list(self.tags),
+        }
+        if self.home_site_key is not None:
+            payload["home_site_key"] = self.home_site_key
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GroupRecord":
+        return cls(
+            group_id=str(data.get("group_id", "")),
+            group_type=str(data["group_type"]),
+            location={
+                "space_id": str(dict(data["location"])["space_id"]),
+                "coord": copy.deepcopy(dict(data["location"])["coord"]),
+            },
+            strength=int(data.get("strength", 0)),
+            tags=[str(tag) for tag in data.get("tags", [])],
+            home_site_key=(str(data["home_site_key"]) if data.get("home_site_key") is not None else None),
+        )
+
+
+@dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
@@ -770,6 +834,7 @@ class WorldState:
     rumors: list[dict[str, Any]] = field(default_factory=list)
     containers: dict[str, ContainerState] = field(default_factory=dict)
     sites: dict[str, SiteRecord] = field(default_factory=dict)
+    groups: dict[str, GroupRecord] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.spaces:
@@ -851,6 +916,11 @@ class WorldState:
                 site_id: self.sites[site_id].to_dict()
                 for site_id in sorted(self.sites)
             }
+        if self.groups:
+            payload["groups"] = {
+                group_id: self.groups[group_id].to_dict()
+                for group_id in sorted(self.groups)
+            }
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -899,6 +969,11 @@ class WorldState:
             payload["sites"] = {
                 site_id: self.sites[site_id].to_dict()
                 for site_id in sorted(self.sites)
+            }
+        if self.groups:
+            payload["groups"] = {
+                group_id: self.groups[group_id].to_dict()
+                for group_id in sorted(self.groups)
             }
         return payload
 
@@ -995,6 +1070,21 @@ class WorldState:
             if site.site_id != site_id:
                 raise ValueError(f"site key/id mismatch for '{site_id}'")
             world.sites[site_id] = site
+
+        raw_groups = data.get("groups", {})
+        if not isinstance(raw_groups, dict):
+            raise ValueError("groups must be an object")
+        world.groups = {}
+        for group_id in sorted(raw_groups):
+            row = raw_groups[group_id]
+            if not isinstance(row, dict):
+                raise ValueError(f"group '{group_id}' must be an object")
+            if "group_id" not in row:
+                row = {**row, "group_id": group_id}
+            group = GroupRecord.from_dict(row)
+            if group.group_id != group_id:
+                raise ValueError(f"group key/id mismatch for '{group_id}'")
+            world.groups[group_id] = group
         return world
 
     def get_sites_at_location(self, location_ref: dict[str, Any]) -> list[SiteRecord]:
