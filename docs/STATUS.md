@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M10 — deterministic site ecology scaffolding with persistent campaign groups (`world.groups`), per-site claim anchors (`claimed_by_group_id`, `claimed_tick`), and deterministic growth-step ledger scheduling marker effects (still marker-only, no RNG/random spawn tables).
-- **Next action:** Phase 6D-M11 — introduce deterministic RNG stream usage for growth chance/1dN-like ecology decisions and optional deterministic claim-from-wandering-groups logic (while preserving replay/save-load stability).
+- **Current phase:** Phase 6D-M11 — deterministic site-ecology RNG decisions using per-site RNG streams plus serialized/hash-covered bounded ecology decision ledgers (marker-only scheduling).
+- **Next action:** Phase 6D-M12 — expand ecology rules into data-driven knobs (thresholds/steps) and evaluate deterministic campaign-role wandering-group claim hooks without broad faction AI/pathfinding scope expansion.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added persistent `world.groups` substrate (canonical/hash-covered) with strict JSON-safe validation, deterministic legacy default (`{}`), and save/load key/id integrity checks for campaign-role seed carriers.
-- Extended per-site serialized state with deterministic claim anchors (`claimed_by_group_id`, `claimed_tick`) plus bounded `growth_applied_steps` ledger for ecology idempotence and restart/save-load stability.
-- Added `SiteEcologyModule` deterministic periodic tick scaffolding (stable ordering + bounded processing + deterministic cursor deferral) that schedules marker-only pending effects (`fortification_pending`, `reinhabitation_pending` with explicit priority) and emits deterministic ecology forensics (no RNG/random spawn tables yet).
+- Added deterministic per-site ecology RNG streams (`site_ecology:{site_key}`) with chance-gated growth decisions and optional deterministic d20 marker payload rolls (marker scheduling only).
+- Added serialized/hash-covered bounded per-site `ecology_decisions` ledger (FIFO eviction) so probabilistic growth decisions are idempotent across replay/save/load, including recorded no-op outcomes.
+- Added deterministic ecology decision forensics (`site_ecology_decision`), strict load-time validation for malformed `ecology_decisions` payloads, and explicit deferral save/load idempotence regression coverage.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`

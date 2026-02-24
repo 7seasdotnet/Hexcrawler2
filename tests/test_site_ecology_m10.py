@@ -8,7 +8,9 @@ from hexcrawler.sim.encounters import (
     FORTIFICATION_PENDING_EFFECT_TYPE,
     LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX,
     LocalEncounterInstanceModule,
+    MAX_SITE_ECOLOGY_DECISIONS,
     REINHABITATION_PENDING_EFFECT_TYPE,
+    SITE_ECOLOGY_DECISION_EVENT_TYPE,
     SITE_ECOLOGY_MAX_PROCESSED_PER_TICK,
     SITE_ECOLOGY_TICK_EVENT_TYPE,
     SiteEcologyModule,
@@ -62,6 +64,7 @@ def _site_state(sim: Simulation, *, site_id: str = "ecology_site") -> tuple[str,
             "claimed_by_group_id": "seeders",
             "claimed_tick": 0,
             "growth_applied_steps": [],
+            "ecology_decisions": {"order": [], "by_key": {}},
         }
         state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = by_key  # noqa: SLF001
         sim.set_rules_state(LocalEncounterInstanceModule.name, state)
@@ -85,54 +88,115 @@ def test_world_groups_and_site_state_defaults() -> None:
     assert normalized["claimed_by_group_id"] == "seeders"
     assert normalized["claimed_tick"] == 0
     assert normalized["growth_applied_steps"] == []
+    assert normalized["ecology_decisions"] == {"order": [], "by_key": {}}
 
 
-def test_ecology_growth_idempotent_and_priority_ordered() -> None:
-    sim = _build_sim(seed=912)
-    site_key_json, _ = _site_state(sim)
+def test_ecology_rng_decisions_are_replay_stable() -> None:
+    sim_a = _build_sim(seed=912)
+    site_key_json, _ = _site_state(sim_a)
+    sim_a.advance_ticks(sim_a.state.time.ticks_per_day * 45)
 
-    sim.advance_ticks(sim.state.time.ticks_per_day * 8)
-    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
-    site_state = state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]  # noqa: SLF001
-    effects = site_state["pending_effects"]
-    fortify_effects = [entry for entry in effects if entry.get("effect_type") == FORTIFICATION_PENDING_EFFECT_TYPE]
-    assert len(fortify_effects) == 1
-    assert fortify_effects[0]["priority"] == 0
-    assert site_state["growth_applied_steps"].count("fortify_1") == 1
+    sim_b = _build_sim(seed=912)
+    _site_state(sim_b)
+    sim_b.advance_ticks(sim_b.state.time.ticks_per_day * 45)
 
-    sim.advance_ticks(sim.state.time.ticks_per_day * 40)
-    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
-    site_state = state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]  # noqa: SLF001
-    effects = site_state["pending_effects"]
-    reinforce_effects = [entry for entry in effects if entry.get("effect_type") == REINHABITATION_PENDING_EFFECT_TYPE]
-    assert len(reinforce_effects) == 1
-    assert reinforce_effects[0]["priority"] == 10
-    assert site_state["growth_applied_steps"].count("reinforce_1") == 1
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
+    state = sim_a.get_rules_state(LocalEncounterInstanceModule.name)
+    decisions = state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]["ecology_decisions"]  # noqa: SLF001
+    assert len(decisions["order"]) >= 2
 
 
-def test_ecology_save_load_hash_stability(tmp_path: Path) -> None:
+def test_ecology_save_load_idempotence_reuses_existing_decisions(tmp_path: Path) -> None:
     path = tmp_path / "ecology_save.json"
 
-    sim_a = _build_sim(seed=913)
-    _site_state(sim_a)
-    sim_a.advance_ticks(sim_a.state.time.ticks_per_day * 5)
-    save_game_json(path, sim_a.state.world, sim_a)
+    baseline = _build_sim(seed=913)
+    site_key_json, _ = _site_state(baseline)
+    baseline.advance_ticks(baseline.state.time.ticks_per_day * 45)
+    baseline_pre = baseline.get_rules_state(LocalEncounterInstanceModule.name)[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]["ecology_decisions"]  # noqa: SLF001
+
+    split = _build_sim(seed=913)
+    _site_state(split)
+    split.advance_ticks(split.state.time.ticks_per_day * 45)
+    save_game_json(path, split.state.world, split)
 
     _, loaded = load_game_json(path)
     loaded.register_rule_module(LocalEncounterInstanceModule())
     loaded.register_rule_module(SiteEcologyModule())
 
-    sim_b = _build_sim(seed=913)
-    _site_state(sim_b)
-    sim_b.advance_ticks(sim_b.state.time.ticks_per_day * 5)
+    loaded.advance_ticks(loaded.state.time.ticks_per_day * 5)
+    baseline.advance_ticks(baseline.state.time.ticks_per_day * 5)
 
-    loaded.advance_ticks(loaded.state.time.ticks_per_day * 40)
-    sim_b.advance_ticks(sim_b.state.time.ticks_per_day * 40)
-    assert simulation_hash(loaded) == simulation_hash(sim_b)
+    loaded_state = loaded.get_rules_state(LocalEncounterInstanceModule.name)[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]  # noqa: SLF001
+    baseline_state = baseline.get_rules_state(LocalEncounterInstanceModule.name)[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]  # noqa: SLF001
+    assert loaded_state["ecology_decisions"] == baseline_state["ecology_decisions"]
+    assert loaded_state["ecology_decisions"] == baseline_pre
+    assert simulation_hash(loaded) == simulation_hash(baseline)
+
+
+def test_ecology_noop_decision_is_recorded_and_not_rerolled(monkeypatch: object, tmp_path: Path) -> None:
+    monkeypatch.setattr("hexcrawler.sim.encounters.SITE_ECOLOGY_FORTIFY_CHANCE_PERCENT", 0)
+    monkeypatch.setattr("hexcrawler.sim.encounters.SITE_ECOLOGY_REINFORCE_CHANCE_PERCENT", 0)
+
+    sim = _build_sim(seed=914)
+    site_key_json, _ = _site_state(sim)
+    sim.advance_ticks(sim.state.time.ticks_per_day * 40)
+
+    state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    site_state = state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]  # noqa: SLF001
+    decisions = site_state["ecology_decisions"]
+    assert decisions["order"]
+    for key in decisions["order"]:
+        assert decisions["by_key"][key]["result"].startswith("no-op:")
+
+    assert [e for e in site_state["pending_effects"] if e["effect_type"] in {FORTIFICATION_PENDING_EFFECT_TYPE, REINHABITATION_PENDING_EFFECT_TYPE}] == []
+
+    path = tmp_path / "noop_save.json"
+    save_game_json(path, sim.state.world, sim)
+    _, loaded = load_game_json(path)
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(SiteEcologyModule())
+
+    loaded.advance_ticks(loaded.state.time.ticks_per_day * 5)
+    reloaded_decisions = loaded.get_rules_state(LocalEncounterInstanceModule.name)[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY][site_key_json]["ecology_decisions"]  # noqa: SLF001
+    assert reloaded_decisions == decisions
+
+
+def test_ecology_decision_ledger_is_fifo_bounded_and_deterministic() -> None:
+    sim_a = _build_sim(seed=915)
+    site_key_json, _ = _site_state(sim_a)
+    module = SiteEcologyModule()
+    decisions = {"order": [], "by_key": {}}
+    for index in range(MAX_SITE_ECOLOGY_DECISIONS + 32):
+        _, decisions, _ = module._resolve_ecology_decision(  # noqa: SLF001
+            sim=sim_a,
+            site_key_json=site_key_json,
+            decisions=decisions,
+            decision_key=f"synthetic_{index}",
+            threshold=100,
+            effect_type=FORTIFICATION_PENDING_EFFECT_TYPE,
+        )
+
+    assert len(decisions["order"]) == MAX_SITE_ECOLOGY_DECISIONS
+    assert decisions["order"][0] == "synthetic_32"
+    assert decisions["order"][-1] == f"synthetic_{MAX_SITE_ECOLOGY_DECISIONS + 31}"
+
+    sim_b = _build_sim(seed=915)
+    site_key_json_b, _ = _site_state(sim_b)
+    decisions_b = {"order": [], "by_key": {}}
+    for index in range(MAX_SITE_ECOLOGY_DECISIONS + 32):
+        _, decisions_b, _ = module._resolve_ecology_decision(  # noqa: SLF001
+            sim=sim_b,
+            site_key_json=site_key_json_b,
+            decisions=decisions_b,
+            decision_key=f"synthetic_{index}",
+            threshold=100,
+            effect_type=FORTIFICATION_PENDING_EFFECT_TYPE,
+        )
+    assert decisions_b == decisions
 
 
 def test_ecology_processing_cap_is_deterministic() -> None:
-    sim = _build_sim(seed=914)
+    sim = _build_sim(seed=916)
     state = sim.get_rules_state(LocalEncounterInstanceModule.name)
     by_key = {}
     for index in range(SITE_ECOLOGY_MAX_PROCESSED_PER_TICK + 4):
@@ -155,6 +219,7 @@ def test_ecology_processing_cap_is_deterministic() -> None:
             "claimed_by_group_id": "seeders",
             "claimed_tick": -sim.state.time.ticks_per_day * 8,
             "growth_applied_steps": [],
+            "ecology_decisions": {"order": [], "by_key": {}},
         }
     state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = by_key  # noqa: SLF001
     state["processed_request_ids"] = state.get("processed_request_ids", [])[-LOCAL_ENCOUNTER_INSTANCE_LEDGER_MAX:]
@@ -173,3 +238,71 @@ def test_ecology_processing_cap_is_deterministic() -> None:
     ]
     assert len(tick_events) >= 2
     assert tick_events[1]["params"]["processed_sites"] == SITE_ECOLOGY_MAX_PROCESSED_PER_TICK
+
+
+def test_ecology_deferral_save_load_idempotence() -> None:
+    def _build_large_site_state(sim: Simulation) -> None:
+        state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        by_key = {}
+        for index in range(SITE_ECOLOGY_MAX_PROCESSED_PER_TICK + 9):
+            site_key = {
+                "origin_space_id": "overworld",
+                "origin_coord": {"q": index, "r": 1},
+                "template_id": f"deferral_site_{index:03d}",
+            }
+            key = LocalEncounterInstanceModule._site_key_json(site_key)  # noqa: SLF001
+            by_key[key] = {
+                "site_key": site_key,
+                "status": "inactive",
+                "last_active_tick": 0,
+                "next_check_tick": 10**9,
+                "tags": [],
+                "pending_effects": [],
+                "rehab_generation": 0,
+                "fortified": False,
+                "rehab_policy": "replace",
+                "claimed_by_group_id": "seeders",
+                "claimed_tick": -sim.state.time.ticks_per_day * 8,
+                "growth_applied_steps": [],
+                "ecology_decisions": {"order": [], "by_key": {}},
+            }
+        state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = by_key  # noqa: SLF001
+        sim.set_rules_state(LocalEncounterInstanceModule.name, state)
+
+    baseline = _build_sim(seed=918)
+    _build_large_site_state(baseline)
+    baseline.advance_ticks(2)
+    baseline_snapshot = baseline.simulation_payload()
+    baseline.advance_ticks(baseline.state.time.ticks_per_day + 2)
+
+    split = Simulation.from_simulation_payload(baseline_snapshot)
+    split.register_rule_module(LocalEncounterInstanceModule())
+    split.register_rule_module(SiteEcologyModule())
+    split.advance_ticks(split.state.time.ticks_per_day + 2)
+
+    assert simulation_hash(split) == simulation_hash(baseline)
+
+    baseline_state = baseline.get_rules_state(LocalEncounterInstanceModule.name)[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY]  # noqa: SLF001
+    split_state = split.get_rules_state(LocalEncounterInstanceModule.name)[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY]  # noqa: SLF001
+    assert split_state == baseline_state
+    for site_payload in split_state.values():
+        decisions = site_payload["ecology_decisions"]
+        assert len(decisions["order"]) == len(set(decisions["order"]))
+
+
+def test_invalid_ecology_decisions_payload_is_rejected() -> None:
+    sim = _build_sim(seed=917)
+    site_key_json, _ = _site_state(sim)
+    payload = sim.simulation_payload()
+    payload["rules_state"][LocalEncounterInstanceModule.name]["site_state_by_key"][site_key_json]["ecology_decisions"] = {
+        "order": ["k1"],
+        "by_key": {"k1": {"pct_roll": 10}},
+    }
+
+    restored = Simulation.from_simulation_payload(payload)
+    try:
+        restored.register_rule_module(LocalEncounterInstanceModule())
+    except ValueError as exc:
+        assert "ecology_decisions" in str(exc)
+    else:
+        raise AssertionError("expected malformed ecology_decisions to raise ValueError")

@@ -69,8 +69,13 @@ SITE_ECOLOGY_TASK_NAME = "site_ecology:tick"
 SITE_ECOLOGY_INTERVAL_DAYS = 1
 SITE_ECOLOGY_MAX_PROCESSED_PER_TICK = 64
 SITE_GROWTH_LEDGER_MAX = 256
+MAX_SITE_ECOLOGY_DECISIONS = 256
 SITE_ECOLOGY_SCHEDULED_EFFECT_EVENT_TYPE = "site_ecology_scheduled_effect"
 SITE_ECOLOGY_TICK_EVENT_TYPE = "site_ecology_tick"
+SITE_ECOLOGY_DECISION_EVENT_TYPE = "site_ecology_decision"
+SITE_ECOLOGY_REINFORCE_CHANCE_PERCENT = 35
+SITE_ECOLOGY_FORTIFY_CHANCE_PERCENT = 55
+SITE_ECOLOGY_D20_SIZE = 20
 
 
 
@@ -1210,6 +1215,8 @@ class LocalEncounterInstanceModule(RuleModule):
         for site_key_json, site_state in sorted(raw_site_state_by_key.items()):
             normalized_site_state = self._normalize_site_state_payload(site_state)
             if normalized_site_state is None:
+                if isinstance(site_state, dict) and "ecology_decisions" in site_state:
+                    raise ValueError("local_encounter_instance.site_state_by_key ecology_decisions must be valid")
                 continue
             normalized_site_state_by_key[site_key_json] = normalized_site_state
         for context in state[self._STATE_ACTIVE_BY_LOCAL_SPACE].values():
@@ -1234,6 +1241,7 @@ class LocalEncounterInstanceModule(RuleModule):
                     "claimed_by_group_id": None,
                     "claimed_tick": None,
                     "growth_applied_steps": [],
+                    "ecology_decisions": {"order": [], "by_key": {}},
                 }
                 continue
             existing["site_key"] = copy.deepcopy(normalized_site_key)
@@ -1248,6 +1256,10 @@ class LocalEncounterInstanceModule(RuleModule):
                 existing["status"] = "inactive"
             existing["tags"] = self._normalize_tags(existing.get("tags", []))
             existing["pending_effects"] = self._normalize_pending_effects(existing.get("pending_effects", []))
+            normalized_decisions = self._normalize_ecology_decisions(existing.get("ecology_decisions"))
+            if normalized_decisions is None:
+                raise ValueError("local_encounter_instance.site_state_by_key ecology_decisions entry is invalid")
+            existing["ecology_decisions"] = normalized_decisions
         state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(normalized_site_state_by_key.items()))
         return state
 
@@ -1381,6 +1393,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 if isinstance(existing, dict)
                 else []
             ),
+            "ecology_decisions": (
+                self._normalize_ecology_decisions(existing.get("ecology_decisions"))
+                if isinstance(existing, dict)
+                else {"order": [], "by_key": {}}
+            ),
         }
         return site_state_by_key
 
@@ -1416,6 +1433,9 @@ class LocalEncounterInstanceModule(RuleModule):
                 return None
             claimed_tick = max(0, int(claimed_tick_raw))
         growth_applied_steps = self._normalize_growth_applied_steps(payload.get("growth_applied_steps", []))
+        ecology_decisions = self._normalize_ecology_decisions(payload.get("ecology_decisions"))
+        if ecology_decisions is None:
+            return None
         return {
             "site_key": copy.deepcopy(site_key),
             "status": status,
@@ -1429,6 +1449,7 @@ class LocalEncounterInstanceModule(RuleModule):
             "claimed_by_group_id": claimed_by_group_id,
             "claimed_tick": claimed_tick,
             "growth_applied_steps": growth_applied_steps,
+            "ecology_decisions": ecology_decisions,
         }
 
     def _consume_pending_site_effect_for_entry(
@@ -1900,6 +1921,94 @@ class LocalEncounterInstanceModule(RuleModule):
         return normalized
 
     @staticmethod
+    def _normalize_ecology_decisions(value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return {"order": [], "by_key": {}}
+        if not isinstance(value, dict):
+            return None
+        raw_order = value.get("order", [])
+        raw_by_key = value.get("by_key", {})
+        if not isinstance(raw_order, list) or not isinstance(raw_by_key, dict):
+            return None
+
+        def _normalize_ecology_json_value(raw: Any) -> Any:
+            if raw is None or isinstance(raw, (bool, int, float, str)):
+                return raw
+            if isinstance(raw, list):
+                normalized_items: list[Any] = []
+                for item in raw:
+                    normalized_item = _normalize_ecology_json_value(item)
+                    if normalized_item is None and item is not None:
+                        continue
+                    normalized_items.append(normalized_item)
+                return normalized_items
+            if isinstance(raw, dict):
+                normalized_obj: dict[str, Any] = {}
+                for field_name in sorted(raw):
+                    if not isinstance(field_name, str):
+                        continue
+                    normalized_item = _normalize_ecology_json_value(raw[field_name])
+                    if normalized_item is None and raw[field_name] is not None:
+                        continue
+                    normalized_obj[field_name] = normalized_item
+                return normalized_obj
+            return None
+
+        normalized_by_key: dict[str, dict[str, Any]] = {}
+        for decision_key, decision_payload in sorted(raw_by_key.items()):
+            if not isinstance(decision_key, str) or not decision_key:
+                return None
+            if not isinstance(decision_payload, dict):
+                return None
+            roll_u32 = decision_payload.get("roll_u32")
+            pct_roll = decision_payload.get("pct_roll")
+            threshold = decision_payload.get("threshold")
+            d20_roll = decision_payload.get("d20_roll")
+            result = decision_payload.get("result")
+            if isinstance(roll_u32, bool) or not isinstance(roll_u32, int):
+                return None
+            if isinstance(pct_roll, bool) or not isinstance(pct_roll, int):
+                return None
+            if isinstance(threshold, bool) or not isinstance(threshold, int):
+                return None
+            if isinstance(d20_roll, bool) or not isinstance(d20_roll, int):
+                return None
+            if not isinstance(result, str) or not result:
+                return None
+            normalized_payload = {
+                "roll_u32": int(roll_u32),
+                "pct_roll": int(pct_roll),
+                "threshold": int(threshold),
+                "d20_roll": int(d20_roll),
+                "result": result,
+            }
+            for field_name in sorted(decision_payload):
+                if field_name in normalized_payload or not isinstance(field_name, str):
+                    continue
+                field_value = _normalize_ecology_json_value(decision_payload[field_name])
+                if field_value is None and decision_payload[field_name] is not None:
+                    continue
+                normalized_payload[field_name] = field_value
+            normalized_by_key[decision_key] = normalized_payload
+
+        normalized_order: list[str] = []
+        for raw_key in raw_order:
+            if not isinstance(raw_key, str) or not raw_key:
+                return None
+            if raw_key not in normalized_by_key:
+                return None
+            if raw_key in normalized_order:
+                continue
+            normalized_order.append(raw_key)
+        for key in sorted(normalized_by_key):
+            if key not in normalized_order:
+                normalized_order.append(key)
+        if len(normalized_order) > MAX_SITE_ECOLOGY_DECISIONS:
+            normalized_order = normalized_order[-MAX_SITE_ECOLOGY_DECISIONS:]
+        bounded_by_key = {key: normalized_by_key[key] for key in normalized_order}
+        return {"order": normalized_order, "by_key": bounded_by_key}
+
+    @staticmethod
     def _site_key_json(site_key: dict[str, Any]) -> str:
         return json.dumps(site_key, sort_keys=True, separators=(",", ":"))
 
@@ -2338,6 +2447,7 @@ class SiteEcologyModule(RuleModule):
                 "claimed_by_group_id": None,
                 "claimed_tick": None,
                 "growth_applied_steps": [],
+                "ecology_decisions": {"order": [], "by_key": {}},
             }
 
         if normalized.get("claimed_by_group_id") is not None:
@@ -2396,37 +2506,88 @@ class SiteEcologyModule(RuleModule):
 
             age_ticks = max(0, int(tick) - int(claimed_tick))
             growth_steps = [
-                ("fortify_1", int(sim.state.time.ticks_per_day) * 7, {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "priority": 0}),
-                ("reinforce_1", int(sim.state.time.ticks_per_day) * 30, {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "rehab_policy": REHAB_POLICY_ADD, "priority": 10}),
+                (
+                    "fortify_1",
+                    int(sim.state.time.ticks_per_day) * 7,
+                    SITE_ECOLOGY_FORTIFY_CHANCE_PERCENT,
+                    {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "priority": 0},
+                ),
+                (
+                    "reinforce_1",
+                    int(sim.state.time.ticks_per_day) * 30,
+                    SITE_ECOLOGY_REINFORCE_CHANCE_PERCENT,
+                    {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "rehab_policy": REHAB_POLICY_ADD, "priority": 10},
+                ),
             ]
             applied_steps = list(normalized.get("growth_applied_steps", []))
             pending_effects = list(normalized.get("pending_effects", []))
+            ecology_decisions = LocalEncounterInstanceModule._normalize_ecology_decisions(normalized.get("ecology_decisions"))
+            if ecology_decisions is None:
+                raise ValueError("local_encounter_instance.site_state_by_key ecology_decisions must be valid")
 
-            for step_id, threshold_ticks, effect_payload in growth_steps:
+            for step_id, threshold_ticks, chance_percent, effect_payload in growth_steps:
                 if step_id in applied_steps:
                     continue
                 if age_ticks < threshold_ticks:
                     continue
-                pending_effects = self._schedule_growth_effect(pending_effects, effect_payload)
-                applied_steps.append(step_id)
-                scheduled_count += 1
-                sim.schedule_event_at(
-                    tick=tick + 1,
-                    event_type=SITE_ECOLOGY_SCHEDULED_EFFECT_EVENT_TYPE,
-                    params={
-                        "tick": tick,
-                        "site_key": copy.deepcopy(normalized["site_key"]),
-                        "group_id": str(claim_group_id),
-                        "step_id": step_id,
-                        "effect_type": str(effect_payload["effect_type"]),
-                    },
+                schedule_tick = int(claimed_tick) + int(threshold_ticks)
+                decision_key = self._decision_key(
+                    step_id=step_id,
+                    rehab_generation=int(normalized.get("rehab_generation", 0)),
+                    schedule_tick=schedule_tick,
                 )
+                decision, ecology_decisions, created = self._resolve_ecology_decision(
+                    sim=sim,
+                    site_key_json=site_key_json,
+                    decisions=ecology_decisions,
+                    decision_key=decision_key,
+                    threshold=chance_percent,
+                    effect_type=str(effect_payload["effect_type"]),
+                )
+                if created:
+                    sim.schedule_event_at(
+                        tick=tick + 1,
+                        event_type=SITE_ECOLOGY_DECISION_EVENT_TYPE,
+                        params={
+                            "tick": tick,
+                            "site_key": copy.deepcopy(normalized["site_key"]),
+                            "group_id": str(claim_group_id),
+                            "decision_key": decision_key,
+                            "roll_u32": int(decision["roll_u32"]),
+                            "pct_roll": int(decision["pct_roll"]),
+                            "threshold": int(decision["threshold"]),
+                            "d20_roll": int(decision["d20_roll"]),
+                            "result": str(decision["result"]),
+                        },
+                    )
+
+                should_schedule = str(decision.get("result", "")).startswith("scheduled:")
+                if should_schedule:
+                    effect_with_roll = copy.deepcopy(effect_payload)
+                    effect_with_roll["ecology_d20_roll"] = int(decision["d20_roll"])
+                    pending_effects = self._schedule_growth_effect(pending_effects, effect_with_roll)
+                    scheduled_count += 1
+                    sim.schedule_event_at(
+                        tick=tick + 1,
+                        event_type=SITE_ECOLOGY_SCHEDULED_EFFECT_EVENT_TYPE,
+                        params={
+                            "tick": tick,
+                            "site_key": copy.deepcopy(normalized["site_key"]),
+                            "group_id": str(claim_group_id),
+                            "step_id": step_id,
+                            "effect_type": str(effect_payload["effect_type"]),
+                            "decision_key": decision_key,
+                        },
+                    )
+
+                applied_steps.append(step_id)
 
             if len(applied_steps) > SITE_GROWTH_LEDGER_MAX:
                 applied_steps = applied_steps[-SITE_GROWTH_LEDGER_MAX:]
 
             normalized["growth_applied_steps"] = applied_steps
             normalized["pending_effects"] = pending_effects
+            normalized["ecology_decisions"] = ecology_decisions
             site_state_by_key[site_key_json] = normalized
 
         local_state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
@@ -2446,6 +2607,49 @@ class SiteEcologyModule(RuleModule):
                 "site_cap": SITE_ECOLOGY_MAX_PROCESSED_PER_TICK,
             },
         )
+
+    def _decision_key(self, *, step_id: str, rehab_generation: int, schedule_tick: int) -> str:
+        return f"{step_id}:rehab{int(rehab_generation)}:tick{int(schedule_tick)}"
+
+    def _resolve_ecology_decision(
+        self,
+        *,
+        sim: Simulation,
+        site_key_json: str,
+        decisions: dict[str, Any],
+        decision_key: str,
+        threshold: int,
+        effect_type: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        order = [str(key) for key in decisions.get("order", []) if isinstance(key, str) and key]
+        by_key = {
+            str(key): copy.deepcopy(value)
+            for key, value in dict(decisions.get("by_key", {})).items()
+            if isinstance(key, str) and key and isinstance(value, dict)
+        }
+        if decision_key in by_key:
+            return by_key[decision_key], {"order": order, "by_key": by_key}, False
+
+        rng = sim.rng_stream(f"site_ecology:{site_key_json}")
+        roll_u32 = int(rng.randrange(0, 2**32))
+        pct_roll = int((roll_u32 % 100) + 1)
+        d20_roll = int(rng.randrange(1, SITE_ECOLOGY_D20_SIZE + 1))
+        did_schedule = pct_roll <= int(threshold)
+        decision_payload = {
+            "roll_u32": roll_u32,
+            "pct_roll": pct_roll,
+            "threshold": int(threshold),
+            "d20_roll": d20_roll,
+            "result": f"scheduled:{effect_type}" if did_schedule else f"no-op:{effect_type}",
+        }
+        by_key[decision_key] = decision_payload
+        order.append(decision_key)
+
+        while len(order) > MAX_SITE_ECOLOGY_DECISIONS:
+            evicted_key = order.pop(0)
+            by_key.pop(evicted_key, None)
+
+        return decision_payload, {"order": order, "by_key": by_key}, True
 
     def _schedule_growth_effect(self, pending_effects: list[Any], effect_payload: dict[str, Any]) -> list[dict[str, Any]]:
         local_module = LocalEncounterInstanceModule()
