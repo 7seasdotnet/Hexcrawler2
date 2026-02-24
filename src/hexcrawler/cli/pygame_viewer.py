@@ -26,6 +26,7 @@ from hexcrawler.sim.encounters import (
     SiteEcologyModule,
     SpawnMaterializationModule,
 )
+from hexcrawler.sim.groups import GroupMovementModule
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.combat import CombatExecutionModule
 from hexcrawler.sim.entity_stats import EntityStatsExecutionModule
@@ -1409,6 +1410,7 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(SiteEcologyModule())
     sim.register_rule_module(RumorPipelineModule())
     sim.register_rule_module(SpawnMaterializationModule())
+    sim.register_rule_module(GroupMovementModule())
 
 
 def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulation:

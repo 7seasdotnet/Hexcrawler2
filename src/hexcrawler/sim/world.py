@@ -763,6 +763,9 @@ class GroupRecord:
     group_id: str
     group_type: str
     location: dict[str, Any]
+    cell: dict[str, Any] | None = None
+    moving: dict[str, Any] | None = None
+    last_arrival_uid: str | None = None
     strength: int = 0
     tags: list[str] = field(default_factory=list)
     home_site_key: str | None = None
@@ -780,6 +783,41 @@ class GroupRecord:
         if not isinstance(coord, dict):
             raise ValueError("location.coord must be an object")
         _validate_json_value(coord, field_name="group.location.coord")
+        if self.cell is None:
+            self.cell = copy.deepcopy(coord)
+        if not isinstance(self.cell, dict):
+            raise ValueError("cell must be an object")
+        _validate_json_value(self.cell, field_name="group.cell")
+        self.location["coord"] = copy.deepcopy(self.cell)
+        if self.moving is not None:
+            if not isinstance(self.moving, dict):
+                raise ValueError("moving must be an object when present")
+            if set(self.moving) != {"dest_cell", "depart_tick", "arrive_tick", "move_uid"}:
+                raise ValueError("moving must contain exactly: dest_cell, depart_tick, arrive_tick, move_uid")
+            dest_cell = self.moving["dest_cell"]
+            if not isinstance(dest_cell, dict):
+                raise ValueError("moving.dest_cell must be an object")
+            if set(dest_cell) != {"space_id", "coord"}:
+                raise ValueError("moving.dest_cell must contain exactly: space_id, coord")
+            if not isinstance(dest_cell.get("space_id"), str) or not dest_cell.get("space_id"):
+                raise ValueError("moving.dest_cell.space_id must be a non-empty string")
+            _validate_json_value(dest_cell.get("coord"), field_name="group.moving.dest_cell.coord")
+            if isinstance(self.moving["depart_tick"], bool) or not isinstance(self.moving["depart_tick"], int):
+                raise ValueError("moving.depart_tick must be an integer")
+            if isinstance(self.moving["arrive_tick"], bool) or not isinstance(self.moving["arrive_tick"], int):
+                raise ValueError("moving.arrive_tick must be an integer")
+            if self.moving["arrive_tick"] < self.moving["depart_tick"]:
+                raise ValueError("moving.arrive_tick must be >= moving.depart_tick")
+            if not isinstance(self.moving["move_uid"], str) or not self.moving["move_uid"]:
+                raise ValueError("moving.move_uid must be a non-empty string")
+            self.moving = {
+                "dest_cell": {"space_id": str(dest_cell["space_id"]), "coord": copy.deepcopy(dest_cell["coord"])},
+                "depart_tick": int(self.moving["depart_tick"]),
+                "arrive_tick": int(self.moving["arrive_tick"]),
+                "move_uid": str(self.moving["move_uid"]),
+            }
+        if self.last_arrival_uid is not None and (not isinstance(self.last_arrival_uid, str) or not self.last_arrival_uid):
+            raise ValueError("last_arrival_uid must be a non-empty string when present")
         if isinstance(self.strength, bool) or not isinstance(self.strength, int):
             raise ValueError("strength must be an integer")
         if self.strength < 0:
@@ -797,17 +835,28 @@ class GroupRecord:
             "group_type": self.group_type,
             "location": {
                 "space_id": str(self.location["space_id"]),
-                "coord": copy.deepcopy(self.location["coord"]),
+                "coord": copy.deepcopy(self.cell),
             },
+            "cell": copy.deepcopy(self.cell),
             "strength": int(self.strength),
             "tags": list(self.tags),
         }
+        if self.moving is not None:
+            payload["moving"] = copy.deepcopy(self.moving)
+        if self.last_arrival_uid is not None:
+            payload["last_arrival_uid"] = self.last_arrival_uid
         if self.home_site_key is not None:
             payload["home_site_key"] = self.home_site_key
         return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GroupRecord":
+        moving_raw = data.get("moving")
+        if moving_raw is not None and not isinstance(moving_raw, dict):
+            raise ValueError("moving must be an object when present")
+        cell_raw = data.get("cell")
+        if cell_raw is not None and not isinstance(cell_raw, dict):
+            raise ValueError("cell must be an object when present")
         return cls(
             group_id=str(data.get("group_id", "")),
             group_type=str(data["group_type"]),
@@ -815,6 +864,11 @@ class GroupRecord:
                 "space_id": str(dict(data["location"])["space_id"]),
                 "coord": copy.deepcopy(dict(data["location"])["coord"]),
             },
+            cell=(copy.deepcopy(cell_raw) if isinstance(cell_raw, dict) else None),
+            moving=(copy.deepcopy(moving_raw) if isinstance(moving_raw, dict) else None),
+            last_arrival_uid=(
+                str(data["last_arrival_uid"]) if data.get("last_arrival_uid") is not None else None
+            ),
             strength=int(data.get("strength", 0)),
             tags=[str(tag) for tag in data.get("tags", [])],
             home_site_key=(str(data["home_site_key"]) if data.get("home_site_key") is not None else None),
