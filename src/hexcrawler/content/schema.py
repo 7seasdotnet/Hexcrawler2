@@ -444,3 +444,37 @@ def _validate_group_record(record: dict[str, Any], *, field_name: str) -> None:
     home_site_key = record.get("home_site_key")
     if home_site_key is not None and (not isinstance(home_site_key, str) or not home_site_key):
         raise ValueError(f"{field_name}.home_site_key must be a non-empty string when present")
+
+    cell = record.get("cell")
+    if cell is not None:
+        if not isinstance(cell, dict):
+            raise ValueError(f"{field_name}.cell must be an object when present")
+
+    moving = record.get("moving")
+    if moving is not None:
+        if not isinstance(moving, dict):
+            raise ValueError(f"{field_name}.moving must be an object when present")
+        expected = {"dest_cell", "depart_tick", "arrive_tick", "move_uid"}
+        if set(moving) != expected:
+            raise ValueError(f"{field_name}.moving must contain exactly {sorted(expected)}")
+        dest_cell = moving.get("dest_cell")
+        if not isinstance(dest_cell, dict):
+            raise ValueError(f"{field_name}.moving.dest_cell must be an object")
+        if set(dest_cell) != {"space_id", "coord"}:
+            raise ValueError(f"{field_name}.moving.dest_cell must contain exactly ['coord', 'space_id']")
+        if not isinstance(dest_cell.get("space_id"), str) or not dest_cell.get("space_id"):
+            raise ValueError(f"{field_name}.moving.dest_cell.space_id must be a non-empty string")
+        if "coord" not in dest_cell:
+            raise ValueError(f"{field_name}.moving.dest_cell.coord is required")
+        if isinstance(moving.get("depart_tick"), bool) or not isinstance(moving.get("depart_tick"), int):
+            raise ValueError(f"{field_name}.moving.depart_tick must be an integer")
+        if isinstance(moving.get("arrive_tick"), bool) or not isinstance(moving.get("arrive_tick"), int):
+            raise ValueError(f"{field_name}.moving.arrive_tick must be an integer")
+        if moving["arrive_tick"] < moving["depart_tick"]:
+            raise ValueError(f"{field_name}.moving.arrive_tick must be >= depart_tick")
+        if not isinstance(moving.get("move_uid"), str) or not moving.get("move_uid"):
+            raise ValueError(f"{field_name}.moving.move_uid must be a non-empty string")
+
+    last_arrival_uid = record.get("last_arrival_uid")
+    if last_arrival_uid is not None and (not isinstance(last_arrival_uid, str) or not last_arrival_uid):
+        raise ValueError(f"{field_name}.last_arrival_uid must be a non-empty string when present")

@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M12 — data-driven site ecology configuration (marker-only, deterministic, bounded) with strict schema validation and canonical rule ordering.
-- **Next action:** Phase 6D-M13 – Editor/authoring integration for ecology_config.
+- **Current phase:** Phase 6D-M13 — deterministic campaign group movement seam (command/event-driven, no AI/pathfinding).
+- **Next action:** Phase 6D-M14 – Non-AI ecology integration: claim opportunities/rumors triggered by group arrivals.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added strict, serialized/hash-covered per-site `ecology_config` support under `site_state_by_key[site_key]["ecology_config"]` with deterministic validation (no coercion, no unknown fields).
-- Added canonical ecology rule evaluation by `rule.id` (ascending) for config-driven rules to prevent RNG/order butterfly divergence while preserving legacy M11 behavior when config is absent.
-- Added Phase 6D-M12 deterministic tests for default-compatibility hash stability, config-driven marker scheduling, rule-order invariance, max-steps canonical-order behavior, mixed legacy/config decision-key namespace separation (including config disable), save/load idempotence, and malformed config rejection with atomic no-mutation + unchanged simulation-hash checks.
+- Hardened `move_group_intent` campaign-role gating to deterministically reject groups not currently in campaign-role spaces (`group_not_in_campaign_space`) while preserving atomic no-mutation behavior.
+- Strengthened M13 idempotence coverage: tests now explicitly exercise stale arrival after re-plan (`stale_uid`) plus duplicate/no-plan safety (`no_plan`) in the same deterministic flow.
+- Replaced brittle fixed-hash assertion in an ecology regression with replay-stability hash equivalence to keep the determinism property under evolving canonical serialization.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -191,6 +191,7 @@
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_site_state.py`
 - `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
@@ -234,6 +235,7 @@
 - `turn_intent` (simulation command seam; deterministic facing-token update with forensic `turn_outcome`)
 - `end_local_encounter_intent` (simulation command seam; Local-role-only encounter return request with forensic `end_local_encounter_outcome` + `local_encounter_return`)
 - `claim_site_intent` (simulation command seam; deterministic structural site claim anchor set for ecology scaffolding, with forensic `site_claim_outcome`)
+- `move_group_intent` (simulation command seam; campaign-role deterministic group travel scheduling with idempotent arrival application)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
@@ -242,9 +244,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added persistent `world.groups` substrate with deterministic serialization/hash coverage, strict load validation, and legacy-default `{}` migration behavior for campaign-role seed carriers.
-- Added deterministic per-site claim anchors (`claimed_by_group_id`, `claimed_tick`) and bounded `growth_applied_steps` ledger to support idempotent ecology growth scheduling across save/load/replay boundaries.
-- Added deterministic `SiteEcologyModule` periodic scaffolding (stable ordering, bounded processing, deterministic cursor deferral) to enqueue marker-only pending effects with deterministic forensics; no random spawn tables/probability logic yet in M10.
+- Hardened campaign-role applicability for group movement with deterministic rejection when a group is located in a local-role space.
+- Expanded arrival idempotence/staleness verification to cover stale old arrivals after a newer move plan is scheduled.
+- Switched ecology baseline hash pinning to replay hash-stability assertion to validate determinism without over-coupling to evolving canonical serialization details.
 
 
 ## Troubleshooting

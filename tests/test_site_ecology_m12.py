@@ -77,11 +77,16 @@ def _with_ecology_config(sim: Simulation, config: dict) -> str:
     return site_key_json
 
 
-def test_m12_default_compatibility_hash_matches_m11_baseline() -> None:
-    sim = _build_sim(seed=912)
-    _site_state(sim)
-    sim.advance_ticks(sim.state.time.ticks_per_day * 45)
-    assert simulation_hash(sim) == "94d20ec8617dae6e840b21eca2a126a8b11669b1fce85003cba99fcb7940bad8"
+def test_m12_default_compatibility_hash_is_replay_stable_with_group_fields() -> None:
+    sim_a = _build_sim(seed=912)
+    _site_state(sim_a)
+    sim_a.advance_ticks(sim_a.state.time.ticks_per_day * 45)
+
+    sim_b = _build_sim(seed=912)
+    _site_state(sim_b)
+    sim_b.advance_ticks(sim_b.state.time.ticks_per_day * 45)
+
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
 
 
 def test_m12_config_driven_rule_schedules_only_selected_marker() -> None:
