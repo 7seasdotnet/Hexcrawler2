@@ -23,6 +23,7 @@ from hexcrawler.sim.encounters import (
     LocalEncounterInstanceModule,
     EncounterSelectionModule,
     RumorPipelineModule,
+    SiteEcologyModule,
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
@@ -1405,6 +1406,7 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(EncounterActionModule())
     sim.register_rule_module(EncounterActionExecutionModule())
     sim.register_rule_module(LocalEncounterInstanceModule())
+    sim.register_rule_module(SiteEcologyModule())
     sim.register_rule_module(RumorPipelineModule())
     sim.register_rule_module(SpawnMaterializationModule())
 

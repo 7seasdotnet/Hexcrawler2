@@ -206,6 +206,20 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
             raise ValueError(f"{field_prefix}.sites[{site_id}] key/id mismatch")
         _validate_site_record({**row, "site_id": site_id}, field_name=f"{field_prefix}.sites[{site_id}]")
 
+    groups = payload.get("groups", {})
+    if not isinstance(groups, dict):
+        raise ValueError(f"{field_prefix}.groups must be an object when present")
+    for group_id in sorted(groups):
+        row = groups[group_id]
+        if not isinstance(group_id, str) or not group_id:
+            raise ValueError(f"{field_prefix}.groups keys must be non-empty strings")
+        if not isinstance(row, dict):
+            raise ValueError(f"{field_prefix}.groups[{group_id}] must be an object")
+        explicit_id = row.get("group_id", group_id)
+        if explicit_id != group_id:
+            raise ValueError(f"{field_prefix}.groups[{group_id}] key/id mismatch")
+        _validate_group_record({**row, "group_id": group_id}, field_name=f"{field_prefix}.groups[{group_id}]")
+
 
 def _validate_site_record(record: dict[str, Any], *, field_name: str) -> None:
     site_id = record.get("site_id")
@@ -398,3 +412,35 @@ def validate_save_payload(payload: dict[str, Any]) -> None:
     _validate_json_value(payload["input_log"], field_name="input_log")
     if "metadata" in payload:
         _validate_json_value(payload["metadata"], field_name="metadata")
+
+
+def _validate_group_record(record: dict[str, Any], *, field_name: str) -> None:
+    group_id = record.get("group_id")
+    if not isinstance(group_id, str) or not group_id:
+        raise ValueError(f"{field_name}.group_id must be a non-empty string")
+    group_type = record.get("group_type")
+    if not isinstance(group_type, str) or not group_type:
+        raise ValueError(f"{field_name}.group_type must be a non-empty string")
+
+    location = record.get("location")
+    if not isinstance(location, dict):
+        raise ValueError(f"{field_name}.location must be an object")
+    if not isinstance(location.get("space_id"), str) or not location.get("space_id"):
+        raise ValueError(f"{field_name}.location.space_id must be a non-empty string")
+    if not isinstance(location.get("coord"), dict):
+        raise ValueError(f"{field_name}.location.coord must be an object")
+
+    strength = record.get("strength", 0)
+    if isinstance(strength, bool) or not isinstance(strength, int) or strength < 0:
+        raise ValueError(f"{field_name}.strength must be integer >= 0")
+
+    tags = record.get("tags", [])
+    if not isinstance(tags, list):
+        raise ValueError(f"{field_name}.tags must be a list")
+    for index, tag in enumerate(tags):
+        if not isinstance(tag, str):
+            raise ValueError(f"{field_name}.tags[{index}] must be a string")
+
+    home_site_key = record.get("home_site_key")
+    if home_site_key is not None and (not isinstance(home_site_key, str) or not home_site_key):
+        raise ValueError(f"{field_name}.home_site_key must be a non-empty string when present")
