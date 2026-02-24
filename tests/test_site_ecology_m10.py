@@ -172,8 +172,11 @@ def test_ecology_decision_ledger_is_fifo_bounded_and_deterministic() -> None:
             site_key_json=site_key_json,
             decisions=decisions,
             decision_key=f"synthetic_{index}",
-            threshold=100,
-            effect_type=FORTIFICATION_PENDING_EFFECT_TYPE,
+            chance_percent=100,
+            marker_type=FORTIFICATION_PENDING_EFFECT_TYPE,
+            rule_id="synthetic",
+            d20_payload=True,
+            legacy_mode=False,
         )
 
     assert len(decisions["order"]) == MAX_SITE_ECOLOGY_DECISIONS
@@ -189,8 +192,11 @@ def test_ecology_decision_ledger_is_fifo_bounded_and_deterministic() -> None:
             site_key_json=site_key_json_b,
             decisions=decisions_b,
             decision_key=f"synthetic_{index}",
-            threshold=100,
-            effect_type=FORTIFICATION_PENDING_EFFECT_TYPE,
+            chance_percent=100,
+            marker_type=FORTIFICATION_PENDING_EFFECT_TYPE,
+            rule_id="synthetic",
+            d20_payload=True,
+            legacy_mode=False,
         )
     assert decisions_b == decisions
 

@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M11 — deterministic site-ecology RNG decisions using per-site RNG streams plus serialized/hash-covered bounded ecology decision ledgers (marker-only scheduling).
-- **Next action:** Phase 6D-M12 — expand ecology rules into data-driven knobs (thresholds/steps) and evaluate deterministic campaign-role wandering-group claim hooks without broad faction AI/pathfinding scope expansion.
+- **Current phase:** Phase 6D-M12 — data-driven site ecology configuration (marker-only, deterministic, bounded) with strict schema validation and canonical rule ordering.
+- **Next action:** Phase 6D-M13 – Editor/authoring integration for ecology_config.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added deterministic per-site ecology RNG streams (`site_ecology:{site_key}`) with chance-gated growth decisions and optional deterministic d20 marker payload rolls (marker scheduling only).
-- Added serialized/hash-covered bounded per-site `ecology_decisions` ledger (FIFO eviction) so probabilistic growth decisions are idempotent across replay/save/load, including recorded no-op outcomes.
-- Added deterministic ecology decision forensics (`site_ecology_decision`), strict load-time validation for malformed `ecology_decisions` payloads, and explicit deferral save/load idempotence regression coverage.
+- Added strict, serialized/hash-covered per-site `ecology_config` support under `site_state_by_key[site_key]["ecology_config"]` with deterministic validation (no coercion, no unknown fields).
+- Added canonical ecology rule evaluation by `rule.id` (ascending) for config-driven rules to prevent RNG/order butterfly divergence while preserving legacy M11 behavior when config is absent.
+- Added Phase 6D-M12 deterministic tests for default-compatibility hash stability, config-driven marker scheduling, rule-order invariance, max-steps canonical-order behavior, mixed legacy/config decision-key namespace separation (including config disable), save/load idempotence, and malformed config rejection with atomic no-mutation + unchanged simulation-hash checks.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
