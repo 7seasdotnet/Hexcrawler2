@@ -76,6 +76,13 @@ SITE_ECOLOGY_DECISION_EVENT_TYPE = "site_ecology_decision"
 SITE_ECOLOGY_REINFORCE_CHANCE_PERCENT = 35
 SITE_ECOLOGY_FORTIFY_CHANCE_PERCENT = 55
 SITE_ECOLOGY_D20_SIZE = 20
+SITE_ECOLOGY_CONFIG_MAX_RULES = 16
+SITE_ECOLOGY_CONFIG_MAX_STEPS_PER_TICK_HARD_CAP = 8
+SITE_ECOLOGY_CONFIG_ALLOWED_KINDS = {"chance_marker"}
+SITE_ECOLOGY_CONFIG_ALLOWED_MARKER_TYPES = {
+    REINHABITATION_PENDING_EFFECT_TYPE,
+    FORTIFICATION_PENDING_EFFECT_TYPE,
+}
 
 
 
@@ -1215,6 +1222,8 @@ class LocalEncounterInstanceModule(RuleModule):
         for site_key_json, site_state in sorted(raw_site_state_by_key.items()):
             normalized_site_state = self._normalize_site_state_payload(site_state)
             if normalized_site_state is None:
+                if isinstance(site_state, dict) and "ecology_config" in site_state:
+                    raise ValueError("local_encounter_instance.site_state_by_key ecology_config must be valid")
                 if isinstance(site_state, dict) and "ecology_decisions" in site_state:
                     raise ValueError("local_encounter_instance.site_state_by_key ecology_decisions must be valid")
                 continue
@@ -1399,6 +1408,10 @@ class LocalEncounterInstanceModule(RuleModule):
                 else {"order": [], "by_key": {}}
             ),
         }
+        if isinstance(existing, dict) and existing.get("ecology_config") is not None:
+            normalized_ecology_config = self._normalize_ecology_config(existing.get("ecology_config"))
+            if normalized_ecology_config is not None:
+                site_state_by_key[site_key_json]["ecology_config"] = normalized_ecology_config
         return site_state_by_key
 
     def _normalize_site_state_payload(self, payload: Any) -> dict[str, Any] | None:
@@ -1436,7 +1449,10 @@ class LocalEncounterInstanceModule(RuleModule):
         ecology_decisions = self._normalize_ecology_decisions(payload.get("ecology_decisions"))
         if ecology_decisions is None:
             return None
-        return {
+        ecology_config = self._normalize_ecology_config(payload.get("ecology_config")) if "ecology_config" in payload else None
+        if "ecology_config" in payload and ecology_config is None:
+            return None
+        normalized_payload = {
             "site_key": copy.deepcopy(site_key),
             "status": status,
             "last_active_tick": last_active_tick,
@@ -1450,6 +1466,84 @@ class LocalEncounterInstanceModule(RuleModule):
             "claimed_tick": claimed_tick,
             "growth_applied_steps": growth_applied_steps,
             "ecology_decisions": ecology_decisions,
+        }
+        if ecology_config is not None:
+            normalized_payload["ecology_config"] = ecology_config
+        return normalized_payload
+
+    @staticmethod
+    def _normalize_ecology_config(payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        allowed_top_fields = {"enabled", "tick_interval", "max_steps_per_tick", "rules"}
+        if set(payload.keys()) - allowed_top_fields:
+            return None
+
+        enabled = payload.get("enabled", True)
+        if not isinstance(enabled, bool):
+            return None
+        tick_interval = payload.get("tick_interval", SITE_ECOLOGY_INTERVAL_DAYS)
+        if isinstance(tick_interval, bool) or not isinstance(tick_interval, int) or tick_interval < 1:
+            return None
+        max_steps = payload.get("max_steps_per_tick", SITE_ECOLOGY_CONFIG_MAX_STEPS_PER_TICK_HARD_CAP)
+        if (
+            isinstance(max_steps, bool)
+            or not isinstance(max_steps, int)
+            or max_steps < 1
+            or max_steps > SITE_ECOLOGY_CONFIG_MAX_STEPS_PER_TICK_HARD_CAP
+        ):
+            return None
+        rules_raw = payload.get("rules", [])
+        if not isinstance(rules_raw, list) or len(rules_raw) > SITE_ECOLOGY_CONFIG_MAX_RULES:
+            return None
+
+        normalized_rules: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for raw_rule in rules_raw:
+            if not isinstance(raw_rule, dict):
+                return None
+            allowed_rule_fields = {"id", "kind", "marker_type", "chance_percent", "priority", "d20_payload"}
+            if set(raw_rule.keys()) - allowed_rule_fields:
+                return None
+            if not {"id", "kind", "marker_type", "chance_percent"}.issubset(set(raw_rule.keys())):
+                return None
+
+            rule_id = raw_rule.get("id")
+            kind = raw_rule.get("kind")
+            marker_type = raw_rule.get("marker_type")
+            chance_percent = raw_rule.get("chance_percent")
+            if not isinstance(rule_id, str) or not rule_id:
+                return None
+            if rule_id in seen_ids:
+                return None
+            seen_ids.add(rule_id)
+            if kind not in SITE_ECOLOGY_CONFIG_ALLOWED_KINDS:
+                return None
+            if marker_type not in SITE_ECOLOGY_CONFIG_ALLOWED_MARKER_TYPES:
+                return None
+            if isinstance(chance_percent, bool) or not isinstance(chance_percent, int) or chance_percent < 0 or chance_percent > 100:
+                return None
+
+            normalized_rule = {
+                "id": rule_id,
+                "kind": str(kind),
+                "marker_type": str(marker_type),
+                "chance_percent": int(chance_percent),
+                "d20_payload": bool(raw_rule.get("d20_payload", False)),
+            }
+            if "priority" in raw_rule:
+                priority = raw_rule["priority"]
+                if isinstance(priority, bool) or not isinstance(priority, int) or priority < EFFECT_PRIORITY_MIN or priority > EFFECT_PRIORITY_MAX:
+                    return None
+                normalized_rule["priority"] = int(priority)
+            normalized_rules.append(normalized_rule)
+
+        normalized_rules.sort(key=lambda item: str(item["id"]))
+        return {
+            "enabled": enabled,
+            "tick_interval": int(tick_interval),
+            "max_steps_per_tick": int(max_steps),
+            "rules": normalized_rules,
         }
 
     def _consume_pending_site_effect_for_entry(
@@ -2504,51 +2598,77 @@ class SiteEcologyModule(RuleModule):
             if claim_group_id is None or claimed_tick is None:
                 continue
 
-            age_ticks = max(0, int(tick) - int(claimed_tick))
-            growth_steps = [
-                (
-                    "fortify_1",
-                    int(sim.state.time.ticks_per_day) * 7,
-                    SITE_ECOLOGY_FORTIFY_CHANCE_PERCENT,
-                    {"effect_type": FORTIFICATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "priority": 0},
-                ),
-                (
-                    "reinforce_1",
-                    int(sim.state.time.ticks_per_day) * 30,
-                    SITE_ECOLOGY_REINFORCE_CHANCE_PERCENT,
-                    {"effect_type": REINHABITATION_PENDING_EFFECT_TYPE, "source": "site_ecology", "rehab_policy": REHAB_POLICY_ADD, "priority": 10},
-                ),
-            ]
+            ecology_config = normalized.get("ecology_config")
+            if ecology_config is None:
+                growth_rules = self._legacy_growth_rules(sim)
+                legacy_mode = True
+            else:
+                if not bool(ecology_config.get("enabled", True)):
+                    continue
+                tick_interval = int(ecology_config.get("tick_interval", SITE_ECOLOGY_INTERVAL_DAYS))
+                if tick_interval > 1:
+                    interval_ticks = tick_interval * int(sim.state.time.ticks_per_day)
+                    if interval_ticks > 0 and int(tick) % interval_ticks != 0:
+                        continue
+                growth_rules = self._configured_growth_rules(sim=sim, ecology_config=ecology_config)
+                legacy_mode = False
+
             applied_steps = list(normalized.get("growth_applied_steps", []))
             pending_effects = list(normalized.get("pending_effects", []))
             ecology_decisions = LocalEncounterInstanceModule._normalize_ecology_decisions(normalized.get("ecology_decisions"))
             if ecology_decisions is None:
                 raise ValueError("local_encounter_instance.site_state_by_key ecology_decisions must be valid")
 
-            for step_id, threshold_ticks, chance_percent, effect_payload in growth_steps:
+            max_steps = len(growth_rules)
+            if ecology_config is not None:
+                max_steps = min(max_steps, int(ecology_config.get("max_steps_per_tick", SITE_ECOLOGY_CONFIG_MAX_STEPS_PER_TICK_HARD_CAP)))
+            applied_this_tick = 0
+
+            for growth_rule in growth_rules:
+                if applied_this_tick >= max_steps:
+                    break
+                step_id = str(growth_rule["step_id"])
+                threshold_ticks = int(growth_rule["threshold_ticks"])
+                chance_percent = int(growth_rule["chance_percent"])
+                effect_payload = copy.deepcopy(growth_rule["effect_payload"])
+                rule_id = str(growth_rule.get("rule_id", step_id))
+                marker_type = str(growth_rule.get("marker_type", effect_payload.get("effect_type", "")))
+                use_d20_payload = bool(growth_rule.get("d20_payload", True))
                 if step_id in applied_steps:
                     continue
+                age_ticks = max(0, int(tick) - int(claimed_tick))
                 if age_ticks < threshold_ticks:
                     continue
                 schedule_tick = int(claimed_tick) + int(threshold_ticks)
-                decision_key = self._decision_key(
-                    step_id=step_id,
-                    rehab_generation=int(normalized.get("rehab_generation", 0)),
-                    schedule_tick=schedule_tick,
-                )
+                if legacy_mode:
+                    decision_key = self._legacy_decision_key(
+                        step_id=step_id,
+                        rehab_generation=int(normalized.get("rehab_generation", 0)),
+                        schedule_tick=schedule_tick,
+                    )
+                else:
+                    decision_key = self._decision_key(
+                        site_key_json=site_key_json,
+                        rule_id=rule_id,
+                        claimed_tick=int(claimed_tick),
+                        rehab_generation=int(normalized.get("rehab_generation", 0)),
+                        schedule_tick=schedule_tick,
+                        step_id=step_id,
+                    )
                 decision, ecology_decisions, created = self._resolve_ecology_decision(
                     sim=sim,
                     site_key_json=site_key_json,
                     decisions=ecology_decisions,
                     decision_key=decision_key,
-                    threshold=chance_percent,
-                    effect_type=str(effect_payload["effect_type"]),
+                    chance_percent=chance_percent,
+                    marker_type=marker_type,
+                    rule_id=rule_id,
+                    d20_payload=use_d20_payload,
+                    legacy_mode=legacy_mode,
                 )
                 if created:
-                    sim.schedule_event_at(
-                        tick=tick + 1,
-                        event_type=SITE_ECOLOGY_DECISION_EVENT_TYPE,
-                        params={
+                    if legacy_mode:
+                        params = {
                             "tick": tick,
                             "site_key": copy.deepcopy(normalized["site_key"]),
                             "group_id": str(claim_group_id),
@@ -2558,14 +2678,32 @@ class SiteEcologyModule(RuleModule):
                             "threshold": int(decision["threshold"]),
                             "d20_roll": int(decision["d20_roll"]),
                             "result": str(decision["result"]),
-                        },
+                        }
+                    else:
+                        params = {
+                            "tick": tick,
+                            "site_key": copy.deepcopy(normalized["site_key"]),
+                            "group_id": str(claim_group_id),
+                            "decision_key": decision_key,
+                            "rule_id": rule_id,
+                            "marker_type": str(decision.get("marker_type", "no-op")),
+                            "chance_percent": int(decision["chance_percent"]),
+                            "pct_roll": int(decision["pct_roll"]),
+                            "result": str(decision["result"]),
+                        }
+                        if int(decision.get("d20_roll", 0)) > 0:
+                            params["d20_roll"] = int(decision["d20_roll"])
+                    sim.schedule_event_at(
+                        tick=tick + 1,
+                        event_type=SITE_ECOLOGY_DECISION_EVENT_TYPE,
+                        params=params,
                     )
 
                 should_schedule = str(decision.get("result", "")).startswith("scheduled:")
                 if should_schedule:
-                    effect_with_roll = copy.deepcopy(effect_payload)
-                    effect_with_roll["ecology_d20_roll"] = int(decision["d20_roll"])
-                    pending_effects = self._schedule_growth_effect(pending_effects, effect_with_roll)
+                    if use_d20_payload:
+                        effect_payload["ecology_d20_roll"] = int(decision["d20_roll"])
+                    pending_effects = self._schedule_growth_effect(pending_effects, effect_payload)
                     scheduled_count += 1
                     sim.schedule_event_at(
                         tick=tick + 1,
@@ -2581,6 +2719,7 @@ class SiteEcologyModule(RuleModule):
                     )
 
                 applied_steps.append(step_id)
+                applied_this_tick += 1
 
             if len(applied_steps) > SITE_GROWTH_LEDGER_MAX:
                 applied_steps = applied_steps[-SITE_GROWTH_LEDGER_MAX:]
@@ -2608,8 +2747,81 @@ class SiteEcologyModule(RuleModule):
             },
         )
 
-    def _decision_key(self, *, step_id: str, rehab_generation: int, schedule_tick: int) -> str:
+    def _legacy_growth_rules(self, sim: Simulation) -> list[dict[str, Any]]:
+        return [
+            {
+                "step_id": "fortify_1",
+                "rule_id": "fortify_1",
+                "threshold_ticks": int(sim.state.time.ticks_per_day) * 7,
+                "chance_percent": SITE_ECOLOGY_FORTIFY_CHANCE_PERCENT,
+                "marker_type": FORTIFICATION_PENDING_EFFECT_TYPE,
+                "d20_payload": True,
+                "effect_payload": {
+                    "effect_type": FORTIFICATION_PENDING_EFFECT_TYPE,
+                    "source": "site_ecology",
+                    "priority": 0,
+                },
+            },
+            {
+                "step_id": "reinforce_1",
+                "rule_id": "reinforce_1",
+                "threshold_ticks": int(sim.state.time.ticks_per_day) * 30,
+                "chance_percent": SITE_ECOLOGY_REINFORCE_CHANCE_PERCENT,
+                "marker_type": REINHABITATION_PENDING_EFFECT_TYPE,
+                "d20_payload": True,
+                "effect_payload": {
+                    "effect_type": REINHABITATION_PENDING_EFFECT_TYPE,
+                    "source": "site_ecology",
+                    "rehab_policy": REHAB_POLICY_ADD,
+                    "priority": 10,
+                },
+            },
+        ]
+
+    def _configured_growth_rules(self, *, sim: Simulation, ecology_config: dict[str, Any]) -> list[dict[str, Any]]:
+        ticks_per_day = int(sim.state.time.ticks_per_day)
+        rules: list[dict[str, Any]] = []
+        for rule in sorted(ecology_config.get("rules", []), key=lambda row: str(row["id"])):
+            marker_type = str(rule["marker_type"])
+            step_id = str(rule["id"])
+            effect_payload: dict[str, Any] = {
+                "effect_type": marker_type,
+                "source": "site_ecology",
+            }
+            if marker_type == REINHABITATION_PENDING_EFFECT_TYPE:
+                effect_payload["rehab_policy"] = REHAB_POLICY_ADD
+            if "priority" in rule:
+                effect_payload["priority"] = int(rule["priority"])
+            rules.append(
+                {
+                    "step_id": step_id,
+                    "rule_id": step_id,
+                    "threshold_ticks": ticks_per_day,
+                    "chance_percent": int(rule["chance_percent"]),
+                    "marker_type": marker_type,
+                    "d20_payload": bool(rule.get("d20_payload", False)),
+                    "effect_payload": effect_payload,
+                }
+            )
+        return rules
+
+    def _legacy_decision_key(self, *, step_id: str, rehab_generation: int, schedule_tick: int) -> str:
         return f"{step_id}:rehab{int(rehab_generation)}:tick{int(schedule_tick)}"
+
+    def _decision_key(
+        self,
+        *,
+        site_key_json: str,
+        rule_id: str,
+        claimed_tick: int,
+        rehab_generation: int,
+        schedule_tick: int,
+        step_id: str,
+    ) -> str:
+        return (
+            f"site:{site_key_json}:rule:{rule_id}:claim:{int(claimed_tick)}:"
+            f"rehab{int(rehab_generation)}:tick{int(schedule_tick)}:step:{step_id}"
+        )
 
     def _resolve_ecology_decision(
         self,
@@ -2618,8 +2830,11 @@ class SiteEcologyModule(RuleModule):
         site_key_json: str,
         decisions: dict[str, Any],
         decision_key: str,
-        threshold: int,
-        effect_type: str,
+        chance_percent: int,
+        marker_type: str,
+        rule_id: str,
+        d20_payload: bool,
+        legacy_mode: bool,
     ) -> tuple[dict[str, Any], dict[str, Any], bool]:
         order = [str(key) for key in decisions.get("order", []) if isinstance(key, str) and key]
         by_key = {
@@ -2633,15 +2848,27 @@ class SiteEcologyModule(RuleModule):
         rng = sim.rng_stream(f"site_ecology:{site_key_json}")
         roll_u32 = int(rng.randrange(0, 2**32))
         pct_roll = int((roll_u32 % 100) + 1)
-        d20_roll = int(rng.randrange(1, SITE_ECOLOGY_D20_SIZE + 1))
-        did_schedule = pct_roll <= int(threshold)
-        decision_payload = {
-            "roll_u32": roll_u32,
-            "pct_roll": pct_roll,
-            "threshold": int(threshold),
-            "d20_roll": d20_roll,
-            "result": f"scheduled:{effect_type}" if did_schedule else f"no-op:{effect_type}",
-        }
+        d20_roll = int(rng.randrange(1, SITE_ECOLOGY_D20_SIZE + 1)) if d20_payload else 0
+        did_schedule = pct_roll <= int(chance_percent)
+        if legacy_mode:
+            decision_payload = {
+                "roll_u32": roll_u32,
+                "pct_roll": pct_roll,
+                "threshold": int(chance_percent),
+                "d20_roll": d20_roll,
+                "result": f"scheduled:{marker_type}" if did_schedule else f"no-op:{marker_type}",
+            }
+        else:
+            decision_payload = {
+                "roll_u32": roll_u32,
+                "pct_roll": pct_roll,
+                "threshold": int(chance_percent),
+                "chance_percent": int(chance_percent),
+                "d20_roll": d20_roll,
+                "rule_id": rule_id,
+                "marker_type": marker_type,
+                "result": f"scheduled:{marker_type}" if did_schedule else f"no-op:{marker_type}",
+            }
         by_key[decision_key] = decision_payload
         order.append(decision_key)
 
