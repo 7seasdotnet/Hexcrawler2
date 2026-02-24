@@ -8,11 +8,12 @@ from typing import Any
 from hexcrawler.content.encounters import EncounterTable
 from hexcrawler.content.local_arenas import DEFAULT_LOCAL_ARENAS_PATH, LocalArenaTemplate, load_local_arena_templates_json
 from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, TRAVEL_STEP_EVENT_TYPE, SimCommand, SimEvent, Simulation
+from hexcrawler.sim.groups import GROUP_MOVE_ARRIVED_EVENT_TYPE
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, MAX_CLAIM_OPPORTUNITIES, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -64,7 +65,12 @@ EFFECT_PRIORITY_MIN = -1000
 EFFECT_PRIORITY_MAX = 1000
 INVALID_EFFECT_PRIORITY_DIAGNOSTIC_MAX_LEN = 128
 CLAIM_SITE_INTENT = "claim_site_intent"
+CLAIM_SITE_FROM_OPPORTUNITY_INTENT = "claim_site_from_opportunity_intent"
 SITE_CLAIM_OUTCOME_EVENT_TYPE = "site_claim_outcome"
+GROUP_ARRIVED_AT_SITE_EVENT_TYPE = "group_arrived_at_site"
+CLAIM_OPPORTUNITY_CREATED_EVENT_TYPE = "claim_opportunity_created"
+CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE = "claim_opportunity_consumed"
+MAX_CLAIM_SITES_PROCESSED_PER_ARRIVAL = 32
 SITE_ECOLOGY_TASK_NAME = "site_ecology:tick"
 SITE_ECOLOGY_INTERVAL_DAYS = 1
 SITE_ECOLOGY_MAX_PROCESSED_PER_TICK = 64
@@ -2501,6 +2507,9 @@ class SiteEcologyModule(RuleModule):
         scheduler.set_task_callback(SITE_ECOLOGY_TASK_NAME, self._build_tick_callback())
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type == CLAIM_SITE_FROM_OPPORTUNITY_INTENT:
+            self._handle_claim_from_opportunity(sim=sim, command=command)
+            return True
         if command.command_type != CLAIM_SITE_INTENT:
             return False
 
@@ -2514,15 +2523,105 @@ class SiteEcologyModule(RuleModule):
         if site_key is None:
             self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key_payload, group_id=group_id, outcome="invalid_site_key")
             return True
+        self._apply_claim(sim=sim, tick=tick, site_key=site_key, group_id=group_id)
+        return True
 
-        if group_id not in sim.state.world.groups:
+    def _handle_claim_from_opportunity(self, *, sim: Simulation, command: SimCommand) -> None:
+        tick = int(command.tick)
+        opportunity_id = command.params.get("opportunity_id")
+        if not isinstance(opportunity_id, str) or not opportunity_id:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=None, group_id="", outcome="unknown_opportunity")
+            return
+
+        opportunities = list(sim.state.world.claim_opportunities)
+        matching_index = None
+        for index, row in enumerate(opportunities):
+            if str(row.get("opportunity_id", "")) == opportunity_id:
+                matching_index = index
+                break
+        if matching_index is None:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=None, group_id="", outcome="unknown_opportunity")
+            return
+
+        matching = dict(opportunities[matching_index])
+        site_key = copy.deepcopy(matching.get("site_key"))
+        group_id = str(matching.get("group_id", ""))
+        if matching.get("consumed_tick") is not None:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="opportunity_already_consumed")
+            return
+
+        group = sim.state.world.groups.get(group_id)
+        if group is None:
             self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="unknown_group")
-            return True
+            return
+        expected_cell = matching.get("cell")
+        if not isinstance(expected_cell, dict) or group.location != expected_cell:
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="group_not_at_opportunity_cell")
+            return
+
+        claim_outcome = self._inspect_claim_preconditions(sim=sim, site_key=site_key, group_id=group_id)
+        if claim_outcome != "ok":
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome=claim_outcome)
+            return
+
+        matching["consumed_tick"] = tick
+        opportunities[matching_index] = matching
+        sim.state.world.claim_opportunities = opportunities
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "opportunity_id": opportunity_id,
+                "group_id": group_id,
+                "site_key": copy.deepcopy(site_key),
+            },
+        )
+        self._apply_claim(sim=sim, tick=tick, site_key=site_key, group_id=group_id)
+
+    def _apply_claim(self, *, sim: Simulation, tick: int, site_key: dict[str, Any], group_id: str) -> None:
+        precondition = self._inspect_claim_preconditions(sim=sim, site_key=site_key, group_id=group_id)
+        if precondition != "ok":
+            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome=precondition)
+            return
+
+        local_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+        assert isinstance(local_state, dict)
+        site_state_by_key = dict(local_state.get(LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY, {}))
+        site_key_json = LocalEncounterInstanceModule._site_key_json(site_key)
+        existing = site_state_by_key.get(site_key_json)
+        normalized = LocalEncounterInstanceModule()._normalize_site_state_payload(existing) if isinstance(existing, dict) else None
+        if normalized is None:
+            normalized = {
+                "site_key": copy.deepcopy(site_key),
+                "status": "inactive",
+                "last_active_tick": 0,
+                "next_check_tick": 0,
+                "tags": [],
+                "pending_effects": [],
+                "rehab_generation": 0,
+                "fortified": False,
+                "rehab_policy": REHAB_POLICY_REPLACE,
+                "claimed_by_group_id": None,
+                "claimed_tick": None,
+                "growth_applied_steps": [],
+                "ecology_decisions": {"order": [], "by_key": {}},
+            }
+
+        normalized["claimed_by_group_id"] = group_id
+        normalized["claimed_tick"] = tick
+        site_state_by_key[site_key_json] = normalized
+        local_state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
+        sim.set_rules_state(LocalEncounterInstanceModule.name, local_state)
+        self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="applied")
+
+    def _inspect_claim_preconditions(self, *, sim: Simulation, site_key: dict[str, Any], group_id: str) -> str:
+        if group_id not in sim.state.world.groups:
+            return "unknown_group"
 
         local_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
         if not isinstance(local_state, dict):
-            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="missing_site_state_module")
-            return True
+            return "missing_site_state_module"
         site_state_by_key = dict(local_state.get(LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY, {}))
         site_key_json = LocalEncounterInstanceModule._site_key_json(site_key)
         existing = site_state_by_key.get(site_key_json)
@@ -2545,17 +2644,83 @@ class SiteEcologyModule(RuleModule):
             }
 
         if normalized.get("claimed_by_group_id") is not None:
-            self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="already_claimed")
-            return True
+            return "already_claimed"
+        return "ok"
 
-        normalized["claimed_by_group_id"] = group_id
-        normalized["claimed_tick"] = tick
-        site_state_by_key[site_key_json] = normalized
-        local_state[LocalEncounterInstanceModule._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
-        sim.set_rules_state(LocalEncounterInstanceModule.name, local_state)
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != GROUP_MOVE_ARRIVED_EVENT_TYPE:
+            return
+        group_id = str(event.params.get("group_id", ""))
+        to_cell = event.params.get("to_cell")
+        if not isinstance(to_cell, dict):
+            return
+        sites = sim.state.world.get_sites_at_location(to_cell)
+        ordered_sites: list[tuple[str, dict[str, Any]]] = []
+        for site in sites:
+            site_key = {
+                "origin_space_id": str(site.location.get("space_id", "")),
+                "origin_coord": copy.deepcopy(site.location.get("coord", {})),
+                "template_id": f"site:{site.site_id}",
+            }
+            site_key_json = LocalEncounterInstanceModule._site_key_json(site_key)
+            ordered_sites.append((site_key_json, site_key))
 
-        self._emit_claim_outcome(sim=sim, tick=tick, site_key=site_key, group_id=group_id, outcome="applied")
-        return True
+        for _, site_key in sorted(ordered_sites)[:MAX_CLAIM_SITES_PROCESSED_PER_ARRIVAL]:
+            sim.schedule_event_at(
+                tick=event.tick + 1,
+                event_type=GROUP_ARRIVED_AT_SITE_EVENT_TYPE,
+                params={
+                    "tick": int(event.tick),
+                    "group_id": group_id,
+                    "site_key": copy.deepcopy(site_key),
+                    "cell": copy.deepcopy(to_cell),
+                },
+            )
+            if self._inspect_claim_preconditions(sim=sim, site_key=site_key, group_id=group_id) == "already_claimed":
+                continue
+            if self._has_unconsumed_opportunity(sim=sim, group_id=group_id, site_key=site_key):
+                continue
+            self._create_claim_opportunity(sim=sim, tick=int(event.tick), group_id=group_id, site_key=site_key, cell=to_cell)
+
+    def _has_unconsumed_opportunity(self, *, sim: Simulation, group_id: str, site_key: dict[str, Any]) -> bool:
+        site_key_json = LocalEncounterInstanceModule._site_key_json(site_key)
+        for row in sim.state.world.claim_opportunities:
+            if (
+                str(row.get("group_id", "")) == group_id
+                and LocalEncounterInstanceModule._site_key_json(dict(row.get("site_key", {}))) == site_key_json
+                and row.get("consumed_tick") is None
+            ):
+                return True
+        return False
+
+    def _create_claim_opportunity(self, *, sim: Simulation, tick: int, group_id: str, site_key: dict[str, Any], cell: dict[str, Any]) -> None:
+        opportunities = list(sim.state.world.claim_opportunities)
+        while len(opportunities) >= MAX_CLAIM_OPPORTUNITIES:
+            # Deterministic FIFO regardless of consumed status to keep policy simple/predictable.
+            del opportunities[0]
+
+        opportunity_id = f"{tick}:{len(sim.input_log)}:{group_id}:{LocalEncounterInstanceModule._site_key_json(site_key)}"
+        opportunities.append(
+            {
+                "opportunity_id": opportunity_id,
+                "group_id": group_id,
+                "site_key": copy.deepcopy(site_key),
+                "cell": copy.deepcopy(cell),
+                "created_tick": tick,
+                "consumed_tick": None,
+            }
+        )
+        sim.state.world.claim_opportunities = opportunities
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=CLAIM_OPPORTUNITY_CREATED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "opportunity_id": opportunity_id,
+                "group_id": group_id,
+                "site_key": copy.deepcopy(site_key),
+            },
+        )
 
     def _build_tick_callback(self):
         def _on_periodic(sim: Simulation, tick: int) -> None:

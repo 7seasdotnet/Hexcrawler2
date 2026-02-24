@@ -18,6 +18,7 @@ LOCAL_SPACE_ROLE = "local"
 SPACE_ROLES = {CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE}
 MAX_SIGNALS = 256
 MAX_OCCLUSION_EDGES = 2048
+MAX_CLAIM_OPPORTUNITIES = 256
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -149,6 +150,51 @@ def _normalize_occlusion_edge_record(value: Any) -> dict[str, Any]:
         "cell_a": cell_a,
         "cell_b": cell_b,
         "occlusion_value": occlusion_value,
+    }
+
+
+def _normalize_claim_opportunity_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("claim opportunity entry must be an object")
+    allowed = {"opportunity_id", "group_id", "site_key", "cell", "created_tick", "consumed_tick"}
+    if set(value) - allowed:
+        raise ValueError("claim opportunity entry has unknown fields")
+
+    opportunity_id = value.get("opportunity_id")
+    group_id = value.get("group_id")
+    site_key = value.get("site_key")
+    cell = value.get("cell")
+    if not isinstance(opportunity_id, str) or not opportunity_id:
+        raise ValueError("claim opportunity opportunity_id must be a non-empty string")
+    if not isinstance(group_id, str) or not group_id:
+        raise ValueError("claim opportunity group_id must be a non-empty string")
+    if not isinstance(site_key, dict):
+        raise ValueError("claim opportunity site_key must be an object")
+    _validate_json_value(site_key, field_name="claim opportunity site_key")
+
+    if not isinstance(cell, dict):
+        raise ValueError("claim opportunity cell must be an object")
+    if set(cell) != {"space_id", "coord"}:
+        raise ValueError("claim opportunity cell must contain exactly: space_id, coord")
+    if not isinstance(cell.get("space_id"), str) or not cell.get("space_id"):
+        raise ValueError("claim opportunity cell.space_id must be a non-empty string")
+    if not isinstance(cell.get("coord"), dict):
+        raise ValueError("claim opportunity cell.coord must be an object")
+    _validate_json_value(cell.get("coord"), field_name="claim opportunity cell.coord")
+
+    created_tick = _require_non_negative_int(value.get("created_tick"), field_name="claim opportunity created_tick")
+    consumed_tick_raw = value.get("consumed_tick")
+    consumed_tick = None
+    if consumed_tick_raw is not None:
+        consumed_tick = _require_non_negative_int(consumed_tick_raw, field_name="claim opportunity consumed_tick")
+
+    return {
+        "opportunity_id": opportunity_id,
+        "group_id": group_id,
+        "site_key": copy.deepcopy(site_key),
+        "cell": {"space_id": str(cell["space_id"]), "coord": copy.deepcopy(cell["coord"])},
+        "created_tick": created_tick,
+        "consumed_tick": consumed_tick,
     }
 
 def _build_default_hex_record(rng_worldgen: random.Random) -> HexRecord:
@@ -889,6 +935,7 @@ class WorldState:
     containers: dict[str, ContainerState] = field(default_factory=dict)
     sites: dict[str, SiteRecord] = field(default_factory=dict)
     groups: dict[str, GroupRecord] = field(default_factory=dict)
+    claim_opportunities: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.spaces:
@@ -975,6 +1022,11 @@ class WorldState:
                 group_id: self.groups[group_id].to_dict()
                 for group_id in sorted(self.groups)
             }
+        if self.claim_opportunities:
+            payload["claim_opportunities"] = [
+                _normalize_claim_opportunity_record(row)
+                for row in self.claim_opportunities
+            ]
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1029,6 +1081,11 @@ class WorldState:
                 group_id: self.groups[group_id].to_dict()
                 for group_id in sorted(self.groups)
             }
+        if self.claim_opportunities:
+            payload["claim_opportunities"] = [
+                _normalize_claim_opportunity_record(row)
+                for row in self.claim_opportunities
+            ]
         return payload
 
     @classmethod
@@ -1139,6 +1196,22 @@ class WorldState:
             if group.group_id != group_id:
                 raise ValueError(f"group key/id mismatch for '{group_id}'")
             world.groups[group_id] = group
+
+        raw_claim_opportunities = data.get("claim_opportunities", [])
+        if not isinstance(raw_claim_opportunities, list):
+            raise ValueError("claim_opportunities must be a list")
+        world.claim_opportunities = [
+            _normalize_claim_opportunity_record(row)
+            for row in raw_claim_opportunities
+        ]
+        if len(world.claim_opportunities) > MAX_CLAIM_OPPORTUNITIES:
+            raise ValueError("claim_opportunities exceeds maximum")
+        seen_opportunity_ids: set[str] = set()
+        for row in world.claim_opportunities:
+            opportunity_id = str(row["opportunity_id"])
+            if opportunity_id in seen_opportunity_ids:
+                raise ValueError("claim opportunity ids must be unique")
+            seen_opportunity_ids.add(opportunity_id)
         return world
 
     def get_sites_at_location(self, location_ref: dict[str, Any]) -> list[SiteRecord]:
