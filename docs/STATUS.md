@@ -1,16 +1,17 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M13 — deterministic campaign group movement seam (command/event-driven, no AI/pathfinding).
-- **Next action:** Phase 6D-M14 – Non-AI ecology integration: claim opportunities/rumors triggered by group arrivals.
+- **Current phase:** Phase 6D-M14 — non-AI integration seam for deterministic claim opportunities on campaign-role group arrivals at sites.
+- **Next action:** Phase 6D-M15 — rumor substrate (persistent, deterministic) consuming group-arrival + claim-opportunity forensics.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Hardened `move_group_intent` campaign-role gating to deterministically reject groups not currently in campaign-role spaces (`group_not_in_campaign_space`) while preserving atomic no-mutation behavior.
-- Strengthened M13 idempotence coverage: tests now explicitly exercise stale arrival after re-plan (`stale_uid`) plus duplicate/no-plan safety (`no_plan`) in the same deterministic flow.
-- Replaced brittle fixed-hash assertion in an ecology regression with replay-stability hash equivalence to keep the determinism property under evolving canonical serialization.
+- Added bounded, serialized, hash-covered `world.claim_opportunities` substrate with strict load validation and deterministic cap enforcement (`MAX_CLAIM_OPPORTUNITIES = 256`).
+- Added campaign-role arrival integration: `group_move_arrived` now emits forensic `group_arrived_at_site` + `claim_opportunity_created` seam events, processes multi-site cells in deterministic `site_key` order with per-arrival bounds (first N processed, remainder deterministically skipped), and deduplicates by `(group_id, site_key)`.
+- Added explicit `claim_site_from_opportunity_intent` command handling with deterministic rejection outcomes, atomic failure behavior, and forensic `claim_opportunity_consumed` + `site_claim_outcome` emission; claim-opportunity cap eviction uses deterministic FIFO regardless of consumed status.
+
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -235,6 +236,7 @@
 - `turn_intent` (simulation command seam; deterministic facing-token update with forensic `turn_outcome`)
 - `end_local_encounter_intent` (simulation command seam; Local-role-only encounter return request with forensic `end_local_encounter_outcome` + `local_encounter_return`)
 - `claim_site_intent` (simulation command seam; deterministic structural site claim anchor set for ecology scaffolding, with forensic `site_claim_outcome`)
+- `claim_site_from_opportunity_intent` (simulation command seam; campaign-role explicit claim consumption from deterministic claim-opportunity ledger)
 - `move_group_intent` (simulation command seam; campaign-role deterministic group travel scheduling with idempotent arrival application)
 
 ## Track Emission Note
@@ -244,9 +246,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Hardened campaign-role applicability for group movement with deterministic rejection when a group is located in a local-role space.
-- Expanded arrival idempotence/staleness verification to cover stale old arrivals after a newer move plan is scheduled.
-- Switched ecology baseline hash pinning to replay hash-stability assertion to validate determinism without over-coupling to evolving canonical serialization details.
+- Added bounded claim-opportunity substrate and deterministic arrival-driven opportunity generation for campaign-role groups at sites, including deterministic multi-site ordering and per-arrival bounds (first N processed; remainder deterministically skipped).
+- Added `claim_site_from_opportunity_intent` with deterministic rejection outcomes and explicit forensic seam events for consumption.
+- Added focused M14 tests for replay/hash stability, save/load idempotence, deduplication (including multi-site same-cell behavior), bounded FIFO eviction policy, and atomic rejection behavior.
 
 
 ## Troubleshooting
