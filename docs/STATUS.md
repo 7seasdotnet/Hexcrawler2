@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M14 — non-AI integration seam for deterministic claim opportunities on campaign-role group arrivals at sites.
-- **Next action:** Phase 6D-M15 — rumor substrate (persistent, deterministic) consuming group-arrival + claim-opportunity forensics.
+- **Current phase:** Phase 6D-M15 — persistent deterministic rumor substrate consuming campaign-role arrival/claim seam events.
+- **Next action:** Phase 6D-M16 — Data-driven rumor weighting + deterministic RNG selection.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added bounded, serialized, hash-covered `world.claim_opportunities` substrate with strict load validation and deterministic cap enforcement (`MAX_CLAIM_OPPORTUNITIES = 256`).
-- Added campaign-role arrival integration: `group_move_arrived` now emits forensic `group_arrived_at_site` + `claim_opportunity_created` seam events, processes multi-site cells in deterministic `site_key` order with per-arrival bounds (first N processed, remainder deterministically skipped), and deduplicates by `(group_id, site_key)`.
-- Added explicit `claim_site_from_opportunity_intent` command handling with deterministic rejection outcomes, atomic failure behavior, and forensic `claim_opportunity_consumed` + `site_claim_outcome` emission; claim-opportunity cap eviction uses deterministic FIFO regardless of consumed status.
+- Added persistent bounded, serialized, hash-covered `world.rumors` substrate with strict schema validation (`MAX_RUMORS = 512`), deterministic rumor-id uniqueness checks, and FIFO eviction.
+- Reworked `RumorPipelineModule` to deterministic event-driven rumor generation from `group_move_arrived`, `claim_opportunity_created`, `claim_opportunity_consumed`, and `site_claim_outcome` seams with deduplication from serialized world state only; rumor ID suffixing now uses SHA-256 over canonical JSON components (`tick`, `event_id`, `kind`, `site_key`, `group_id`).
+- Added focused Phase 6D-M15 tests for replay/hash stability, save/load idempotence without duplicate rumors, deduplication, FIFO eviction, and malformed rumor load rejection.
 
 
 ## What Exists (folders / entry points)
@@ -246,9 +246,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added bounded claim-opportunity substrate and deterministic arrival-driven opportunity generation for campaign-role groups at sites, including deterministic multi-site ordering and per-arrival bounds (first N processed; remainder deterministically skipped).
-- Added `claim_site_from_opportunity_intent` with deterministic rejection outcomes and explicit forensic seam events for consumption.
-- Added focused M14 tests for replay/hash stability, save/load idempotence, deduplication (including multi-site same-cell behavior), bounded FIFO eviction policy, and atomic rejection behavior.
+- Added persistent bounded rumor substrate (`world.rumors`) with deterministic FIFO cap handling and strict load-time schema validation.
+- Added deterministic rumor generation from campaign-role arrival + claim seam events with duplicate prevention derived from serialized world/rules state and canonical SHA-256 rumor ID suffix hashing.
+- Added M15 tests covering replay/hash stability, save/load idempotence, deduplication, FIFO eviction, and malformed rumor entry rejection.
 
 
 ## Troubleshooting

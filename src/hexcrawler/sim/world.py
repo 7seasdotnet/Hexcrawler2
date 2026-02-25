@@ -19,6 +19,8 @@ SPACE_ROLES = {CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE}
 MAX_SIGNALS = 256
 MAX_OCCLUSION_EDGES = 2048
 MAX_CLAIM_OPPORTUNITIES = 256
+MAX_RUMORS = 512
+RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -271,67 +273,52 @@ class HexRecord:
 @dataclass
 class RumorRecord:
     rumor_id: str
+    kind: str
     created_tick: int
-    location: dict[str, Any]
-    template_id: str
-    source_action_uid: str
-    confidence: float
-    hop: int
-    expires_tick: int
-    payload: dict[str, Any] | None = None
+    site_key: str | None = None
+    group_id: str | None = None
+    consumed: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.rumor_id, str) or not self.rumor_id:
             raise ValueError("rumor_id must be a non-empty string")
+        if not isinstance(self.kind, str) or self.kind not in RUMOR_KINDS:
+            raise ValueError(f"kind must be one of: {sorted(RUMOR_KINDS)}")
+        if self.site_key is not None and (not isinstance(self.site_key, str) or not self.site_key):
+            raise ValueError("site_key must be a non-empty string when present")
+        if self.group_id is not None and (not isinstance(self.group_id, str) or not self.group_id):
+            raise ValueError("group_id must be a non-empty string when present")
         if not isinstance(self.created_tick, int):
             raise ValueError("created_tick must be an integer")
-        if not isinstance(self.location, dict):
-            raise ValueError("location must be an object")
-        if not isinstance(self.template_id, str) or not self.template_id:
-            raise ValueError("template_id must be a non-empty string")
-        if not isinstance(self.source_action_uid, str) or not self.source_action_uid:
-            raise ValueError("source_action_uid must be a non-empty string")
-        if not isinstance(self.confidence, (int, float)):
-            raise ValueError("confidence must be numeric")
-        self.confidence = float(self.confidence)
-        if self.confidence < 0.0 or self.confidence > 1.0:
-            raise ValueError("confidence must be within [0.0, 1.0]")
-        if not isinstance(self.hop, int) or self.hop < 0:
-            raise ValueError("hop must be a non-negative integer")
-        if not isinstance(self.expires_tick, int):
-            raise ValueError("expires_tick must be an integer")
-        if self.payload is not None:
-            if not isinstance(self.payload, dict):
-                raise ValueError("payload must be an object when present")
-            _validate_json_value(self.payload, field_name="rumor.payload")
+        if not isinstance(self.consumed, bool):
+            raise ValueError("consumed must be a boolean")
 
     def to_dict(self) -> dict[str, Any]:
         data = {
             "rumor_id": self.rumor_id,
+            "kind": self.kind,
             "created_tick": self.created_tick,
-            "location": dict(self.location),
-            "template_id": self.template_id,
-            "source_action_uid": self.source_action_uid,
-            "confidence": self.confidence,
-            "hop": self.hop,
-            "expires_tick": self.expires_tick,
+            "consumed": self.consumed,
         }
-        if self.payload is not None:
-            data["payload"] = dict(self.payload)
+        if self.site_key is not None:
+            data["site_key"] = self.site_key
+        if self.group_id is not None:
+            data["group_id"] = self.group_id
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RumorRecord":
+        allowed = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed"}
+        unknown = set(data) - allowed
+        if unknown:
+            raise ValueError(f"rumor record has unknown fields: {sorted(unknown)}")
         return cls(
             rumor_id=str(data["rumor_id"]),
+            kind=str(data["kind"]),
+            site_key=(str(data["site_key"]) if data.get("site_key") is not None else None),
+            group_id=(str(data["group_id"]) if data.get("group_id") is not None else None),
             created_tick=int(data["created_tick"]),
-            location=dict(data["location"]),
-            template_id=str(data["template_id"]),
-            source_action_uid=str(data["source_action_uid"]),
-            confidence=float(data["confidence"]),
-            hop=int(data["hop"]),
-            expires_tick=int(data["expires_tick"]),
-            payload=(dict(data["payload"]) if data.get("payload") is not None else None),
+            consumed=(data.get("consumed", False) if data.get("consumed") is not None else False),
         )
 
 
@@ -1151,6 +1138,14 @@ class WorldState:
         if not isinstance(raw_rumors, list):
             raise ValueError("rumors must be a list")
         world.rumors = [RumorRecord.from_dict(dict(row)).to_dict() for row in raw_rumors]
+        if len(world.rumors) > MAX_RUMORS:
+            raise ValueError("rumors exceeds maximum")
+        seen_rumor_ids: set[str] = set()
+        for row in world.rumors:
+            rumor_id = str(row["rumor_id"])
+            if rumor_id in seen_rumor_ids:
+                raise ValueError("rumor ids must be unique")
+            seen_rumor_ids.add(rumor_id)
 
         raw_containers = data.get("containers", {})
         if not isinstance(raw_containers, dict):
@@ -1301,4 +1296,10 @@ class WorldState:
 
     def append_rumor(self, record: RumorRecord | dict[str, Any]) -> None:
         normalized = record if isinstance(record, RumorRecord) else RumorRecord.from_dict(record)
+        rumor_id = normalized.rumor_id
+        for existing in self.rumors:
+            if str(existing.get("rumor_id", "")) == rumor_id:
+                return
         self.rumors.append(normalized.to_dict())
+        if len(self.rumors) > MAX_RUMORS:
+            del self.rumors[: len(self.rumors) - MAX_RUMORS]

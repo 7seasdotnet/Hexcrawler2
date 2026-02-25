@@ -280,33 +280,31 @@ def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -
 
 
 def _validate_rumor_record(record: dict[str, Any], *, field_name: str) -> None:
-    required_string_fields = {"rumor_id", "template_id", "source_action_uid"}
-    for key in required_string_fields:
-        value = record.get(key)
-        if not isinstance(value, str) or not value:
-            raise ValueError(f"{field_name}.{key} must be a non-empty string")
+    allowed_fields = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed"}
+    unknown = set(record) - allowed_fields
+    if unknown:
+        raise ValueError(f"{field_name} contains unknown fields: {sorted(unknown)}")
 
-    required_int_fields = {"created_tick", "hop", "expires_tick"}
-    for key in required_int_fields:
-        value = record.get(key)
-        if not isinstance(value, int):
-            raise ValueError(f"{field_name}.{key} must be an integer")
+    rumor_id = record.get("rumor_id")
+    if not isinstance(rumor_id, str) or not rumor_id:
+        raise ValueError(f"{field_name}.rumor_id must be a non-empty string")
 
-    confidence = record.get("confidence")
-    if not isinstance(confidence, (int, float)):
-        raise ValueError(f"{field_name}.confidence must be numeric")
-    if float(confidence) < 0.0 or float(confidence) > 1.0:
-        raise ValueError(f"{field_name}.confidence must be within [0.0, 1.0]")
+    kind = record.get("kind")
+    if kind not in {"group_arrival", "claim_opportunity", "site_claim"}:
+        raise ValueError(f"{field_name}.kind must be one of: group_arrival, claim_opportunity, site_claim")
 
-    location = record.get("location")
-    if not isinstance(location, dict):
-        raise ValueError(f"{field_name}.location must be an object")
+    for optional in ("site_key", "group_id"):
+        value = record.get(optional)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError(f"{field_name}.{optional} must be a non-empty string when present")
 
-    payload = record.get("payload")
-    if payload is not None:
-        if not isinstance(payload, dict):
-            raise ValueError(f"{field_name}.payload must be an object when present")
-        _validate_json_value(payload, field_name=f"{field_name}.payload")
+    created_tick = record.get("created_tick")
+    if not isinstance(created_tick, int):
+        raise ValueError(f"{field_name}.created_tick must be an integer")
+
+    consumed = record.get("consumed", False)
+    if not isinstance(consumed, bool):
+        raise ValueError(f"{field_name}.consumed must be a boolean when present")
 
 def validate_world_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
