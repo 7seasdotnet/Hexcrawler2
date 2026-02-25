@@ -280,14 +280,11 @@ def test_game_save_load_round_trip_preserves_rumors_exactly(tmp_path: Path) -> N
     simulation.state.world.rumors = [
         {
             "rumor_id": "rumor-abc",
+            "kind": "group_arrival",
+            "site_key": '{"origin_coord":{"q":0,"r":0},"origin_space_id":"overworld","template_id":"site:test"}',
+            "group_id": "group-a",
             "created_tick": 4,
-            "location": {"topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
-            "template_id": "rumor.signal_intent",
-            "source_action_uid": "evt-source:0",
-            "confidence": 0.75,
-            "hop": 1,
-            "expires_tick": 200,
-            "payload": {"note": "test"},
+            "consumed": False,
         }
     ]
 
