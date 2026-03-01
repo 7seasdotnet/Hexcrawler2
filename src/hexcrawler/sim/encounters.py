@@ -72,6 +72,21 @@ CLAIM_OPPORTUNITY_CREATED_EVENT_TYPE = "claim_opportunity_created"
 CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE = "claim_opportunity_consumed"
 LIST_RUMORS_INTENT = "list_rumors_intent"
 LIST_RUMORS_OUTCOME_KIND = "list_rumors_outcome"
+SELECT_RUMORS_INTENT = "select_rumors_intent"
+SELECT_RUMORS_OUTCOME_KIND = "select_rumors_outcome"
+RUMOR_SELECTION_DECISION_EVENT_TYPE = "rumor_selection_decision"
+RUMOR_SELECTION_DEFAULT_SCOPE = CAMPAIGN_SPACE_ROLE
+RUMOR_SELECTION_DEFAULT_K = 10
+RUMOR_SELECTION_MIN_K = 1
+RUMOR_SELECTION_MAX_K = 50
+RUMOR_SELECTION_MAX_SEED_TAG_LEN = 64
+RUMOR_SELECTION_DEFAULT_SEED_TAG = "default"
+RUMOR_SELECTION_RECENCY_HALFLIFE_TICKS = 1000
+RUMOR_SELECTION_KIND_BASE_POINTS = {
+    "group_arrival": 100,
+    "claim_opportunity": 200,
+    "site_claim": 300,
+}
 MAX_CLAIM_SITES_PROCESSED_PER_ARRIVAL = 32
 SITE_ECOLOGY_TASK_NAME = "site_ecology:tick"
 SITE_ECOLOGY_INTERVAL_DAYS = 1
@@ -3268,10 +3283,13 @@ class RumorQueryModule(RuleModule):
     _DEFAULT_LIMIT = 20
     _MIN_LIMIT = 1
     _MAX_LIMIT = 100
+    _UINT32_SPAN = 1 << 32
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
         if command.command_type != LIST_RUMORS_INTENT:
-            return False
+            if command.command_type != SELECT_RUMORS_INTENT:
+                return False
+            return self._on_select_rumors_intent(sim=sim, command=command, command_index=command_index)
 
         action_uid = f"{int(command.tick)}:{int(command_index)}"
         params = command.params if isinstance(command.params, dict) else {}
@@ -3305,6 +3323,273 @@ class RumorQueryModule(RuleModule):
             }
         )
         return True
+
+    def _on_select_rumors_intent(self, *, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        action_uid = f"{int(command.tick)}:{int(command_index)}"
+        params = command.params if isinstance(command.params, dict) else {}
+        validation = self._validated_selection_filters(params)
+        if validation["outcome"] != "ok":
+            sim.append_command_outcome(
+                {
+                    "kind": SELECT_RUMORS_OUTCOME_KIND,
+                    "action_uid": action_uid,
+                    "outcome": validation["outcome"],
+                    "diagnostic": validation["diagnostic"],
+                    "selection": [],
+                    "next_cursor": None,
+                    "decision_reused": False,
+                }
+            )
+            return True
+
+        decision_key = self._decision_key_for(selection_tick=int(command.tick), validation=validation)
+        existing_decision = sim.state.world.rumor_selection_decisions.get(decision_key)
+        created_decision = False
+        if existing_decision is None:
+            selection_ids, rng_rolls, candidate_count = self._select_rumor_ids(sim=sim, selection_tick=int(command.tick), validation=validation)
+            record = {
+                "selected_rumor_ids": selection_ids,
+                "rng_rolls": rng_rolls,
+                "created_tick": int(command.tick),
+                "scope": validation["scope"],
+                "seed_tag": validation["seed_tag"],
+                "k": int(validation["k"]),
+                "filters": self._decision_filters_snapshot(validation),
+                "candidate_count": candidate_count,
+            }
+            sim.state.world.upsert_rumor_selection_decision(decision_key=decision_key, record=record)
+            existing_decision = sim.state.world.rumor_selection_decisions[decision_key]
+            created_decision = True
+            sim._append_event_trace_entry(
+                {
+                    "tick": int(command.tick),
+                    "event_id": sim._trace_event_id_as_int(f"rumor-selection:{decision_key}"),
+                    "event_type": RUMOR_SELECTION_DECISION_EVENT_TYPE,
+                    "params": {
+                        "decision_key": decision_key,
+                        "scope": validation["scope"],
+                        "seed_tag": validation["seed_tag"],
+                        "selection_tick": int(command.tick),
+                        "k": int(validation["k"]),
+                        "candidate_count": int(existing_decision.get("candidate_count", 0)),
+                        "selected_ids": list(existing_decision.get("selected_rumor_ids", [])),
+                    },
+                }
+            )
+
+        offset = int(validation["cursor_offset"])
+        selected_ids = list(existing_decision.get("selected_rumor_ids", []))
+        page = selected_ids[offset : offset + int(validation["k"])]
+        next_offset = offset + int(validation["k"])
+        next_cursor = str(next_offset) if next_offset < len(selected_ids) else None
+        rumor_lookup = {
+            str(rumor.get("rumor_id", "")): rumor
+            for rumor in sim.state.world.rumors
+        }
+        selection_rows = [copy.deepcopy(rumor_lookup[rumor_id]) for rumor_id in page if rumor_id in rumor_lookup]
+
+        sim.append_command_outcome(
+            {
+                "kind": SELECT_RUMORS_OUTCOME_KIND,
+                "action_uid": action_uid,
+                "outcome": "ok",
+                "diagnostic": validation["diagnostic"],
+                "selection": selection_rows,
+                "next_cursor": next_cursor,
+                "decision_key": decision_key,
+                "decision_reused": not created_decision,
+            }
+        )
+        return True
+
+    def _validated_selection_filters(self, params: dict[str, Any]) -> dict[str, Any]:
+        scope = params.get("scope", RUMOR_SELECTION_DEFAULT_SCOPE)
+        if not isinstance(scope, str) or not scope:
+            return self._invalid_selection(diagnostic="invalid_scope")
+
+        raw_kind = params.get("kind")
+        kind = self._optional_non_empty_str(raw_kind)
+        if raw_kind is not None and kind is None:
+            return self._invalid_selection(diagnostic="invalid_kind")
+        if kind is not None and kind not in RUMOR_KINDS:
+            return self._invalid_selection(diagnostic="invalid_kind")
+
+        raw_site_key = params.get("site_key")
+        site_key = self._optional_non_empty_str(raw_site_key)
+        if raw_site_key is not None and site_key is None:
+            return self._invalid_selection(diagnostic="invalid_site_key")
+
+        raw_group_id = params.get("group_id")
+        group_id = self._optional_non_empty_str(raw_group_id)
+        if raw_group_id is not None and group_id is None:
+            return self._invalid_selection(diagnostic="invalid_group_id")
+
+        consumed: bool | None = None
+        raw_consumed = params.get("consumed")
+        if raw_consumed is not None:
+            if not isinstance(raw_consumed, bool):
+                return self._invalid_selection(diagnostic="invalid_consumed")
+            consumed = raw_consumed
+
+        seed_tag = params.get("seed_tag", RUMOR_SELECTION_DEFAULT_SEED_TAG)
+        if not isinstance(seed_tag, str) or not seed_tag:
+            return self._invalid_selection(diagnostic="invalid_seed_tag")
+        if len(seed_tag) > RUMOR_SELECTION_MAX_SEED_TAG_LEN:
+            return self._invalid_selection(diagnostic="invalid_seed_tag")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in seed_tag):
+            return self._invalid_selection(diagnostic="invalid_seed_tag")
+
+        k = RUMOR_SELECTION_DEFAULT_K
+        diagnostic: str | None = None
+        raw_k = params.get("k")
+        if raw_k is not None:
+            if isinstance(raw_k, bool) or not isinstance(raw_k, int):
+                return self._invalid_selection(diagnostic="invalid_k")
+            clamped_k = max(RUMOR_SELECTION_MIN_K, min(RUMOR_SELECTION_MAX_K, raw_k))
+            if clamped_k != raw_k:
+                diagnostic = "k_clamped"
+            k = int(clamped_k)
+
+        cursor_offset = 0
+        raw_cursor = params.get("cursor")
+        if raw_cursor is not None:
+            if not isinstance(raw_cursor, str):
+                return self._invalid_selection(diagnostic="invalid_cursor")
+            cursor_offset = self._parse_selection_cursor(raw_cursor)
+            if cursor_offset is None:
+                return self._invalid_selection(diagnostic="invalid_cursor")
+
+        return {
+            "outcome": "ok",
+            "diagnostic": diagnostic,
+            "scope": scope,
+            "kind": kind,
+            "site_key": site_key,
+            "group_id": group_id,
+            "consumed": consumed,
+            "seed_tag": seed_tag,
+            "k": k,
+            "cursor_offset": cursor_offset,
+        }
+
+    def _decision_key_for(self, *, selection_tick: int, validation: dict[str, Any]) -> str:
+        filters = self._decision_filters_snapshot(validation)
+        digest = hashlib.sha256(
+            json.dumps(filters, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return f"{validation['scope']}|{validation['seed_tag']}|{int(selection_tick)}|{digest}"
+
+    def _decision_filters_snapshot(self, validation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "kind": validation["kind"],
+            "site_key": validation["site_key"],
+            "group_id": validation["group_id"],
+            "consumed": validation["consumed"],
+        }
+
+    def _select_rumor_ids(
+        self,
+        *,
+        sim: Simulation,
+        selection_tick: int,
+        validation: dict[str, Any],
+    ) -> tuple[list[str], list[int], int]:
+        candidates = self._scored_candidates(sim=sim, selection_tick=selection_tick, filters=validation)
+        if not candidates:
+            return [], [], 0
+        rng = sim.rng_stream(f"rumor_select:{validation['scope']}:{validation['seed_tag']}")
+        picks = min(int(validation["k"]), len(candidates))
+        selected_ids: list[str] = []
+        rng_rolls: list[int] = []
+        mutable = list(candidates)
+        for _ in range(picks):
+            total_weight = sum(score for _, score in mutable)
+            if total_weight <= 0:
+                break
+            draw = self._uniform_index(rng=rng, upper_exclusive=total_weight)
+            rng_rolls.append(draw)
+            running = 0
+            selected_index = 0
+            for index, (_, score) in enumerate(mutable):
+                running += score
+                if draw < running:
+                    selected_index = index
+                    break
+            selected_id, _ = mutable.pop(selected_index)
+            selected_ids.append(selected_id)
+        return selected_ids, rng_rolls, len(candidates)
+
+    def _scored_candidates(self, *, sim: Simulation, selection_tick: int, filters: dict[str, Any]) -> list[tuple[str, int]]:
+        candidates = self._filtered_sorted_rumors(sim=sim, filters=self._selection_filter_defaults(filters))
+        scored: list[tuple[str, int]] = []
+        for rumor in candidates:
+            rumor_id = str(rumor.get("rumor_id", ""))
+            if not rumor_id:
+                continue
+            score = self._rumor_score(rumor=rumor, selection_tick=selection_tick)
+            if score <= 0:
+                continue
+            scored.append((rumor_id, score))
+        return scored
+
+    def _selection_filter_defaults(self, filters: dict[str, Any]) -> dict[str, Any]:
+        consumed = filters.get("consumed")
+        if consumed is None:
+            consumed = False
+        return {
+            "kind": filters.get("kind"),
+            "site_key": filters.get("site_key"),
+            "group_id": filters.get("group_id"),
+            "consumed": consumed,
+        }
+
+    def _rumor_score(self, *, rumor: dict[str, Any], selection_tick: int) -> int:
+        kind = str(rumor.get("kind", ""))
+        base = int(RUMOR_SELECTION_KIND_BASE_POINTS.get(kind, 0))
+        if base <= 0:
+            return 0
+        created_tick = int(rumor.get("created_tick", 0))
+        age_ticks = max(0, int(selection_tick) - created_tick)
+        numerator = base * RUMOR_SELECTION_RECENCY_HALFLIFE_TICKS
+        denominator = RUMOR_SELECTION_RECENCY_HALFLIFE_TICKS + age_ticks
+        score = numerator // denominator
+        return max(1, score)
+
+    def _uniform_index(self, *, rng: Any, upper_exclusive: int) -> int:
+        if upper_exclusive <= 0:
+            raise ValueError("upper_exclusive must be > 0")
+        reject_threshold = self._UINT32_SPAN - (self._UINT32_SPAN % upper_exclusive)
+        while True:
+            raw = int(rng.getrandbits(32))
+            if raw < reject_threshold:
+                return raw % upper_exclusive
+
+    def _parse_selection_cursor(self, raw_cursor: str) -> int | None:
+        if raw_cursor.startswith("+"):
+            return None
+        try:
+            value = int(raw_cursor)
+        except ValueError:
+            return None
+        if value < 0:
+            return None
+        if str(value) != raw_cursor:
+            return None
+        return value
+
+    def _invalid_selection(self, *, diagnostic: str) -> dict[str, Any]:
+        return {
+            "outcome": "invalid_params",
+            "diagnostic": diagnostic,
+            "scope": RUMOR_SELECTION_DEFAULT_SCOPE,
+            "kind": None,
+            "site_key": None,
+            "group_id": None,
+            "consumed": None,
+            "seed_tag": RUMOR_SELECTION_DEFAULT_SEED_TAG,
+            "k": RUMOR_SELECTION_DEFAULT_K,
+            "cursor_offset": 0,
+        }
 
     def _validated_filters(self, params: dict[str, Any]) -> dict[str, Any]:
         raw_kind = params.get("kind")

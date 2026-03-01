@@ -20,6 +20,7 @@ MAX_SIGNALS = 256
 MAX_OCCLUSION_EDGES = 2048
 MAX_CLAIM_OPPORTUNITIES = 256
 MAX_RUMORS = 512
+MAX_RUMOR_SELECTION_DECISIONS = 256
 RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
 
 
@@ -320,6 +321,66 @@ class RumorRecord:
             created_tick=int(data["created_tick"]),
             consumed=(data.get("consumed", False) if data.get("consumed") is not None else False),
         )
+
+
+def _normalize_rumor_selection_decision_record(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("rumor selection decision record must be an object")
+    allowed = {
+        "selected_rumor_ids",
+        "rng_rolls",
+        "created_tick",
+        "scope",
+        "seed_tag",
+        "k",
+        "filters",
+        "candidate_count",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"rumor selection decision has unknown fields: {sorted(unknown)}")
+
+    created_tick = _require_non_negative_int(value.get("created_tick"), field_name="rumor_selection.created_tick")
+    scope = value.get("scope")
+    if not isinstance(scope, str) or not scope:
+        raise ValueError("rumor_selection.scope must be a non-empty string")
+    seed_tag = value.get("seed_tag")
+    if not isinstance(seed_tag, str) or not seed_tag:
+        raise ValueError("rumor_selection.seed_tag must be a non-empty string")
+    k = _require_non_negative_int(value.get("k"), field_name="rumor_selection.k")
+    candidate_count = _require_non_negative_int(value.get("candidate_count"), field_name="rumor_selection.candidate_count")
+
+    selected_rumor_ids_raw = value.get("selected_rumor_ids")
+    if not isinstance(selected_rumor_ids_raw, list):
+        raise ValueError("rumor_selection.selected_rumor_ids must be a list")
+    selected_rumor_ids: list[str] = []
+    for row in selected_rumor_ids_raw:
+        if not isinstance(row, str) or not row:
+            raise ValueError("rumor_selection.selected_rumor_ids entries must be non-empty strings")
+        selected_rumor_ids.append(row)
+
+    rng_rolls_raw = value.get("rng_rolls", [])
+    if not isinstance(rng_rolls_raw, list):
+        raise ValueError("rumor_selection.rng_rolls must be a list")
+    rng_rolls: list[int] = []
+    for row in rng_rolls_raw:
+        rng_rolls.append(_require_non_negative_int(row, field_name="rumor_selection.rng_rolls[]"))
+
+    filters_raw = value.get("filters", {})
+    if not isinstance(filters_raw, dict):
+        raise ValueError("rumor_selection.filters must be an object")
+    _validate_json_value(filters_raw, field_name="rumor_selection.filters")
+
+    return {
+        "selected_rumor_ids": selected_rumor_ids,
+        "rng_rolls": rng_rolls,
+        "created_tick": created_tick,
+        "scope": scope,
+        "seed_tag": seed_tag,
+        "k": k,
+        "filters": dict(filters_raw),
+        "candidate_count": candidate_count,
+    }
 
 
 def _normalize_coord_dict(coord: dict[str, Any], *, field_name: str) -> dict[str, int]:
@@ -923,6 +984,8 @@ class WorldState:
     sites: dict[str, SiteRecord] = field(default_factory=dict)
     groups: dict[str, GroupRecord] = field(default_factory=dict)
     claim_opportunities: list[dict[str, Any]] = field(default_factory=list)
+    rumor_selection_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    rumor_selection_decision_order: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.spaces:
@@ -1014,6 +1077,13 @@ class WorldState:
                 _normalize_claim_opportunity_record(row)
                 for row in self.claim_opportunities
             ]
+        if self.rumor_selection_decision_order:
+            payload["rumor_selection_decision_order"] = list(self.rumor_selection_decision_order)
+        if self.rumor_selection_decisions:
+            payload["rumor_selection_decisions"] = {
+                decision_key: _normalize_rumor_selection_decision_record(self.rumor_selection_decisions[decision_key])
+                for decision_key in sorted(self.rumor_selection_decisions)
+            }
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1073,6 +1143,13 @@ class WorldState:
                 _normalize_claim_opportunity_record(row)
                 for row in self.claim_opportunities
             ]
+        if self.rumor_selection_decision_order:
+            payload["rumor_selection_decision_order"] = list(self.rumor_selection_decision_order)
+        if self.rumor_selection_decisions:
+            payload["rumor_selection_decisions"] = {
+                decision_key: _normalize_rumor_selection_decision_record(self.rumor_selection_decisions[decision_key])
+                for decision_key in sorted(self.rumor_selection_decisions)
+            }
         return payload
 
     @classmethod
@@ -1207,6 +1284,39 @@ class WorldState:
             if opportunity_id in seen_opportunity_ids:
                 raise ValueError("claim opportunity ids must be unique")
             seen_opportunity_ids.add(opportunity_id)
+
+        raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})
+        if not isinstance(raw_rumor_selection_decisions, dict):
+            raise ValueError("rumor_selection_decisions must be an object")
+        world.rumor_selection_decisions = {}
+        for decision_key in sorted(raw_rumor_selection_decisions):
+            row = raw_rumor_selection_decisions[decision_key]
+            if not isinstance(decision_key, str) or not decision_key:
+                raise ValueError("rumor_selection_decisions keys must be non-empty strings")
+            world.rumor_selection_decisions[decision_key] = _normalize_rumor_selection_decision_record(row)
+        if len(world.rumor_selection_decisions) > MAX_RUMOR_SELECTION_DECISIONS:
+            raise ValueError("rumor_selection_decisions exceeds maximum")
+
+        raw_decision_order = data.get("rumor_selection_decision_order")
+        if raw_decision_order is None:
+            world.rumor_selection_decision_order = sorted(world.rumor_selection_decisions)
+        else:
+            if not isinstance(raw_decision_order, list):
+                raise ValueError("rumor_selection_decision_order must be a list")
+            order: list[str] = []
+            seen_order: set[str] = set()
+            for decision_key in raw_decision_order:
+                if not isinstance(decision_key, str) or not decision_key:
+                    raise ValueError("rumor_selection_decision_order entries must be non-empty strings")
+                if decision_key in seen_order:
+                    raise ValueError("rumor_selection_decision_order entries must be unique")
+                if decision_key not in world.rumor_selection_decisions:
+                    raise ValueError("rumor_selection_decision_order references unknown decision key")
+                seen_order.add(decision_key)
+                order.append(decision_key)
+            if len(order) != len(world.rumor_selection_decisions):
+                raise ValueError("rumor_selection_decision_order must include every decision key")
+            world.rumor_selection_decision_order = order
         return world
 
     def get_sites_at_location(self, location_ref: dict[str, Any]) -> list[SiteRecord]:
@@ -1303,3 +1413,20 @@ class WorldState:
         self.rumors.append(normalized.to_dict())
         if len(self.rumors) > MAX_RUMORS:
             del self.rumors[: len(self.rumors) - MAX_RUMORS]
+
+    def upsert_rumor_selection_decision(self, *, decision_key: str, record: dict[str, Any]) -> bool:
+        if not isinstance(decision_key, str) or not decision_key:
+            raise ValueError("decision_key must be a non-empty string")
+        normalized = _normalize_rumor_selection_decision_record(record)
+        if decision_key in self.rumor_selection_decisions:
+            self.rumor_selection_decisions[decision_key] = normalized
+            return False
+        self.rumor_selection_decisions[decision_key] = normalized
+        self.rumor_selection_decision_order.append(decision_key)
+        if len(self.rumor_selection_decision_order) > MAX_RUMOR_SELECTION_DECISIONS:
+            overflow = len(self.rumor_selection_decision_order) - MAX_RUMOR_SELECTION_DECISIONS
+            evicted = self.rumor_selection_decision_order[:overflow]
+            del self.rumor_selection_decision_order[:overflow]
+            for key in evicted:
+                self.rumor_selection_decisions.pop(key, None)
+        return True
