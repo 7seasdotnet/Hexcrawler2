@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M16 — deterministic read-only rumor query/presentation seam.
-- **Next action:** Phase 6D-M17 — Viewer read-only rumor surfacing (or deterministic weighted rumor selection with decision ledger, if desired).
+- **Current phase:** Phase 6D-M17 — viewer read-only rumor surfacing via command outcomes.
+- **Next action:** Phase 6D-M18 — deterministic rumor weighting/selection + decision ledger.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added deterministic read-only `list_rumors_intent` command seam via `RumorQueryModule`, with strict parameter validation, canonical filtering, required stable ordering (`created_tick` desc, `rumor_id` asc), and bounded pagination cursor support.
-- Added read-only command outcome substrate (`Simulation.append_command_outcome` / `get_command_outcomes`) with deterministic per-tick lifecycle clearing (`clear_command_outcomes` at tick start), keeping outcomes retrievable for presentation without mutating serialized world/rules/hash-covered state.
-- Added focused Phase 6D-M16 tests for ordering, filtering, pagination (including tolerant non-existent boundaries), malformed cursor rejection, and simulation-hash/world read-only invariance.
+- Added a viewer read-only Rumors panel surface that requests rumor lists only through `list_rumors_intent` and renders results from the command outcome buffer.
+- Added viewer-local rumor filtering/paging controls (kind/site_key/group_id + Next/Prev cursor stack) with no new serialized or simulation-owned UI state.
+- Added focused viewer/controller tests validating read-only rumor query flow, non-mutation hash/world invariance, and deterministic cursor advancement from returned `next_cursor`.
 
 
 ## What Exists (folders / entry points)
@@ -248,9 +248,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added persistent bounded rumor substrate (`world.rumors`) with deterministic FIFO cap handling and strict load-time schema validation.
-- Added deterministic rumor generation from campaign-role arrival + claim seam events with duplicate prevention derived from serialized world/rules state and canonical SHA-256 rumor ID suffix hashing.
-- Added M15 tests covering replay/hash stability, save/load idempotence, deduplication, FIFO eviction, and malformed rumor entry rejection.
+- Added viewer read-only rumor surfacing that uses `list_rumors_intent` outcomes instead of direct `world.rumors` reads in the panel.
+- Added viewer-local rumor filters and deterministic pagination controls (including Prev/Next cursor navigation) without introducing new simulation mutation paths.
+- Added tests for viewer rumor query behavior and cursor follow-up requests using returned outcome cursors.
 
 
 ## Troubleshooting
