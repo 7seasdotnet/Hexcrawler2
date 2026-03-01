@@ -17,6 +17,8 @@ from hexcrawler.content.io import load_game_json, load_world_json, save_game_jso
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
+    LIST_RUMORS_INTENT,
+    LIST_RUMORS_OUTCOME_KIND,
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
@@ -226,6 +228,33 @@ class SimulationController:
             )
         )
 
+    def list_rumors(
+        self,
+        *,
+        kind: str | None,
+        site_key: str | None,
+        group_id: str | None,
+        limit: int,
+        cursor: str | None,
+    ) -> None:
+        params: dict[str, Any] = {"limit": int(limit)}
+        if kind is not None:
+            params["kind"] = kind
+        if site_key is not None:
+            params["site_key"] = site_key
+        if group_id is not None:
+            params["group_id"] = group_id
+        if cursor is not None:
+            params["cursor"] = cursor
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=LIST_RUMORS_INTENT,
+                params=params,
+            )
+        )
+
     def tick_once(self) -> None:
         self.sim.advance_ticks(1)
 
@@ -237,6 +266,40 @@ class RenderEntitySnapshot:
 
 
 RenderSnapshot = dict[str, RenderEntitySnapshot]
+
+
+@dataclass
+class RumorPanelState:
+    kind_filter: str | None = None
+    site_key_filter: str = ""
+    group_id_filter: str = ""
+    limit: int = 20
+    cursor: str | None = None
+    cursor_stack: list[str | None] = field(default_factory=list)
+    next_cursor: str | None = None
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    outcome: str = "idle"
+    diagnostic: str = ""
+    request_pending: bool = False
+    refresh_needed: bool = True
+    editing_field: str | None = None
+    site_key_draft: str = ""
+    group_id_draft: str = ""
+
+    def request_params(self) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": int(self.limit)}
+        if self.kind_filter is not None:
+            params["kind"] = self.kind_filter
+        if self.site_key_filter:
+            params["site_key"] = self.site_key_filter
+        if self.group_id_filter:
+            params["group_id"] = self.group_id_filter
+        if self.cursor is not None:
+            params["cursor"] = self.cursor
+        return params
+
+
+RUMOR_KIND_FILTER_ORDER: tuple[str | None, ...] = (None, "group_arrival", "claim_opportunity", "site_claim")
 
 
 @dataclass(frozen=True)
@@ -1002,12 +1065,79 @@ def _entity_location_text(sim: Simulation, entity: EntityState) -> str:
         return f"square_grid:{math.floor(entity.position_x)},{math.floor(entity.position_y)}"
     return f"overworld_hex:{entity.hex_coord.q},{entity.hex_coord.r}"
 
+
+def _refresh_rumor_query(controller: SimulationController, rumor_state: RumorPanelState) -> None:
+    if rumor_state.request_pending or not rumor_state.refresh_needed:
+        return
+    params = rumor_state.request_params()
+    controller.list_rumors(
+        kind=params.get("kind"),
+        site_key=params.get("site_key"),
+        group_id=params.get("group_id"),
+        limit=int(params.get("limit", 20)),
+        cursor=params.get("cursor"),
+    )
+    rumor_state.request_pending = True
+    rumor_state.refresh_needed = False
+
+
+def _consume_rumor_outcome(sim: Simulation, rumor_state: RumorPanelState) -> None:
+    if not rumor_state.request_pending:
+        return
+    latest: dict[str, Any] | None = None
+    for entry in sim.get_command_outcomes():
+        if isinstance(entry, dict) and entry.get("kind") == LIST_RUMORS_OUTCOME_KIND:
+            latest = entry
+    if latest is None:
+        return
+    rows = latest.get("rumors")
+    rumor_state.rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    rumor_state.next_cursor = latest.get("next_cursor") if isinstance(latest.get("next_cursor"), str) else None
+    rumor_state.outcome = str(latest.get("outcome", "?"))
+    rumor_state.diagnostic = str(latest.get("diagnostic", ""))
+    rumor_state.request_pending = False
+
+
+def _cycle_rumor_kind_filter(rumor_state: RumorPanelState) -> None:
+    current_index = 0
+    for index, current_kind in enumerate(RUMOR_KIND_FILTER_ORDER):
+        if current_kind == rumor_state.kind_filter:
+            current_index = index
+            break
+    rumor_state.kind_filter = RUMOR_KIND_FILTER_ORDER[(current_index + 1) % len(RUMOR_KIND_FILTER_ORDER)]
+    rumor_state.cursor = None
+    rumor_state.cursor_stack = []
+    rumor_state.refresh_needed = True
+
+
+def _apply_rumor_text_filters(rumor_state: RumorPanelState) -> None:
+    rumor_state.site_key_filter = rumor_state.site_key_draft.strip()
+    rumor_state.group_id_filter = rumor_state.group_id_draft.strip()
+    rumor_state.cursor = None
+    rumor_state.cursor_stack = []
+    rumor_state.refresh_needed = True
+
+
+def _rumor_rows_from_state(rumor_state: RumorPanelState) -> list[str]:
+    return _section_entries(
+        [
+            (
+                f"kind={row.get('kind', '?')} tick={row.get('created_tick', '?')} "
+                f"site_key={row.get('site_key', '-') if row.get('site_key') else '-'} "
+                f"group_id={row.get('group_id', '-') if row.get('group_id') else '-'} "
+                f"consumed={row.get('consumed', '-')}"
+            )
+            for row in rumor_state.rows
+        ]
+    )
+
 def _draw_encounter_debug_panel(
     screen: pygame.Surface,
     sim: Simulation,
     font: pygame.font.Font,
     scroll_state: EncounterPanelScrollState,
     active_section: str,
+    rumor_state: RumorPanelState,
 ) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
     panel_rect = _panel_rect()
     pygame.draw.rect(screen, (24, 26, 36), panel_rect)
@@ -1054,13 +1184,7 @@ def _draw_encounter_debug_panel(
         for entry in filtered_trace
         for params in [entry.get("params") if isinstance(entry.get("params"), dict) else {}]
     ])
-    rumor_rows = _section_entries([
-        (
-            f"rumor_id={record.get('rumor_id', '?')} hop={record.get('hop', '?')} confidence={record.get('confidence', '?')} "
-            f"loc={_format_location(record.get('location'))} template={record.get('template_id', '?')}"
-        )
-        for record in sim.state.world.rumors
-    ])
+    rumor_rows = _rumor_rows_from_state(rumor_state)
     supply_outcomes = [entry for entry in sim.get_event_trace() if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE]
     supply_rows = _section_entries([
         (
@@ -1118,6 +1242,43 @@ def _draw_encounter_debug_panel(
     y += 26
 
     section_rows = rows_by_section.get(active_section, [])
+    if active_section == "rumors":
+        kind_value = rumor_state.kind_filter if rumor_state.kind_filter is not None else "All"
+        kind_surface = font.render(f"Kind: {kind_value}", True, (235, 235, 240))
+        kind_rect = pygame.Rect(panel_rect.x + 10, y, max(100, kind_surface.get_width() + 14), 20)
+        pygame.draw.rect(screen, (50, 54, 70), kind_rect)
+        pygame.draw.rect(screen, (110, 115, 135), kind_rect, 1)
+        screen.blit(kind_surface, (kind_rect.x + 6, kind_rect.y + 2))
+        section_rects["rumor_kind"] = kind_rect
+
+        prev_rect = pygame.Rect(kind_rect.right + 8, y, 56, 20)
+        next_rect = pygame.Rect(prev_rect.right + 6, y, 56, 20)
+        pygame.draw.rect(screen, (50, 54, 70), prev_rect)
+        pygame.draw.rect(screen, (110, 115, 135), prev_rect, 1)
+        pygame.draw.rect(screen, (50, 54, 70), next_rect)
+        pygame.draw.rect(screen, (110, 115, 135), next_rect, 1)
+        screen.blit(font.render("Prev", True, (235, 235, 240)), (prev_rect.x + 10, prev_rect.y + 2))
+        screen.blit(font.render("Next", True, (235, 235, 240)), (next_rect.x + 10, next_rect.y + 2))
+        section_rects["rumor_prev"] = prev_rect
+        section_rects["rumor_next"] = next_rect
+
+        y += 24
+        site_value = rumor_state.site_key_draft if rumor_state.editing_field == "site_key" else rumor_state.site_key_filter
+        group_value = rumor_state.group_id_draft if rumor_state.editing_field == "group_id" else rumor_state.group_id_filter
+        site_label = _truncate_text_to_pixel_width(f"Site: {site_value or '-'}", font, panel_rect.width - 24)
+        group_label = _truncate_text_to_pixel_width(f"Group: {group_value or '-'}", font, panel_rect.width - 24)
+        site_rect = pygame.Rect(panel_rect.x + 10, y, panel_rect.width - 20, 18)
+        group_rect = pygame.Rect(panel_rect.x + 10, y + 18, panel_rect.width - 20, 18)
+        pygame.draw.rect(screen, (44, 48, 64), site_rect)
+        pygame.draw.rect(screen, (44, 48, 64), group_rect)
+        pygame.draw.rect(screen, (110, 115, 135), site_rect, 1)
+        pygame.draw.rect(screen, (110, 115, 135), group_rect, 1)
+        screen.blit(font.render(site_label, True, (220, 220, 228)), (site_rect.x + 4, site_rect.y + 1))
+        screen.blit(font.render(group_label, True, (220, 220, 228)), (group_rect.x + 4, group_rect.y + 1))
+        section_rects["rumor_site"] = site_rect
+        section_rects["rumor_group"] = group_rect
+        y += 40
+
     offset = scroll_state.offset_for(active_section)
     visible_rows = section_rows[offset : offset + ENCOUNTER_DEBUG_SECTION_ROWS]
     header_line = font.render(
@@ -1654,6 +1815,7 @@ def run_pygame_viewer(
     panel_section_rects: dict[str, pygame.Rect] = {}
     panel_section_counts: dict[str, int] = {}
     active_panel_section = "encounters"
+    rumor_panel_state = RumorPanelState()
     show_local_arena_overlay = False
 
     accumulator = 0.0
@@ -1722,6 +1884,48 @@ def run_pygame_viewer(
                     if section_rect is not None and section_rect.collidepoint(event.pos):
                         active_panel_section = section_name
                         break
+                if active_panel_section == "rumors":
+                    if panel_section_rects.get("rumor_kind") is not None and panel_section_rects["rumor_kind"].collidepoint(event.pos):
+                        _cycle_rumor_kind_filter(rumor_panel_state)
+                        _refresh_rumor_query(controller, rumor_panel_state)
+                    elif panel_section_rects.get("rumor_next") is not None and panel_section_rects["rumor_next"].collidepoint(event.pos):
+                        if rumor_panel_state.next_cursor is not None:
+                            rumor_panel_state.cursor_stack.append(rumor_panel_state.cursor)
+                            rumor_panel_state.cursor = rumor_panel_state.next_cursor
+                            rumor_panel_state.refresh_needed = True
+                            _refresh_rumor_query(controller, rumor_panel_state)
+                    elif panel_section_rects.get("rumor_prev") is not None and panel_section_rects["rumor_prev"].collidepoint(event.pos):
+                        if rumor_panel_state.cursor_stack:
+                            rumor_panel_state.cursor = rumor_panel_state.cursor_stack.pop()
+                            rumor_panel_state.refresh_needed = True
+                            _refresh_rumor_query(controller, rumor_panel_state)
+                    elif panel_section_rects.get("rumor_site") is not None and panel_section_rects["rumor_site"].collidepoint(event.pos):
+                        rumor_panel_state.editing_field = "site_key"
+                        rumor_panel_state.site_key_draft = rumor_panel_state.site_key_filter
+                    elif panel_section_rects.get("rumor_group") is not None and panel_section_rects["rumor_group"].collidepoint(event.pos):
+                        rumor_panel_state.editing_field = "group_id"
+                        rumor_panel_state.group_id_draft = rumor_panel_state.group_id_filter
+            elif (
+                event.type == pygame_module.KEYDOWN
+                and active_panel_section == "rumors"
+                and rumor_panel_state.editing_field is not None
+            ):
+                if event.key == pygame_module.K_RETURN:
+                    _apply_rumor_text_filters(rumor_panel_state)
+                    rumor_panel_state.editing_field = None
+                    _refresh_rumor_query(controller, rumor_panel_state)
+                elif event.key == pygame_module.K_ESCAPE:
+                    rumor_panel_state.editing_field = None
+                elif event.key == pygame_module.K_BACKSPACE:
+                    if rumor_panel_state.editing_field == "site_key":
+                        rumor_panel_state.site_key_draft = rumor_panel_state.site_key_draft[:-1]
+                    else:
+                        rumor_panel_state.group_id_draft = rumor_panel_state.group_id_draft[:-1]
+                elif isinstance(event.unicode, str) and event.unicode and event.unicode.isprintable():
+                    if rumor_panel_state.editing_field == "site_key":
+                        rumor_panel_state.site_key_draft += event.unicode
+                    else:
+                        rumor_panel_state.group_id_draft += event.unicode
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
                 context_menu = build_context_menu(event.pos)
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
@@ -1752,6 +1956,8 @@ def run_pygame_viewer(
                 context_menu = None
 
         move_x, move_y = _current_input_vector()
+        if not rumor_panel_state.request_pending:
+            _refresh_rumor_query(controller, rumor_panel_state)
         controller.set_move_vector(move_x, move_y)
 
         while accumulator >= SIM_TICK_SECONDS:
@@ -1762,6 +1968,7 @@ def run_pygame_viewer(
             accumulator -= SIM_TICK_SECONDS
 
         now_seconds = pygame_module.time.get_ticks() / 1000.0
+        _consume_rumor_outcome(sim, rumor_panel_state)
         alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
 
         player = sim.state.entities.get(PLAYER_ID)
@@ -1796,7 +2003,14 @@ def run_pygame_viewer(
         _draw_hud(screen, sim, font, status_message, hover_message)
         if show_local_arena_overlay:
             _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
-        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(screen, sim, debug_font, panel_scroll, active_panel_section)
+        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
+            screen,
+            sim,
+            debug_font,
+            panel_scroll,
+            active_panel_section,
+            rumor_panel_state,
+        )
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
 

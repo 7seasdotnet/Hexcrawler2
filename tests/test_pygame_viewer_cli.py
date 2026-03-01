@@ -4,7 +4,10 @@ import pytest
 
 from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID,
+    RumorPanelState,
     SimulationController,
+    _consume_rumor_outcome,
+    _refresh_rumor_query,
     _build_parser,
     _build_viewer_simulation,
     MarkerRecord,
@@ -25,8 +28,8 @@ from hexcrawler.sim.encounters import (
     EncounterSelectionModule,
     SpawnMaterializationModule,
 )
-from hexcrawler.sim.hash import simulation_hash
-from hexcrawler.sim.world import HexCoord, SiteRecord
+from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.world import HexCoord, RumorRecord, SiteRecord
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -102,6 +105,53 @@ def test_simulation_controller_appends_selection_commands() -> None:
     assert sim.input_log[-2].params == {"selected_entity_id": PLAYER_ID}
     assert sim.input_log[-1].command_type == "clear_selected_entity"
     assert sim.input_log[-1].params == {}
+
+
+def test_rumor_panel_queries_outcomes_without_mutating_world_hash() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-02", kind="site_claim", created_tick=3, group_id="beta", consumed=False))
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-01", kind="group_arrival", created_tick=5, group_id="alpha", consumed=True))
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    rumor_state = RumorPanelState(limit=1)
+
+    world_hash_before = world_hash(sim.state.world)
+    rules_before = dict(sim.state.rules_state)
+    rumors_before = list(sim.state.world.rumors)
+    _refresh_rumor_query(controller, rumor_state)
+    command = sim.input_log[-1]
+    sim._execute_command(command, command_index=len(sim.input_log) - 1)
+    _consume_rumor_outcome(sim, rumor_state)
+
+    assert rumor_state.outcome == "ok"
+    assert [row["rumor_id"] for row in rumor_state.rows] == ["r-01"]
+    assert isinstance(rumor_state.next_cursor, str)
+    assert world_hash(sim.state.world) == world_hash_before
+    assert sim.state.world.rumors == rumors_before
+    assert sim.state.rules_state == rules_before
+
+
+def test_rumor_panel_cursor_uses_returned_next_cursor_deterministically() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-03", kind="site_claim", created_tick=1, group_id="c", consumed=False))
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-02", kind="group_arrival", created_tick=2, group_id="b", consumed=False))
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-01", kind="claim_opportunity", created_tick=3, group_id="a", consumed=False))
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    rumor_state = RumorPanelState(limit=2)
+
+    _refresh_rumor_query(controller, rumor_state)
+    sim.advance_ticks(1)
+    _consume_rumor_outcome(sim, rumor_state)
+    assert [row["rumor_id"] for row in rumor_state.rows] == ["r-01", "r-02"]
+    assert isinstance(rumor_state.next_cursor, str)
+
+    rumor_state.cursor_stack.append(rumor_state.cursor)
+    rumor_state.cursor = rumor_state.next_cursor
+    rumor_state.refresh_needed = True
+    _refresh_rumor_query(controller, rumor_state)
+    sim.advance_ticks(1)
+    _consume_rumor_outcome(sim, rumor_state)
+
+    assert [row["rumor_id"] for row in rumor_state.rows] == ["r-03"]
 
 def test_main_help_prints_usage_without_starting_viewer(capsys: pytest.CaptureFixture[str]) -> None:
     from hexcrawler.cli.pygame_viewer import main
