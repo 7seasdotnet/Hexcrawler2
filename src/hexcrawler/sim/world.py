@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import json
 import copy
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,6 +43,92 @@ def _validate_json_value(value: Any, *, field_name: str) -> None:
             _validate_json_value(nested_value, field_name=field_name)
         return
     raise ValueError(f"{field_name} must contain only canonical JSON primitives")
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _legacy_rumor_kind(value: dict[str, Any]) -> str | None:
+    template_id = value.get("template_id")
+    if isinstance(template_id, str) and template_id in RUMOR_KINDS:
+        return template_id
+    for key in ("kind", "category", "rumor_kind"):
+        raw = value.get(key)
+        if isinstance(raw, str) and raw in RUMOR_KINDS:
+            return raw
+    return None
+
+
+def _legacy_rumor_created_tick(value: dict[str, Any]) -> int:
+    for key in ("created_tick", "tick", "at_tick"):
+        raw = value.get(key)
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, int):
+            return raw if raw >= 0 else 0
+    return 0
+
+
+def _legacy_rumor_id(value: dict[str, Any]) -> str:
+    rumor_id = value.get("rumor_id")
+    if isinstance(rumor_id, str) and rumor_id:
+        return rumor_id
+    digest = hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()[:16]
+    return f"legacy:{digest}"
+
+
+def _normalize_rumor_records(raw_rumors: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen_ids: dict[str, int] = {}
+
+    for index, raw in enumerate(raw_rumors):
+        if not isinstance(raw, dict):
+            raise ValueError("rumor record must be an object")
+
+        candidate: dict[str, Any] | None
+        modern_fields = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed"}
+        unknown_fields = set(raw) - modern_fields
+        try:
+            candidate = RumorRecord.from_dict(dict(raw)).to_dict()
+        except ValueError:
+            if not unknown_fields:
+                raise
+            kind = _legacy_rumor_kind(raw)
+            if kind is None:
+                candidate = None
+            else:
+                migrated: dict[str, Any] = {
+                    "rumor_id": _legacy_rumor_id(raw),
+                    "kind": kind,
+                    "created_tick": _legacy_rumor_created_tick(raw),
+                    "consumed": bool(raw.get("consumed", False)),
+                }
+                site_key = raw.get("site_key")
+                if isinstance(site_key, str) and site_key:
+                    migrated["site_key"] = site_key
+                group_id = raw.get("group_id")
+                if isinstance(group_id, str) and group_id:
+                    migrated["group_id"] = group_id
+                try:
+                    candidate = RumorRecord.from_dict(migrated).to_dict()
+                except ValueError:
+                    candidate = None
+
+        if candidate is None:
+            continue
+
+        rumor_id = str(candidate["rumor_id"])
+        occurrence = seen_ids.get(rumor_id, 0)
+        if occurrence:
+            digest = hashlib.sha256(f"{rumor_id}:{index}".encode("utf-8")).hexdigest()[:8]
+            candidate["rumor_id"] = f"{rumor_id}~{digest}"
+        seen_ids[rumor_id] = occurrence + 1
+        normalized.append(candidate)
+
+    if len(normalized) > MAX_RUMORS:
+        normalized = normalized[-MAX_RUMORS:]
+    return normalized
 
 
 
@@ -1214,9 +1301,7 @@ class WorldState:
         raw_rumors = data.get("rumors", [])
         if not isinstance(raw_rumors, list):
             raise ValueError("rumors must be a list")
-        world.rumors = [RumorRecord.from_dict(dict(row)).to_dict() for row in raw_rumors]
-        if len(world.rumors) > MAX_RUMORS:
-            raise ValueError("rumors exceeds maximum")
+        world.rumors = _normalize_rumor_records(raw_rumors)
         seen_rumor_ids: set[str] = set()
         for row in world.rumors:
             rumor_id = str(row["rumor_id"])

@@ -8,9 +8,9 @@
 
 
 ## What changed in this commit
-- Confirmed `select_rumors_intent` decision keys are tick-scoped plus canonicalized filters/scope/seed_tag so the same request on a different tick deterministically creates a different ledger decision.
-- Added regression coverage that cursor pagination is view-only over stored selected IDs and does not consume RNG, create a new decision record, or emit additional `rumor_selection_decision` forensics.
-- Kept Phase 6D-M18 substrate behavior unchanged while tightening merge-gate verification coverage for decision-key/idempotence semantics.
+- Hotfix: added deterministic legacy rumor migration/drop so older saves load without relaxing strict schema.
+- Legacy rumor normalization now migrates recognizable entries to strict rumor records, drops unmigratable rows deterministically, enforces FIFO cap trimming, and deterministically disambiguates rumor_id collisions during load.
+- Added regression coverage for legacy reported-field load unblock, canonical hashing stability across key order variants, modern rumor pass-through, and stable world hash on repeated legacy load.
 
 
 ## What Exists (folders / entry points)
