@@ -33,6 +33,7 @@ MAX_COMBAT_LOG = 256
 MAX_AFFECTED_PER_ACTION = 8
 MAX_WOUNDS = 64
 MAX_EVENTS_PER_TICK = 10_000
+MAX_COMMAND_OUTCOMES = 256
 INVENTORY_OUTCOME_EVENT_TYPE = "inventory_outcome"
 SITE_ENTER_OUTCOME_EVENT_TYPE = "site_enter_outcome"
 INVENTORY_LEDGER_MODULE = "inventory_ledger"
@@ -427,6 +428,7 @@ class Simulation:
         self._next_event_counter = 1
         self._event_execution_trace: list[str] = []
         self._supply_profiles = load_supply_profiles_json(DEFAULT_SUPPLY_PROFILES_PATH)
+        self._command_outcomes: list[dict[str, Any]] = []
 
     def add_entity(self, entity: EntityState) -> None:
         entity.stats = _normalize_entity_stats(entity.stats)
@@ -487,6 +489,18 @@ class Simulation:
 
     def event_execution_trace(self) -> tuple[str, ...]:
         return tuple(self._event_execution_trace)
+
+    def append_command_outcome(self, outcome: dict[str, Any]) -> None:
+        _validate_json_value(outcome, field_name="command_outcome")
+        self._command_outcomes.append(copy.deepcopy(outcome))
+        if len(self._command_outcomes) > MAX_COMMAND_OUTCOMES:
+            del self._command_outcomes[: len(self._command_outcomes) - MAX_COMMAND_OUTCOMES]
+
+    def get_command_outcomes(self) -> list[dict[str, Any]]:
+        return copy.deepcopy(self._command_outcomes)
+
+    def clear_command_outcomes(self) -> None:
+        self._command_outcomes = []
 
     def get_event_trace(self) -> list[dict[str, Any]]:
         return copy.deepcopy(self.state.event_trace)
@@ -752,6 +766,7 @@ class Simulation:
         return sim
 
     def _tick_once(self) -> None:
+        self.clear_command_outcomes()
         for module in self.rule_modules:
             module.on_tick_start(self, self.state.tick)
         self._apply_commands_for_tick(self.state.tick)

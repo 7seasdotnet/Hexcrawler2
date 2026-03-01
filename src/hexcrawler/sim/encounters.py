@@ -13,7 +13,7 @@ from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
-from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, MAX_CLAIM_OPPORTUNITIES, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, MAX_CLAIM_OPPORTUNITIES, RUMOR_KINDS, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -70,6 +70,8 @@ SITE_CLAIM_OUTCOME_EVENT_TYPE = "site_claim_outcome"
 GROUP_ARRIVED_AT_SITE_EVENT_TYPE = "group_arrived_at_site"
 CLAIM_OPPORTUNITY_CREATED_EVENT_TYPE = "claim_opportunity_created"
 CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE = "claim_opportunity_consumed"
+LIST_RUMORS_INTENT = "list_rumors_intent"
+LIST_RUMORS_OUTCOME_KIND = "list_rumors_outcome"
 MAX_CLAIM_SITES_PROCESSED_PER_ARRIVAL = 32
 SITE_ECOLOGY_TASK_NAME = "site_ecology:tick"
 SITE_ECOLOGY_INTERVAL_DAYS = 1
@@ -3257,6 +3259,192 @@ class RumorPipelineModule(RuleModule):
         if not isinstance(value, str) or not value:
             return None
         return value
+
+
+class RumorQueryModule(RuleModule):
+    """Phase 6D-M16 read-only deterministic rumor list/filter/pagination seam."""
+
+    name = "rumor_query"
+    _DEFAULT_LIMIT = 20
+    _MIN_LIMIT = 1
+    _MAX_LIMIT = 100
+
+    def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type != LIST_RUMORS_INTENT:
+            return False
+
+        action_uid = f"{int(command.tick)}:{int(command_index)}"
+        params = command.params if isinstance(command.params, dict) else {}
+        validation = self._validated_filters(params)
+        if validation["outcome"] != "ok":
+            sim.append_command_outcome(
+                {
+                    "kind": LIST_RUMORS_OUTCOME_KIND,
+                    "action_uid": action_uid,
+                    "outcome": validation["outcome"],
+                    "diagnostic": validation["diagnostic"],
+                    "rumors": [],
+                    "next_cursor": None,
+                }
+            )
+            return True
+
+        limit = int(validation["limit"])
+        cursor = validation["cursor"]
+        filtered = self._filtered_sorted_rumors(sim=sim, filters=validation)
+        page, next_cursor = self._paged_slice(filtered=filtered, limit=limit, cursor=cursor)
+
+        sim.append_command_outcome(
+            {
+                "kind": LIST_RUMORS_OUTCOME_KIND,
+                "action_uid": action_uid,
+                "outcome": "ok",
+                "diagnostic": validation["diagnostic"],
+                "rumors": copy.deepcopy(page),
+                "next_cursor": next_cursor,
+            }
+        )
+        return True
+
+    def _validated_filters(self, params: dict[str, Any]) -> dict[str, Any]:
+        raw_kind = params.get("kind")
+        kind = self._optional_non_empty_str(raw_kind)
+        if raw_kind is not None and kind is None:
+            return self._invalid(diagnostic="invalid_kind")
+        if kind is not None and kind not in RUMOR_KINDS:
+            return self._invalid(diagnostic="invalid_kind")
+
+        raw_site_key = params.get("site_key")
+        site_key = self._optional_non_empty_str(raw_site_key)
+        if raw_site_key is not None and site_key is None:
+            return self._invalid(diagnostic="invalid_site_key")
+
+        raw_group_id = params.get("group_id")
+        group_id = self._optional_non_empty_str(raw_group_id)
+        if raw_group_id is not None and group_id is None:
+            return self._invalid(diagnostic="invalid_group_id")
+
+        raw_consumed = params.get("consumed")
+        consumed: bool | None = None
+        if raw_consumed is not None:
+            if not isinstance(raw_consumed, bool):
+                return self._invalid(diagnostic="invalid_consumed")
+            consumed = raw_consumed
+
+        limit = self._DEFAULT_LIMIT
+        diagnostic: str | None = None
+        raw_limit = params.get("limit")
+        if raw_limit is not None:
+            if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
+                return self._invalid(diagnostic="invalid_limit")
+            clamped = max(self._MIN_LIMIT, min(self._MAX_LIMIT, raw_limit))
+            limit = int(clamped)
+            if clamped != raw_limit:
+                diagnostic = "limit_clamped"
+
+        cursor: tuple[int, str] | None = None
+        raw_cursor = params.get("cursor")
+        if raw_cursor is not None:
+            if not isinstance(raw_cursor, str):
+                return self._invalid(diagnostic="invalid_cursor")
+            cursor = self._parse_cursor(raw_cursor)
+            if cursor is None:
+                return self._invalid(diagnostic="invalid_cursor")
+
+        return {
+            "outcome": "ok",
+            "diagnostic": diagnostic,
+            "kind": kind,
+            "site_key": site_key,
+            "group_id": group_id,
+            "consumed": consumed,
+            "limit": limit,
+            "cursor": cursor,
+        }
+
+    def _filtered_sorted_rumors(self, *, sim: Simulation, filters: dict[str, Any]) -> list[dict[str, Any]]:
+        kind = filters["kind"]
+        site_key = filters["site_key"]
+        group_id = filters["group_id"]
+        consumed = filters["consumed"]
+        filtered: list[dict[str, Any]] = []
+        for rumor in sim.state.world.rumors:
+            if kind is not None and str(rumor.get("kind", "")) != kind:
+                continue
+            if site_key is not None and str(rumor.get("site_key", "")) != site_key:
+                continue
+            if group_id is not None and str(rumor.get("group_id", "")) != group_id:
+                continue
+            if consumed is not None and bool(rumor.get("consumed", False)) != consumed:
+                continue
+            filtered.append(rumor)
+        return sorted(filtered, key=lambda row: (-int(row.get("created_tick", 0)), str(row.get("rumor_id", ""))))
+
+    def _paged_slice(
+        self,
+        *,
+        filtered: list[dict[str, Any]],
+        limit: int,
+        cursor: tuple[int, str] | None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        start_index = 0
+        if cursor is not None:
+            start_index = len(filtered)
+            for idx, row in enumerate(filtered):
+                boundary = (int(row.get("created_tick", 0)), str(row.get("rumor_id", "")))
+                if self._cursor_is_after(boundary=boundary, cursor=cursor):
+                    start_index = idx
+                    break
+
+        page = filtered[start_index : start_index + limit]
+        if start_index + limit >= len(filtered) or not page:
+            return page, None
+        last = page[-1]
+        return page, self._cursor_for(rumor=last)
+
+    def _cursor_for(self, *, rumor: dict[str, Any]) -> str:
+        return f"{int(rumor.get('created_tick', 0))}:{str(rumor.get('rumor_id', ''))}"
+
+    def _parse_cursor(self, raw_cursor: str) -> tuple[int, str] | None:
+        parts = raw_cursor.split(":", 1)
+        if len(parts) != 2:
+            return None
+        tick_raw, rumor_id = parts
+        if not tick_raw or not rumor_id:
+            return None
+        if tick_raw.startswith("+"):
+            return None
+        try:
+            created_tick = int(tick_raw)
+        except ValueError:
+            return None
+        return (created_tick, rumor_id)
+
+    def _cursor_is_after(self, *, boundary: tuple[int, str], cursor: tuple[int, str]) -> bool:
+        boundary_tick, boundary_id = boundary
+        cursor_tick, cursor_id = cursor
+        if boundary_tick < cursor_tick:
+            return True
+        if boundary_tick > cursor_tick:
+            return False
+        return boundary_id > cursor_id
+
+    def _optional_non_empty_str(self, value: Any) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        return value
+
+    def _invalid(self, *, diagnostic: str) -> dict[str, Any]:
+        return {
+            "outcome": "invalid_params",
+            "diagnostic": diagnostic,
+            "kind": None,
+            "site_key": None,
+            "group_id": None,
+            "consumed": None,
+            "limit": self._DEFAULT_LIMIT,
+            "cursor": None,
+        }
 
 
 class SpawnMaterializationModule(RuleModule):

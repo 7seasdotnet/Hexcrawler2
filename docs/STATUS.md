@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M15 — persistent deterministic rumor substrate consuming campaign-role arrival/claim seam events.
-- **Next action:** Phase 6D-M16 — Data-driven rumor weighting + deterministic RNG selection.
+- **Current phase:** Phase 6D-M16 — deterministic read-only rumor query/presentation seam.
+- **Next action:** Phase 6D-M17 — Viewer read-only rumor surfacing (or deterministic weighted rumor selection with decision ledger, if desired).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added persistent bounded, serialized, hash-covered `world.rumors` substrate with strict schema validation (`MAX_RUMORS = 512`), deterministic rumor-id uniqueness checks, and FIFO eviction.
-- Reworked `RumorPipelineModule` to deterministic event-driven rumor generation from `group_move_arrived`, `claim_opportunity_created`, `claim_opportunity_consumed`, and `site_claim_outcome` seams with deduplication from serialized world state only; rumor ID suffixing now uses SHA-256 over canonical JSON components (`tick`, `event_id`, `kind`, `site_key`, `group_id`).
-- Added focused Phase 6D-M15 tests for replay/hash stability, save/load idempotence without duplicate rumors, deduplication, FIFO eviction, and malformed rumor load rejection.
+- Added deterministic read-only `list_rumors_intent` command seam via `RumorQueryModule`, with strict parameter validation, canonical filtering, required stable ordering (`created_tick` desc, `rumor_id` asc), and bounded pagination cursor support.
+- Added read-only command outcome substrate (`Simulation.append_command_outcome` / `get_command_outcomes`) with deterministic per-tick lifecycle clearing (`clear_command_outcomes` at tick start), keeping outcomes retrievable for presentation without mutating serialized world/rules/hash-covered state.
+- Added focused Phase 6D-M16 tests for ordering, filtering, pagination (including tolerant non-existent boundaries), malformed cursor rejection, and simulation-hash/world read-only invariance.
 
 
 ## What Exists (folders / entry points)
@@ -35,6 +35,7 @@
   - Combat outcome schema convention (locked): rejected combat outcomes omit `affected`; applied outcomes include non-empty `affected`.
   - Combat outcome schema convention (locked): each `affected` entry always includes `wound_deltas` (default `[]`), and wound append is recorded as a single append delta (`[{"op":"append","wound": <exact appended wound>}]`).
   - Rumor pipeline seam (`RumorPipelineModule`) that deterministically creates `world.rumors` from executed `encounter_action_outcome` events, persists emitted-rumor ledger state in `rules_state["rumor_pipeline"]`, and runs serialized periodic propagation/expiration accounting (hop cap 4).
+  - Read-only rumor query seam (`RumorQueryModule`) that consumes `list_rumors_intent`, applies deterministic canonical filters + stable ordering (`created_tick` desc, `rumor_id` asc), and returns bounded paginated outcomes via non-serialized command-outcome buffer for viewer/CLI surfacing preparation.
   - Serialized per-module `rules_state` store on `SimulationState` with JSON-validating `Simulation.get_rules_state(...)`/`Simulation.set_rules_state(...)` APIs.
   - Deterministic topology world-generation API (`WorldState.create_with_topology`) for `hex_disk` and `hex_rectangle`.
   - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
@@ -238,6 +239,7 @@
 - `claim_site_intent` (simulation command seam; deterministic structural site claim anchor set for ecology scaffolding, with forensic `site_claim_outcome`)
 - `claim_site_from_opportunity_intent` (simulation command seam; campaign-role explicit claim consumption from deterministic claim-opportunity ledger)
 - `move_group_intent` (simulation command seam; campaign-role deterministic group travel scheduling with idempotent arrival application)
+- `list_rumors_intent` (simulation command seam; read-only deterministic rumor list/filter/paginate outcome with stable ordering and cursoring)
 
 ## Track Emission Note
 - `track_intent` is supported by the execution substrate, but tracks are not emitted by default `content/examples/encounters/basic_encounters.json` entries in this phase (artifacts may show `track none` unless custom content/tests include track actions).
