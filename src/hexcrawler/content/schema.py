@@ -151,9 +151,7 @@ def _validate_world_shape(payload: dict[str, Any], *, field_prefix: str) -> None
     if not isinstance(rumors, list):
         raise ValueError(f"{field_prefix}.rumors must be a list when present")
     for index, record in enumerate(rumors):
-        if not isinstance(record, dict):
-            raise ValueError(f"{field_prefix}.rumors[{index}] must be an object")
-        _validate_rumor_record(record, field_name=f"{field_prefix}.rumors[{index}]")
+        _validate_world_rumor_record_minimal(record, field_name=f"{field_prefix}.rumors[{index}]")
 
     containers = payload.get("containers", {})
     if not isinstance(containers, dict):
@@ -279,7 +277,12 @@ def _validate_spawn_descriptor(descriptor: dict[str, Any], *, field_name: str) -
 
 
 
-def _validate_rumor_record(record: dict[str, Any], *, field_name: str) -> None:
+def _validate_world_rumor_record_minimal(record: Any, *, field_name: str) -> None:
+    if not isinstance(record, dict):
+        raise ValueError(f"{field_name} must be an object")
+
+
+def _validate_rumor_record_strict(record: dict[str, Any], *, field_name: str) -> None:
     allowed_fields = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed"}
     unknown = set(record) - allowed_fields
     if unknown:

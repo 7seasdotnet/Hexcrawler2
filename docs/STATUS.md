@@ -8,6 +8,8 @@
 
 
 ## What changed in this commit
+- Follow-up verification hotfix: full `PYTHONPATH=src pytest -q` and `PYTHONPATH=src pytest -q --durations=25` both complete/passing in this environment (no suite hang reproduced).
+- Hotfix follow-up: schema validator no longer pre-rejects legacy rumor fields; `WorldState.from_dict` is the single rumor normalization authority.
 - Hotfix: added deterministic legacy rumor migration/drop so older saves load without relaxing strict schema.
 - Legacy rumor normalization now migrates recognizable entries to strict rumor records, drops unmigratable rows deterministically, enforces FIFO cap trimming, and deterministically disambiguates rumor_id collisions during load.
 - Added regression coverage for legacy reported-field load unblock, canonical hashing stability across key order variants, modern rumor pass-through, and stable world hash on repeated legacy load.
