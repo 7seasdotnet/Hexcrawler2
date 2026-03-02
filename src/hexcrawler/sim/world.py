@@ -87,7 +87,7 @@ def _normalize_rumor_records(raw_rumors: list[Any]) -> list[dict[str, Any]]:
             raise ValueError("rumor record must be an object")
 
         candidate: dict[str, Any] | None
-        modern_fields = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed"}
+        modern_fields = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed", "expires_tick"}
         unknown_fields = set(raw) - modern_fields
         try:
             candidate = RumorRecord.from_dict(dict(raw)).to_dict()
@@ -366,6 +366,7 @@ class RumorRecord:
     site_key: str | None = None
     group_id: str | None = None
     consumed: bool = False
+    expires_tick: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.rumor_id, str) or not self.rumor_id:
@@ -380,6 +381,11 @@ class RumorRecord:
             raise ValueError("created_tick must be an integer")
         if not isinstance(self.consumed, bool):
             raise ValueError("consumed must be a boolean")
+        if self.expires_tick is not None:
+            if isinstance(self.expires_tick, bool) or not isinstance(self.expires_tick, int):
+                raise ValueError("expires_tick must be an integer when present")
+            if self.expires_tick < 0:
+                raise ValueError("expires_tick must be >= 0")
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -392,14 +398,19 @@ class RumorRecord:
             data["site_key"] = self.site_key
         if self.group_id is not None:
             data["group_id"] = self.group_id
+        if self.expires_tick is not None:
+            data["expires_tick"] = self.expires_tick
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RumorRecord":
-        allowed = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed"}
+        allowed = {"rumor_id", "kind", "site_key", "group_id", "created_tick", "consumed", "expires_tick"}
         unknown = set(data) - allowed
         if unknown:
             raise ValueError(f"rumor record has unknown fields: {sorted(unknown)}")
+        raw_expires_tick = data.get("expires_tick")
+        if raw_expires_tick is not None and (isinstance(raw_expires_tick, bool) or not isinstance(raw_expires_tick, int)):
+            raise ValueError("expires_tick must be an integer when present")
         return cls(
             rumor_id=str(data["rumor_id"]),
             kind=str(data["kind"]),
@@ -407,6 +418,7 @@ class RumorRecord:
             group_id=(str(data["group_id"]) if data.get("group_id") is not None else None),
             created_tick=int(data["created_tick"]),
             consumed=(data.get("consumed", False) if data.get("consumed") is not None else False),
+            expires_tick=raw_expires_tick,
         )
 
 
@@ -1073,6 +1085,7 @@ class WorldState:
     claim_opportunities: list[dict[str, Any]] = field(default_factory=list)
     rumor_selection_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     rumor_selection_decision_order: list[str] = field(default_factory=list)
+    rumor_decay_cursor: int = 0
 
     def __post_init__(self) -> None:
         if self.spaces:
@@ -1171,6 +1184,8 @@ class WorldState:
                 decision_key: _normalize_rumor_selection_decision_record(self.rumor_selection_decisions[decision_key])
                 for decision_key in sorted(self.rumor_selection_decisions)
             }
+        if self.rumor_decay_cursor > 0:
+            payload["rumor_decay_cursor"] = int(self.rumor_decay_cursor)
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1237,6 +1252,8 @@ class WorldState:
                 decision_key: _normalize_rumor_selection_decision_record(self.rumor_selection_decisions[decision_key])
                 for decision_key in sorted(self.rumor_selection_decisions)
             }
+        if self.rumor_decay_cursor > 0:
+            payload["rumor_decay_cursor"] = int(self.rumor_decay_cursor)
         return payload
 
     @classmethod
@@ -1308,6 +1325,16 @@ class WorldState:
             if rumor_id in seen_rumor_ids:
                 raise ValueError("rumor ids must be unique")
             seen_rumor_ids.add(rumor_id)
+
+        raw_rumor_decay_cursor = data.get("rumor_decay_cursor", 0)
+        if isinstance(raw_rumor_decay_cursor, bool) or not isinstance(raw_rumor_decay_cursor, int):
+            raise ValueError("rumor_decay_cursor must be an integer")
+        if raw_rumor_decay_cursor < 0:
+            raise ValueError("rumor_decay_cursor must be >= 0")
+        if world.rumors:
+            world.rumor_decay_cursor = min(raw_rumor_decay_cursor, len(world.rumors) - 1)
+        else:
+            world.rumor_decay_cursor = 0
 
         raw_containers = data.get("containers", {})
         if not isinstance(raw_containers, dict):
@@ -1497,7 +1524,13 @@ class WorldState:
                 return
         self.rumors.append(normalized.to_dict())
         if len(self.rumors) > MAX_RUMORS:
-            del self.rumors[: len(self.rumors) - MAX_RUMORS]
+            overflow = len(self.rumors) - MAX_RUMORS
+            del self.rumors[:overflow]
+            self.rumor_decay_cursor = max(0, self.rumor_decay_cursor - overflow)
+        if self.rumors:
+            self.rumor_decay_cursor = min(self.rumor_decay_cursor, len(self.rumors) - 1)
+        else:
+            self.rumor_decay_cursor = 0
 
     def upsert_rumor_selection_decision(self, *, decision_key: str, record: dict[str, Any]) -> bool:
         if not isinstance(decision_key, str) or not decision_key:

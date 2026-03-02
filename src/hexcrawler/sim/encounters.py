@@ -75,6 +75,10 @@ LIST_RUMORS_OUTCOME_KIND = "list_rumors_outcome"
 SELECT_RUMORS_INTENT = "select_rumors_intent"
 SELECT_RUMORS_OUTCOME_KIND = "select_rumors_outcome"
 RUMOR_SELECTION_DECISION_EVENT_TYPE = "rumor_selection_decision"
+RUMOR_DECAY_TASK_NAME = "rumor_decay:tick"
+RUMOR_DECAY_INTERVAL_TICKS = 1
+MAX_RUMOR_DECAY_PROCESSED_PER_TICK = 64
+RUMOR_DECAY_TICK_EVENT_TYPE = "rumor_decay_tick"
 RUMOR_SELECTION_DEFAULT_SCOPE = CAMPAIGN_SPACE_ROLE
 RUMOR_SELECTION_DEFAULT_K = 10
 RUMOR_SELECTION_MIN_K = 1
@@ -3274,6 +3278,77 @@ class RumorPipelineModule(RuleModule):
         if not isinstance(value, str) or not value:
             return None
         return value
+
+
+class RumorDecayModule(RuleModule):
+    """Phase 6D-M20 deterministic bounded rumor expiration maintenance."""
+
+    name = "rumor_decay"
+
+    def on_simulation_start(self, sim: Simulation) -> None:
+        scheduler = sim.get_rule_module(PeriodicScheduler.name)
+        if scheduler is None:
+            scheduler = PeriodicScheduler()
+            sim.register_rule_module(scheduler)
+        if not isinstance(scheduler, PeriodicScheduler):
+            raise TypeError("periodic_scheduler module must be a PeriodicScheduler")
+        scheduler.register_task(
+            task_name=RUMOR_DECAY_TASK_NAME,
+            interval_ticks=RUMOR_DECAY_INTERVAL_TICKS,
+            start_tick=0,
+        )
+        scheduler.set_task_callback(RUMOR_DECAY_TASK_NAME, self._build_periodic_callback())
+
+    def _build_periodic_callback(self) -> Any:
+        def _on_periodic(sim: Simulation, tick: int) -> None:
+            self._process_decay_tick(sim=sim, tick=tick)
+
+        return _on_periodic
+
+    def _process_decay_tick(self, *, sim: Simulation, tick: int) -> None:
+        rumors = sim.state.world.rumors
+        if not rumors:
+            sim.state.world.rumor_decay_cursor = 0
+            return
+
+        cursor = int(sim.state.world.rumor_decay_cursor)
+        if cursor < 0:
+            cursor = 0
+        if cursor >= len(rumors):
+            cursor = len(rumors) - 1
+
+        scanned = 0
+        removed = 0
+        while scanned < MAX_RUMOR_DECAY_PROCESSED_PER_TICK and rumors:
+            if cursor >= len(rumors):
+                cursor = 0
+            rumor = rumors[cursor]
+            expires_tick = rumor.get("expires_tick")
+            if isinstance(expires_tick, int) and not isinstance(expires_tick, bool) and tick >= expires_tick:
+                del rumors[cursor]
+                removed += 1
+                if not rumors:
+                    cursor = 0
+                    break
+                if cursor >= len(rumors):
+                    cursor = 0
+            else:
+                cursor = (cursor + 1) % len(rumors)
+            scanned += 1
+
+        sim.state.world.rumor_decay_cursor = cursor if rumors else 0
+        if scanned > 0:
+            sim._append_event_trace_entry(
+                {
+                    "tick": int(tick),
+                    "event_id": sim._trace_event_id_as_int(f"rumor-decay:{tick}"),
+                    "event_type": RUMOR_DECAY_TICK_EVENT_TYPE,
+                    "params": {
+                        "scanned_count": scanned,
+                        "removed_count": removed,
+                    },
+                }
+            )
 
 
 class RumorQueryModule(RuleModule):
