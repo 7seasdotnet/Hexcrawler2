@@ -1,8 +1,8 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M18 — deterministic rumor weighting/selection + decision ledger.
-- **Next action:** Phase 6D-M19 — viewer integration: “Top Rumors” panel using `select_rumors_intent`.
+- **Current phase:** Phase 6D-M19 — viewer “Top Rumors” panel using `select_rumors_intent` (read-only).
+- **Next action:** Phase 6D-M20 — rumor TTL/decay deterministic policy.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
@@ -251,9 +251,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Added viewer read-only rumor surfacing that uses `list_rumors_intent` outcomes instead of direct `world.rumors` reads in the panel.
-- Added viewer-local rumor filters and deterministic pagination controls (including Prev/Next cursor navigation) without introducing new simulation mutation paths.
-- Added tests for viewer rumor query behavior and cursor follow-up requests using returned outcome cursors.
+- Viewer Rumors panel now supports a `Mode` toggle: `All` uses `list_rumors_intent`, while `Top` uses `select_rumors_intent` with fixed `seed_tag="top"`.
+- Added Top-mode `k` selector (`10/20/50`) and cursor navigation wiring via outcome-buffer cursors, with viewer-local mode/cursor state only.
+- Added focused viewer/controller tests for Top-mode command issuance, Top-mode read-only substrate behavior, and deterministic mode toggling back to All-mode list queries.
 
 
 ## Troubleshooting
