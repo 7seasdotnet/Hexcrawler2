@@ -1,18 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M19 — viewer “Top Rumors” panel using `select_rumors_intent` (read-only).
-- **Next action:** Phase 6D-M20 — rumor TTL/decay deterministic policy.
+- **Current phase:** Phase 6D-M20 — deterministic rumor TTL/decay policy (bounded, replay-stable).
+- **Next action:** Phase 6D-M21 — data-driven TTL policy per rumor kind/site template.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Follow-up verification hotfix: full `PYTHONPATH=src pytest -q` and `PYTHONPATH=src pytest -q --durations=25` both complete/passing in this environment (no suite hang reproduced).
-- Hotfix follow-up: schema validator no longer pre-rejects legacy rumor fields; `WorldState.from_dict` is the single rumor normalization authority.
-- Hotfix: added deterministic legacy rumor migration/drop so older saves load without relaxing strict schema.
-- Legacy rumor normalization now migrates recognizable entries to strict rumor records, drops unmigratable rows deterministically, enforces FIFO cap trimming, and deterministically disambiguates rumor_id collisions during load.
-- Added regression coverage for legacy reported-field load unblock, canonical hashing stability across key order variants, modern rumor pass-through, and stable world hash on repeated legacy load.
+- Added optional `expires_tick` to strict rumor schema with deterministic validation (`int >= 0`, non-bool) and canonical save/load support.
+- Added `RumorDecayModule` periodic maintenance (campaign+local shared world substrate) with deterministic bounded cleanup (`MAX_RUMOR_DECAY_PROCESSED_PER_TICK`) and serialized/hash-covered `world.rumor_decay_cursor`.
+- Added focused M20 tests for expiration determinism, bounded deferral, save/load idempotence, and selection-query robustness when decision ledgers reference expired rumors.
 
 
 ## What Exists (folders / entry points)
@@ -31,6 +29,7 @@
   - Local encounter instancing/return bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, persists serialized return context in `rules_state["local_encounter_instance"].active_by_local_space`, and handles Local-role `end_local_encounter_intent` to schedule deterministic `local_encounter_end`/`local_encounter_return` events back to stored campaign origin space IDs; site state now persists claim anchors and growth-step ledgers for ecology scaffolding.
   - Site ecology scaffolding module (`SiteEcologyModule`) that runs deterministic campaign-role ecology ticks via serialized periodic events, uses stable-ordered bounded processing with deterministic cursor deferral, schedules marker-only growth effects into pending site effects, and records deterministic ecology scheduling forensics.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
+- Rumor decay maintenance seam (`RumorDecayModule`) runs periodic deterministic bounded TTL cleanup against optional rumor `expires_tick` values and advances serialized `world.rumor_decay_cursor` for replay/save-load stability.
   - Combat seam module (`CombatExecutionModule`) consuming `attack_intent`, enforcing ingress role-gating (`local` only), then deterministic validation/range/cooldown checks plus local-hex melee front-arc admissibility (`front 3 of 6`), and recording bounded `combat_outcome` forensic artifacts with canonical called-region defaults.
   - Combat seam also consumes `turn_intent` with the same local-only role gate; campaign-role turn intents deterministically reject with `tactical_not_allowed_in_campaign_space` and do not mutate facing.
   - Combat outcomes support bounded deterministic affected-target projection via `affected[]` (cap: `MAX_AFFECTED_PER_ACTION = 8`) with deterministic ordering contract (primary key: coord ordering; secondary key: `entity_id`), applied entries carrying resolved `entity_id` + `cell`, and rejected outcomes omitting `affected`.
