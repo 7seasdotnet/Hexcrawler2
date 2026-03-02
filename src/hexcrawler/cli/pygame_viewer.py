@@ -19,6 +19,8 @@ from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     LIST_RUMORS_INTENT,
     LIST_RUMORS_OUTCOME_KIND,
+    SELECT_RUMORS_INTENT,
+    SELECT_RUMORS_OUTCOME_KIND,
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
@@ -255,6 +257,33 @@ class SimulationController:
             )
         )
 
+    def select_rumors(
+        self,
+        *,
+        kind: str | None,
+        site_key: str | None,
+        group_id: str | None,
+        k: int,
+        cursor: str | None,
+    ) -> None:
+        params: dict[str, Any] = {"k": int(k), "seed_tag": "top"}
+        if kind is not None:
+            params["kind"] = kind
+        if site_key is not None:
+            params["site_key"] = site_key
+        if group_id is not None:
+            params["group_id"] = group_id
+        if cursor is not None:
+            params["cursor"] = cursor
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=SELECT_RUMORS_INTENT,
+                params=params,
+            )
+        )
+
     def tick_once(self) -> None:
         self.sim.advance_ticks(1)
 
@@ -270,10 +299,12 @@ RenderSnapshot = dict[str, RenderEntitySnapshot]
 
 @dataclass
 class RumorPanelState:
+    mode: str = "all"
     kind_filter: str | None = None
     site_key_filter: str = ""
     group_id_filter: str = ""
     limit: int = 20
+    top_k: int = 10
     cursor: str | None = None
     cursor_stack: list[str | None] = field(default_factory=list)
     next_cursor: str | None = None
@@ -287,7 +318,7 @@ class RumorPanelState:
     group_id_draft: str = ""
 
     def request_params(self) -> dict[str, Any]:
-        params: dict[str, Any] = {"limit": int(self.limit)}
+        params: dict[str, Any] = {"limit": int(self.limit), "k": int(self.top_k)}
         if self.kind_filter is not None:
             params["kind"] = self.kind_filter
         if self.site_key_filter:
@@ -1070,13 +1101,22 @@ def _refresh_rumor_query(controller: SimulationController, rumor_state: RumorPan
     if rumor_state.request_pending or not rumor_state.refresh_needed:
         return
     params = rumor_state.request_params()
-    controller.list_rumors(
-        kind=params.get("kind"),
-        site_key=params.get("site_key"),
-        group_id=params.get("group_id"),
-        limit=int(params.get("limit", 20)),
-        cursor=params.get("cursor"),
-    )
+    if rumor_state.mode == "top":
+        controller.select_rumors(
+            kind=params.get("kind"),
+            site_key=params.get("site_key"),
+            group_id=params.get("group_id"),
+            k=int(params.get("k", 10)),
+            cursor=params.get("cursor"),
+        )
+    else:
+        controller.list_rumors(
+            kind=params.get("kind"),
+            site_key=params.get("site_key"),
+            group_id=params.get("group_id"),
+            limit=int(params.get("limit", 20)),
+            cursor=params.get("cursor"),
+        )
     rumor_state.request_pending = True
     rumor_state.refresh_needed = False
 
@@ -1085,12 +1125,14 @@ def _consume_rumor_outcome(sim: Simulation, rumor_state: RumorPanelState) -> Non
     if not rumor_state.request_pending:
         return
     latest: dict[str, Any] | None = None
+    outcome_kind = SELECT_RUMORS_OUTCOME_KIND if rumor_state.mode == "top" else LIST_RUMORS_OUTCOME_KIND
+    rows_key = "selection" if rumor_state.mode == "top" else "rumors"
     for entry in sim.get_command_outcomes():
-        if isinstance(entry, dict) and entry.get("kind") == LIST_RUMORS_OUTCOME_KIND:
+        if isinstance(entry, dict) and entry.get("kind") == outcome_kind:
             latest = entry
     if latest is None:
         return
-    rows = latest.get("rumors")
+    rows = latest.get(rows_key)
     rumor_state.rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     rumor_state.next_cursor = latest.get("next_cursor") if isinstance(latest.get("next_cursor"), str) else None
     rumor_state.outcome = str(latest.get("outcome", "?"))
@@ -1107,6 +1149,24 @@ def _cycle_rumor_kind_filter(rumor_state: RumorPanelState) -> None:
     rumor_state.kind_filter = RUMOR_KIND_FILTER_ORDER[(current_index + 1) % len(RUMOR_KIND_FILTER_ORDER)]
     rumor_state.cursor = None
     rumor_state.cursor_stack = []
+    rumor_state.refresh_needed = True
+
+
+def _toggle_rumor_mode(rumor_state: RumorPanelState) -> None:
+    rumor_state.mode = "top" if rumor_state.mode == "all" else "all"
+    rumor_state.cursor = None
+    rumor_state.cursor_stack = []
+    rumor_state.next_cursor = None
+    rumor_state.refresh_needed = True
+
+
+def _cycle_rumor_top_k(rumor_state: RumorPanelState) -> None:
+    values = (10, 20, 50)
+    current_index = values.index(rumor_state.top_k) if rumor_state.top_k in values else 0
+    rumor_state.top_k = values[(current_index + 1) % len(values)]
+    rumor_state.cursor = None
+    rumor_state.cursor_stack = []
+    rumor_state.next_cursor = None
     rumor_state.refresh_needed = True
 
 
@@ -1243,15 +1303,33 @@ def _draw_encounter_debug_panel(
 
     section_rows = rows_by_section.get(active_section, [])
     if active_section == "rumors":
+        mode_value = "Top" if rumor_state.mode == "top" else "All"
+        mode_surface = font.render(f"Mode: {mode_value}", True, (235, 235, 240))
+        mode_rect = pygame.Rect(panel_rect.x + 10, y, max(100, mode_surface.get_width() + 14), 20)
+        pygame.draw.rect(screen, (50, 54, 70), mode_rect)
+        pygame.draw.rect(screen, (110, 115, 135), mode_rect, 1)
+        screen.blit(mode_surface, (mode_rect.x + 6, mode_rect.y + 2))
+        section_rects["rumor_mode"] = mode_rect
+
         kind_value = rumor_state.kind_filter if rumor_state.kind_filter is not None else "All"
         kind_surface = font.render(f"Kind: {kind_value}", True, (235, 235, 240))
-        kind_rect = pygame.Rect(panel_rect.x + 10, y, max(100, kind_surface.get_width() + 14), 20)
+        kind_rect = pygame.Rect(mode_rect.right + 8, y, max(100, kind_surface.get_width() + 14), 20)
         pygame.draw.rect(screen, (50, 54, 70), kind_rect)
         pygame.draw.rect(screen, (110, 115, 135), kind_rect, 1)
         screen.blit(kind_surface, (kind_rect.x + 6, kind_rect.y + 2))
         section_rects["rumor_kind"] = kind_rect
 
+        if rumor_state.mode == "top":
+            top_k_surface = font.render(f"Top K: {int(rumor_state.top_k)}", True, (235, 235, 240))
+            top_k_rect = pygame.Rect(kind_rect.right + 8, y, max(100, top_k_surface.get_width() + 14), 20)
+            pygame.draw.rect(screen, (50, 54, 70), top_k_rect)
+            pygame.draw.rect(screen, (110, 115, 135), top_k_rect, 1)
+            screen.blit(top_k_surface, (top_k_rect.x + 6, top_k_rect.y + 2))
+            section_rects["rumor_top_k"] = top_k_rect
+
         prev_rect = pygame.Rect(kind_rect.right + 8, y, 56, 20)
+        if rumor_state.mode == "top" and section_rects.get("rumor_top_k") is not None:
+            prev_rect = pygame.Rect(section_rects["rumor_top_k"].right + 8, y, 56, 20)
         next_rect = pygame.Rect(prev_rect.right + 6, y, 56, 20)
         pygame.draw.rect(screen, (50, 54, 70), prev_rect)
         pygame.draw.rect(screen, (110, 115, 135), prev_rect, 1)
@@ -1887,6 +1965,12 @@ def run_pygame_viewer(
                 if active_panel_section == "rumors":
                     if panel_section_rects.get("rumor_kind") is not None and panel_section_rects["rumor_kind"].collidepoint(event.pos):
                         _cycle_rumor_kind_filter(rumor_panel_state)
+                        _refresh_rumor_query(controller, rumor_panel_state)
+                    elif panel_section_rects.get("rumor_mode") is not None and panel_section_rects["rumor_mode"].collidepoint(event.pos):
+                        _toggle_rumor_mode(rumor_panel_state)
+                        _refresh_rumor_query(controller, rumor_panel_state)
+                    elif panel_section_rects.get("rumor_top_k") is not None and panel_section_rects["rumor_top_k"].collidepoint(event.pos):
+                        _cycle_rumor_top_k(rumor_panel_state)
                         _refresh_rumor_query(controller, rumor_panel_state)
                     elif panel_section_rects.get("rumor_next") is not None and panel_section_rects["rumor_next"].collidepoint(event.pos):
                         if rumor_panel_state.next_cursor is not None:
