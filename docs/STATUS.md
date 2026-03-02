@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M20 — deterministic rumor TTL/decay policy (bounded, replay-stable).
-- **Next action:** Phase 6D-M21 — data-driven TTL policy per rumor kind/site template.
+- **Current phase:** Phase 6D-M21 — data-driven rumor TTL defaults by kind (deterministic, no RNG).
+- **Next action:** Phase 6D-M22 — data-driven TTL per site template / campaign region.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added optional `expires_tick` to strict rumor schema with deterministic validation (`int >= 0`, non-bool) and canonical save/load support.
-- Added `RumorDecayModule` periodic maintenance (campaign+local shared world substrate) with deterministic bounded cleanup (`MAX_RUMOR_DECAY_PROCESSED_PER_TICK`) and serialized/hash-covered `world.rumor_decay_cursor`.
-- Added focused M20 tests for expiration determinism, bounded deferral, save/load idempotence, and selection-query robustness when decision ledgers reference expired rumors.
+- Added strict, hash-covered `world.rumor_ttl_config` normalization/defaulting with per-kind TTL defaults and deterministic validation bounds.
+- Updated `RumorPipelineModule` to deterministically apply `expires_tick = created_tick + ttl_ticks` at rumor creation when no explicit expiration exists.
+- Added focused M21 tests for TTL application, disabled policy behavior, strict config validation, save/load hash stability, decay integration, and default-config omission/hash-coverage semantics.
 
 
 ## What Exists (folders / entry points)

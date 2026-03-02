@@ -23,6 +23,17 @@ MAX_CLAIM_OPPORTUNITIES = 256
 MAX_RUMORS = 512
 MAX_RUMOR_SELECTION_DECISIONS = 256
 RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
+MAX_RUMOR_TTL_TICKS = 1_000_000
+DEFAULT_RUMOR_TTL_BY_KIND = {
+    "group_arrival": 2000,
+    "claim_opportunity": 4000,
+    "site_claim": 10000,
+}
+DEFAULT_RUMOR_TTL_CONFIG = {
+    "enabled": True,
+    "ttl_by_kind": dict(DEFAULT_RUMOR_TTL_BY_KIND),
+    "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+}
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -129,6 +140,49 @@ def _normalize_rumor_records(raw_rumors: list[Any]) -> list[dict[str, Any]]:
     if len(normalized) > MAX_RUMORS:
         normalized = normalized[-MAX_RUMORS:]
     return normalized
+
+
+def _normalize_rumor_ttl_config(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("rumor_ttl_config must be an object")
+    allowed = {"enabled", "ttl_by_kind", "max_ttl_ticks"}
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError("rumor_ttl_config has unknown fields")
+
+    enabled = value.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError("rumor_ttl_config.enabled must be a boolean")
+
+    max_ttl_ticks_raw = value.get("max_ttl_ticks", MAX_RUMOR_TTL_TICKS)
+    if isinstance(max_ttl_ticks_raw, bool) or not isinstance(max_ttl_ticks_raw, int):
+        raise ValueError("rumor_ttl_config.max_ttl_ticks must be an integer")
+    if max_ttl_ticks_raw < 0:
+        raise ValueError("rumor_ttl_config.max_ttl_ticks must be >= 0")
+    if max_ttl_ticks_raw > MAX_RUMOR_TTL_TICKS:
+        raise ValueError("rumor_ttl_config.max_ttl_ticks exceeds MAX_RUMOR_TTL_TICKS")
+
+    ttl_by_kind_raw = value.get("ttl_by_kind", DEFAULT_RUMOR_TTL_BY_KIND)
+    if not isinstance(ttl_by_kind_raw, dict):
+        raise ValueError("rumor_ttl_config.ttl_by_kind must be an object")
+    ttl_by_kind: dict[str, int] = {}
+    for kind in sorted(ttl_by_kind_raw):
+        if kind not in RUMOR_KINDS:
+            raise ValueError("rumor_ttl_config.ttl_by_kind has unknown rumor kind")
+        ttl_ticks = ttl_by_kind_raw[kind]
+        if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
+            raise ValueError("rumor_ttl_config.ttl_by_kind values must be integers")
+        if ttl_ticks < 0:
+            raise ValueError("rumor_ttl_config.ttl_by_kind values must be >= 0")
+        if ttl_ticks > max_ttl_ticks_raw:
+            raise ValueError("rumor_ttl_config.ttl_by_kind value exceeds max_ttl_ticks")
+        ttl_by_kind[str(kind)] = ttl_ticks
+
+    return {
+        "enabled": enabled,
+        "ttl_by_kind": ttl_by_kind,
+        "max_ttl_ticks": max_ttl_ticks_raw,
+    }
 
 
 
@@ -1083,11 +1137,13 @@ class WorldState:
     sites: dict[str, SiteRecord] = field(default_factory=dict)
     groups: dict[str, GroupRecord] = field(default_factory=dict)
     claim_opportunities: list[dict[str, Any]] = field(default_factory=list)
+    rumor_ttl_config: dict[str, Any] = field(default_factory=lambda: _normalize_rumor_ttl_config(DEFAULT_RUMOR_TTL_CONFIG))
     rumor_selection_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     rumor_selection_decision_order: list[str] = field(default_factory=list)
     rumor_decay_cursor: int = 0
 
     def __post_init__(self) -> None:
+        self.rumor_ttl_config = _normalize_rumor_ttl_config(self.rumor_ttl_config)
         if self.spaces:
             overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
             if overworld_space is None:
@@ -1177,6 +1233,9 @@ class WorldState:
                 _normalize_claim_opportunity_record(row)
                 for row in self.claim_opportunities
             ]
+        normalized_rumor_ttl_config = _normalize_rumor_ttl_config(self.rumor_ttl_config)
+        if normalized_rumor_ttl_config != _normalize_rumor_ttl_config(DEFAULT_RUMOR_TTL_CONFIG):
+            payload["rumor_ttl_config"] = normalized_rumor_ttl_config
         if self.rumor_selection_decision_order:
             payload["rumor_selection_decision_order"] = list(self.rumor_selection_decision_order)
         if self.rumor_selection_decisions:
@@ -1245,6 +1304,9 @@ class WorldState:
                 _normalize_claim_opportunity_record(row)
                 for row in self.claim_opportunities
             ]
+        normalized_rumor_ttl_config = _normalize_rumor_ttl_config(self.rumor_ttl_config)
+        if normalized_rumor_ttl_config != _normalize_rumor_ttl_config(DEFAULT_RUMOR_TTL_CONFIG):
+            payload["rumor_ttl_config"] = normalized_rumor_ttl_config
         if self.rumor_selection_decision_order:
             payload["rumor_selection_decision_order"] = list(self.rumor_selection_decision_order)
         if self.rumor_selection_decisions:
@@ -1396,6 +1458,8 @@ class WorldState:
             if opportunity_id in seen_opportunity_ids:
                 raise ValueError("claim opportunity ids must be unique")
             seen_opportunity_ids.add(opportunity_id)
+
+        world.rumor_ttl_config = _normalize_rumor_ttl_config(data.get("rumor_ttl_config", DEFAULT_RUMOR_TTL_CONFIG))
 
         raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})
         if not isinstance(raw_rumor_selection_decisions, dict):

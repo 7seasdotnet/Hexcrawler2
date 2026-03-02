@@ -3220,7 +3220,29 @@ class RumorPipelineModule(RuleModule):
     def _append_rumor(self, *, sim: Simulation, rumor: RumorRecord, dedupe_key: tuple[str, str, str, str]) -> None:
         if self._has_dedupe(sim=sim, dedupe_key=dedupe_key):
             return
-        sim.state.world.append_rumor(rumor)
+        sim.state.world.append_rumor(self._apply_ttl_defaults(sim=sim, rumor=rumor))
+
+    def _apply_ttl_defaults(self, *, sim: Simulation, rumor: RumorRecord) -> RumorRecord:
+        if rumor.expires_tick is not None:
+            return rumor
+        ttl_config = sim.state.world.rumor_ttl_config
+        if not bool(ttl_config.get("enabled", True)):
+            return rumor
+        ttl_by_kind = ttl_config.get("ttl_by_kind", {})
+        if not isinstance(ttl_by_kind, dict):
+            return rumor
+        ttl_ticks = ttl_by_kind.get(rumor.kind)
+        if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
+            return rumor
+        return RumorRecord(
+            rumor_id=rumor.rumor_id,
+            kind=rumor.kind,
+            site_key=rumor.site_key,
+            group_id=rumor.group_id,
+            created_tick=rumor.created_tick,
+            consumed=rumor.consumed,
+            expires_tick=rumor.created_tick + ttl_ticks,
+        )
 
     def _has_dedupe(self, *, sim: Simulation, dedupe_key: tuple[str, str, str, str]) -> bool:
         kind, site_key, group_id, state_token = dedupe_key
