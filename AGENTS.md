@@ -66,6 +66,18 @@ Goal: content expansion becomes data entry + balance, not new code.
 - Keep saves deterministic and versioned (migrations supported). Human-readable is optional; schema-validation is required.
 - Determinism contracts in docs/ARCHITECTURE.md are authoritative and must not be weakened without explicit approval and documentation.
 
+
+## Mandatory Pre-Implementation Review
+Before implementing changes, review these authoritative documents:
+- `docs/ARCHITECTURE.md`
+- `docs/STATUS.md`
+- `docs/FUTURE_FEATURES_NOT_TO_LOCK_OUT.md`
+- `docs/DIEGETIC_INTELLIGENCE.md`
+
+Any work touching faction behavior, rumor systems, belief propagation, reputation, diplomacy, investigation, or political AI must comply with `/docs/DIEGETIC_INTELLIGENCE.md`. No implementation may contradict or lock out capabilities defined in that document.
+
+If a proposed change conflicts with DIEGETIC_INTELLIGENCE.md, the document must be explicitly updated before implementation proceeds.
+
 ## Determinism Enforcement (Rule Modules Are Ephemeral)
 - Rule modules are **not serialized**. Treat them as **ephemeral behavioral shells**.
 - No module may rely on in-memory state (counters, caches, cooldowns, “already processed” sets, etc.) for correctness across:

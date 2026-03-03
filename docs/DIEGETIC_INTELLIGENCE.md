@@ -1,0 +1,312 @@
+# DIEGETIC_INTELLIGENCE.md
+
+## Status
+Authoritative Contract – Political Epistemology Substrate
+
+This document defines the engine-level contracts for faction belief, information propagation, investigation, and disposition.
+
+If any other document conflicts with this file regarding intelligence, belief, propagation, or reputation semantics, **this document governs**.
+
+If implementation code conflicts with this document, either:
+1) The code must be changed, or
+2) A temporary deviation must be explicitly documented with justification.
+
+This file is mandatory pre-implementation review material.
+
+---
+
+# 0. Non-Negotiable Principles
+
+1. Determinism: Same seed + same command log ⇒ identical world_hash.
+2. Atomicity: Rejection ⇒ zero mutation.
+3. Serialization Discipline: All persistent state is serialized and hash-covered. Derived values are never serialized.
+4. Boundedness: All collections and queues are hard-capped with deterministic eviction.
+5. Event-Driven Only: No per-tick global graph scanning.
+6. Diegetic UI Only: No quest logs, no objective trackers, no confidence numbers.
+7. Editor-First with Safety Clamps: Content may tune within engine-enforced hard bounds.
+
+---
+
+# 1. Conceptual Model
+
+The engine distinguishes:
+
+- Objective Event (what occurred)
+- Belief (what a faction thinks occurred)
+- Disposition (behavior tier derived from belief)
+- Transmission (belief spread)
+- Investigation (belief correction)
+
+Factions act on belief, not truth.
+
+---
+
+# 2. Entities and Identity
+
+## 2.1 BeliefSubject
+
+Beliefs may reference:
+
+- Player
+- Faction (faction_id)
+- Group (group_id)
+- UnknownActor (explicit subject type)
+
+UnknownActor is a valid subject with bounded metadata.
+It must not be represented as null/None.
+
+## 2.2 Stable Identity Contract
+
+All subject identifiers must be stable and deterministic.
+No runtime memory addresses.
+No random UUIDs.
+No ephemeral keys.
+
+---
+
+# 3. Claim Categories (Launch Set)
+
+1. Violence
+2. Theft
+3. Aid
+4. Betrayal
+5. Alliance
+6. TerritorialViolation
+7. LeadershipImpact
+
+Each category defines:
+
+- default_weight
+- decay_profile
+- propaganda_susceptibility
+- transmission_multiplier
+- disposition_contribution_profile
+- economic_effect_profile
+- aggregation_semantics (required for extensibility)
+
+New categories MUST define all parameters above.
+
+---
+
+# 4. BeliefRecord (Merged Structure)
+
+Keyed by:
+
+(believer_faction_id, subject_ref, category, optional target_ref)
+
+Fields:
+
+- active_confidence (fixed-point integer)
+- recollection_tier (None | Historical | Legendary)
+- last_update_tick
+- source_summary (bounded list)
+- notables (bounded list)
+- contradiction_state (None | Uncertain | Investigating)
+
+## 4.1 Notables
+
+Bounded, deterministically evicted.
+
+Each notable must have:
+
+- deterministic notable_id (e.g., sha256 of canonical event tuple)
+- event_id
+- summary_tag
+- tick
+
+---
+
+# 5. Confidence Model
+
+Fixed-point integer only (e.g., 0–100).
+
+No floats.
+No probabilistic math stored as floats.
+
+Belief is continuous.
+Behavior is discrete.
+
+---
+
+# 6. Decay and Recollection
+
+Active confidence decays deterministically per category.
+
+When crossing below threshold:
+
+- record transitions into recollection_tier.
+- recollection affects tone and bias only.
+- recollection cannot escalate hostility tier by itself.
+
+Recollection is bounded and subject to deterministic eviction.
+
+---
+
+# 7. Disposition (Derived Only)
+
+Disposition tiers are derived from BeliefRecords.
+
+They are NEVER serialized.
+
+Example tiers:
+
+- Unaware
+- Suspicious
+- Convinced
+- Hostile
+
+Thresholds are configurable but clamped.
+
+---
+
+# 8. Attribution and Scapegoating
+
+When an event occurs:
+
+1) Identified actor ⇒ attribute directly.
+2) Unknown actor ⇒ attribute to UnknownActor.
+3) Biased inference ⇒ may attribute to plausible scapegoat.
+
+Scapegoat inference must be deterministic:
+
+- Candidate set must be bounded.
+- Scoring inputs limited to:
+  - prior disposition tier
+  - propaganda bias
+  - rivalry adjacency
+- Tie-breaking deterministic (stable ordering).
+
+No automatic blame assignment.
+
+---
+
+# 9. Transmission Model
+
+Propagation eligibility depends on:
+
+- Geographic radius / region adjacency
+- Diplomatic links
+- Intelligence network strength
+- Geological modifiers
+
+Transmission is executed via queued jobs only.
+
+No synchronous cascading.
+
+---
+
+# 10. Carrier Model
+
+The engine must not require physical courier simulation.
+
+Optional flavor:
+
+- When groups arrive at sites, they may emit transmission events derived from faction beliefs.
+
+Groups are carriers only.
+Groups do not store belief graphs.
+
+---
+
+# 11. Investigation Jobs
+
+Investigation is event-driven and queued.
+
+Each job contains:
+
+- belief_record_key
+- scheduled_tick
+- evidence_hook_tags
+- deterministic_rng_seed
+
+Randomness is permitted only during job creation or resolution and must be:
+
+- deterministically seeded
+- ledgered
+- serialized
+
+No rerolls on save/load.
+
+Investigation may:
+
+- increase confidence
+- decrease confidence
+- change contradiction_state
+- emit secondary rumor tokens
+
+---
+
+# 12. Processing Discipline
+
+All jobs processed via:
+
+- deterministic ordering
+- bounded per-tick caps
+- deferral cursor
+
+Queues must have hard maximum length.
+
+No recursive propagation within a single tick.
+
+---
+
+# 13. Forensics Requirement
+
+When:
+
+- Disposition tier changes
+- Investigation resolves contradiction
+- Scapegoat inference occurs
+
+Emit a concise forensic event token for testing and debugging.
+
+---
+
+# 14. Boundedness Constants
+
+Engine must define hard caps for:
+
+- MAX_BELIEF_RECORDS_PER_FACTION
+- MAX_NOTABLES_PER_RECORD
+- MAX_SOURCE_TOKENS_PER_RECORD
+- MAX_RECOLLECTION_RECORDS_PER_FACTION
+- MAX_TRANSMISSION_JOBS_PER_TICK
+- MAX_INVESTIGATION_JOBS_PER_TICK
+- MAX_DIPLOMACY_LINKS_PER_FACTION
+- MAX_JOB_QUEUE_LENGTH
+
+World configs may override within clamped limits.
+
+---
+
+# 15. Forbidden Anti-Patterns
+
+- Global reputation meter as authority
+- Quest tracking
+- Objective completion flags
+- Instant global knowledge
+- Unbounded belief growth
+- UI display of internal math
+- Floating-point confidence
+
+---
+
+# 16. OSR Alignment Statement
+
+This system enforces:
+
+- Local, fragmented politics
+- Delayed information
+- Fallible institutions
+- Emergent consequences
+- Player inference over UI exposition
+
+The world produces incentives.
+The player chooses.
+
+No narrative rail.
+No quest log.
+No invisible hand.
+
+---
+END
