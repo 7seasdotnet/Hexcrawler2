@@ -3228,11 +3228,8 @@ class RumorPipelineModule(RuleModule):
         ttl_config = sim.state.world.rumor_ttl_config
         if not bool(ttl_config.get("enabled", True)):
             return rumor
-        ttl_by_kind = ttl_config.get("ttl_by_kind", {})
-        if not isinstance(ttl_by_kind, dict):
-            return rumor
-        ttl_ticks = ttl_by_kind.get(rumor.kind)
-        if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
+        ttl_ticks = self._resolve_ttl_ticks(sim=sim, rumor=rumor)
+        if ttl_ticks is None:
             return rumor
         return RumorRecord(
             rumor_id=rumor.rumor_id,
@@ -3243,6 +3240,149 @@ class RumorPipelineModule(RuleModule):
             consumed=rumor.consumed,
             expires_tick=rumor.created_tick + ttl_ticks,
         )
+
+    def _resolve_ttl_ticks(self, *, sim: Simulation, rumor: RumorRecord) -> int | None:
+        ttl_config = sim.state.world.rumor_ttl_config
+        ttl_by_kind = ttl_config.get("ttl_by_kind", {})
+        if not isinstance(ttl_by_kind, dict):
+            return None
+        base_ttl = ttl_by_kind.get(rumor.kind)
+        if isinstance(base_ttl, bool) or not isinstance(base_ttl, int):
+            return None
+
+        site_template_override = self._resolve_site_template_override_ttl(
+            sim=sim,
+            rumor=rumor,
+            ttl_config=ttl_config,
+        )
+        if site_template_override is not None:
+            return site_template_override
+
+        region_override = self._resolve_region_override_ttl(
+            sim=sim,
+            rumor=rumor,
+            ttl_config=ttl_config,
+        )
+        if region_override is not None:
+            return region_override
+        return base_ttl
+
+    def _resolve_site_template_override_ttl(
+        self,
+        *,
+        sim: Simulation,
+        rumor: RumorRecord,
+        ttl_config: dict[str, Any],
+    ) -> int | None:
+        raw_overrides = ttl_config.get("ttl_by_site_template", {})
+        if not isinstance(raw_overrides, dict):
+            return None
+        candidates = self._site_template_candidates(sim=sim, rumor=rumor)
+        if not candidates:
+            return None
+        for template_id in candidates:
+            row = raw_overrides.get(template_id)
+            if not isinstance(row, dict):
+                continue
+            ttl_ticks = row.get(rumor.kind)
+            if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
+                continue
+            return ttl_ticks
+        return None
+
+    def _resolve_region_override_ttl(
+        self,
+        *,
+        sim: Simulation,
+        rumor: RumorRecord,
+        ttl_config: dict[str, Any],
+    ) -> int | None:
+        raw_overrides = ttl_config.get("ttl_by_region", {})
+        if not isinstance(raw_overrides, dict):
+            return None
+        region_id = self._resolve_region_id(sim=sim, rumor=rumor)
+        if region_id is None:
+            return None
+        row = raw_overrides.get(region_id)
+        if not isinstance(row, dict):
+            return None
+        ttl_ticks = row.get(rumor.kind)
+        if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
+            return None
+        return ttl_ticks
+
+    def _site_template_candidates(self, *, sim: Simulation, rumor: RumorRecord) -> list[str]:
+        site_key = self._site_key_dict_or_none(rumor.site_key)
+        if site_key is None:
+            return []
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        template_id = self._normalized_optional_id(site_key.get("template_id"))
+        if template_id is not None:
+            candidates.append(template_id)
+            seen.add(template_id)
+
+        location_ref = self._site_key_location_ref(site_key)
+        if location_ref is None:
+            return candidates
+
+        for site in sim.state.world.get_sites_at_location(location_ref):
+            site_template_id = self._normalized_optional_id(f"site:{site.site_id}")
+            if site_template_id is not None and site_template_id not in seen:
+                seen.add(site_template_id)
+                candidates.append(site_template_id)
+            site_type = self._normalized_optional_id(site.site_type)
+            if site_type is not None and site_type not in seen:
+                seen.add(site_type)
+                candidates.append(site_type)
+        return candidates
+
+    def _resolve_region_id(self, *, sim: Simulation, rumor: RumorRecord) -> str | None:
+        site_key = self._site_key_dict_or_none(rumor.site_key)
+        if site_key is None:
+            return None
+        region_id = self._normalized_optional_id(site_key.get("region_id"))
+        if region_id is not None:
+            return region_id
+        location_ref = self._site_key_location_ref(site_key)
+        if location_ref is None:
+            return None
+        candidates = {
+            self._normalized_optional_id(site.location.get("region_id"))
+            for site in sim.state.world.get_sites_at_location(location_ref)
+        }
+        candidates.discard(None)
+        if not candidates:
+            return None
+        return sorted(candidates)[0]
+
+    def _site_key_dict_or_none(self, site_key_json: str | None) -> dict[str, Any] | None:
+        if not isinstance(site_key_json, str) or not site_key_json:
+            return None
+        try:
+            parsed = json.loads(site_key_json)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        return parsed
+
+    def _site_key_location_ref(self, site_key: dict[str, Any]) -> dict[str, Any] | None:
+        origin_space_id = self._normalized_optional_id(site_key.get("origin_space_id"))
+        origin_coord = site_key.get("origin_coord")
+        if origin_space_id is None or not isinstance(origin_coord, dict):
+            return None
+        return {"space_id": origin_space_id, "coord": origin_coord}
+
+    def _normalized_optional_id(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
 
     def _has_dedupe(self, *, sim: Simulation, dedupe_key: tuple[str, str, str, str]) -> bool:
         kind, site_key, group_id, state_token = dedupe_key
