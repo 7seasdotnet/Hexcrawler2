@@ -253,8 +253,8 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Documentation hardening pass: clarified that campaign-layer simulation operates on a continuous 2D plane and that hexes are derived indexing/presentation lattice coordinates (not canonical campaign physics location).
-- Added explicit anti-lock-in rules preventing campaign-layer hex-step or pseudo-turn cadence assumptions and requiring continuous-plane compatibility for future travel/pursuit/logistics systems.
+- Documentation hardening pass: added explicit projection-agnostic local map architecture rules (top-down/isometric treated as view/editor projection only, never simulation topology/state).
+- Added explicit combat seam and future-constraints guardrails to prevent projection-coupled tactical semantics or camera-angle-dependent combat behavior.
 - No engine code changes were made in this commit (documentation-only update).
 
 

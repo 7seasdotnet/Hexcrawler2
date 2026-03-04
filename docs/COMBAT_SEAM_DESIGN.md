@@ -45,6 +45,11 @@ Canonical target cell reference type used by this seam:
 - The seam does not require `coord` to be a fixed 2-tuple; alternative coordinate schemes (including nested/z-aware forms) remain topology-owned.
 - Engine validates `CellRef` against the referenced space topology at tick `T`.
 
+### Projection-Agnostic Combat Seam
+- Tactical intents target topology coordinates (`CellRef`) and entities, not pixels/screen coordinates.
+- Range, adjacency, occupancy, AoE, and called-shot admissibility/resolution must not assume top-down projection.
+- Animation, sprite-facing presentation, and camera/projection display choices are presentation-only and must not alter simulation outcomes.
+
 Minimal JSON-safe payload:
 
 ```json
