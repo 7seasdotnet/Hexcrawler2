@@ -1,17 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 1A — BeliefRecord substrate storage + deterministic player-only claim ingestion (no queues/propagation).
-- **Next action:** Diegetic Intelligence Slice 1B — transmission/investigation queues (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 1B — TransmissionJob/InvestigationJob queue substrates with deterministic bounded queue processing scaffolding (no propagation/geography/diplomacy semantics).
+- **Next action:** Diegetic Intelligence Slice 1C — propagation modifiers + emission semantics (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added a serialized/hash-covered `world.faction_beliefs` substrate with strict deterministic normalization/validation, default omission discipline, and deterministic bounded eviction per faction for `belief_records`.
-- Added deterministic BeliefRecord helpers in `sim.beliefs` (player/faction/group/unknown_actor subject validation, deterministic `belief_id` hashing, confidence/evidence clamps, deterministic upsert/merge rules).
-- Added `BeliefClaimIngestionModule` and `belief_claim_emitted` event handling for Slice 1A player-only claim ingestion, and hardened tests for event-pipeline-only mutation plus claim-key canonicalization stability.
-
+- Clarified and locked Slice 1B processing semantics: `MAX_JOBS_PER_TICK` is enforced per-faction total budget across both queues, with deterministic transmission-first consumption.
+- Added deterministic safety tests that ensure non-empty queues are never omitted by normalization and that malformed queued jobs are rejected deterministically on load (no silent dropping).
+- Expanded Slice 1B test coverage for combined-queue cap behavior and strict invalid-job load rejection, in addition to existing save/load/hash and delay checks.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -195,6 +194,7 @@
 - `python play.py --load-save saves/canonical_with_artifacts.json`
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1b.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
