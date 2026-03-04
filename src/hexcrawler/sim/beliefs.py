@@ -18,6 +18,9 @@ BELIEF_TRANSMISSION_JOB_ENQUEUE_RESULT_EVENT_TYPE = "belief_transmission_job_enq
 BELIEF_INVESTIGATION_JOB_ENQUEUE_RESULT_EVENT_TYPE = "belief_investigation_job_enqueue_result"
 BELIEF_TRANSMISSION_JOB_COMPLETED_EVENT_TYPE = "belief_transmission_job_completed"
 BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE = "belief_investigation_job_completed"
+BELIEF_UPDATED_FROM_TRANSMISSION_EVENT_TYPE = "belief_updated_from_transmission"
+BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE = "belief_updated_from_investigation"
+BELIEF_JOB_COMPLETION_SKIPPED_DUPLICATE_EVENT_TYPE = "belief_job_completion_skipped_duplicate"
 BELIEF_SUBJECT_KINDS = {"player", "faction", "group", "unknown_actor"}
 MAX_BELIEF_RECORDS_PER_FACTION = 512
 MAX_BELIEF_CLAIM_KEY_LEN = 64
@@ -28,6 +31,9 @@ MAX_BELIEF_CONFIDENCE = 100
 MAX_TRANSMISSION_QUEUE = 256
 MAX_INVESTIGATION_QUEUE = 256
 MAX_JOBS_PER_TICK = 8
+MAX_COMPLETED_JOB_IDS = 1024
+INVESTIGATION_CONFIDENCE_DELTA = 10
+INVESTIGATION_DEFAULT_CONFIDENCE = 50
 
 
 def _normalize_string_id(value: Any, *, field_name: str, max_len: int) -> str:
@@ -208,6 +214,29 @@ def _normalize_investigation_queue(value: Any) -> list[dict[str, Any]]:
     return queue
 
 
+def _normalize_completed_job_ids(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError("completed_job_ids must be an object")
+    ledger: dict[str, int] = {}
+    for job_id in sorted(value):
+        normalized_job_id = _normalize_string_id(job_id, field_name="completed job id", max_len=128)
+        completed_tick = value[job_id]
+        if isinstance(completed_tick, bool) or not isinstance(completed_tick, int) or completed_tick < 0:
+            raise ValueError("completed job tick must be an integer >= 0")
+        ledger[normalized_job_id] = int(completed_tick)
+    _prune_completed_job_ids(ledger)
+    return ledger
+
+
+def _prune_completed_job_ids(ledger: dict[str, int]) -> None:
+    if len(ledger) <= MAX_COMPLETED_JOB_IDS:
+        return
+    ordered = sorted(ledger.items(), key=lambda row: (int(row[1]), str(row[0])))
+    remove_count = len(ledger) - MAX_COMPLETED_JOB_IDS
+    for job_id, _tick in ordered[:remove_count]:
+        ledger.pop(job_id, None)
+
+
 def normalize_belief_record(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("belief record must be an object")
@@ -270,7 +299,7 @@ def _evict_excess_records(records: dict[str, dict[str, Any]]) -> None:
 def normalize_faction_belief_state(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         raise ValueError("faction belief state must be an object")
-    unknown = set(value) - {"belief_records", "transmission_queue", "investigation_queue"}
+    unknown = set(value) - {"belief_records", "transmission_queue", "investigation_queue", "completed_job_ids"}
     if unknown:
         raise ValueError(f"faction belief state has unknown fields: {sorted(unknown)}")
     raw_records = value.get("belief_records", {})
@@ -287,12 +316,15 @@ def normalize_faction_belief_state(value: Any) -> dict[str, dict[str, Any]]:
 
     transmission_queue = _normalize_transmission_queue(value.get("transmission_queue", []))
     investigation_queue = _normalize_investigation_queue(value.get("investigation_queue", []))
+    completed_job_ids = _normalize_completed_job_ids(value.get("completed_job_ids", {}))
 
     result: dict[str, Any] = {"belief_records": belief_records}
     if transmission_queue:
         result["transmission_queue"] = transmission_queue
     if investigation_queue:
         result["investigation_queue"] = investigation_queue
+    if completed_job_ids:
+        result["completed_job_ids"] = completed_job_ids
     return result
 
 
@@ -307,7 +339,12 @@ def normalize_world_faction_beliefs(value: Any) -> dict[str, dict[str, Any]]:
         if normalized_faction_id in normalized:
             raise ValueError("faction_beliefs keys must be unique after normalization")
         state = normalize_faction_belief_state(value[faction_id])
-        if state.get("belief_records") or state.get("transmission_queue") or state.get("investigation_queue"):
+        if (
+            state.get("belief_records")
+            or state.get("transmission_queue")
+            or state.get("investigation_queue")
+            or state.get("completed_job_ids")
+        ):
             normalized[normalized_faction_id] = state
     return normalized
 
@@ -427,6 +464,62 @@ def upsert_player_claim_belief(
     return belief_id
 
 
+def _upsert_claim_belief_record(
+    *,
+    faction_beliefs: dict[str, dict[str, Any]],
+    faction_id: str,
+    subject: dict[str, str | None],
+    claim_key: str,
+    confidence_delta: int,
+    tick: int,
+    evidence_increment: int,
+    default_confidence: int,
+    apply_delta_on_create: bool,
+) -> str:
+    normalized_faction_id = normalize_faction_id(faction_id)
+    normalized_claim_key = normalize_claim_key(claim_key)
+    normalized_subject = normalize_belief_subject(subject)
+    if isinstance(confidence_delta, bool) or not isinstance(confidence_delta, int):
+        raise ValueError("confidence_delta must be an integer")
+    if isinstance(evidence_increment, bool) or not isinstance(evidence_increment, int) or evidence_increment < 0:
+        raise ValueError("evidence_increment must be an integer >= 0")
+    if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+        raise ValueError("tick must be an integer >= 0")
+
+    belief_id = compute_belief_id(
+        faction_id=normalized_faction_id,
+        subject=normalized_subject,
+        claim_key=normalized_claim_key,
+    )
+    faction_state = faction_beliefs.setdefault(normalized_faction_id, {"belief_records": {}})
+    belief_records: dict[str, dict[str, Any]] = faction_state.setdefault("belief_records", {})
+    existing = belief_records.get(belief_id)
+
+    if existing is None:
+        created_confidence = clamp_confidence(default_confidence)
+        if apply_delta_on_create:
+            created_confidence = clamp_confidence(created_confidence + confidence_delta)
+        belief_records[belief_id] = {
+            "belief_id": belief_id,
+            "subject": normalized_subject,
+            "claim_key": normalized_claim_key,
+            "confidence": created_confidence,
+            "first_seen_tick": tick,
+            "last_updated_tick": tick,
+            "evidence_count": clamp_evidence_count(max(1, evidence_increment)),
+        }
+    else:
+        belief_records[belief_id] = {
+            **existing,
+            "confidence": clamp_confidence(int(existing["confidence"]) + confidence_delta),
+            "last_updated_tick": tick,
+            "evidence_count": clamp_evidence_count(int(existing["evidence_count"]) + evidence_increment),
+        }
+
+    _evict_excess_records(belief_records)
+    return belief_id
+
+
 class BeliefClaimIngestionModule(RuleModule):
     """Slice 1A: deterministic player-only claim ingestion into faction belief substrate."""
 
@@ -470,6 +563,12 @@ class BeliefJobQueueModule(RuleModule):
             return
         if event.event_type == BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE:
             self._handle_enqueue(sim=sim, event=event, queue_kind="investigation")
+            return
+        if event.event_type == BELIEF_TRANSMISSION_JOB_COMPLETED_EVENT_TYPE:
+            self._handle_completion(sim=sim, event=event, queue_kind="transmission")
+            return
+        if event.event_type == BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE:
+            self._handle_completion(sim=sim, event=event, queue_kind="investigation")
 
     def on_tick_end(self, sim: Simulation, tick: int) -> None:
         for faction_id in sorted(sim.state.world.faction_beliefs):
@@ -523,6 +622,7 @@ class BeliefJobQueueModule(RuleModule):
                 params={
                     "job_id": str(completed_job["job_id"]),
                     "faction_id": faction_id,
+                    "claim": dict(completed_job["claim"]),
                     "tick": tick + 1,
                 },
             )
@@ -532,9 +632,95 @@ class BeliefJobQueueModule(RuleModule):
             not faction_state.get("belief_records")
             and not faction_state.get("transmission_queue")
             and not faction_state.get("investigation_queue")
+            and not faction_state.get("completed_job_ids")
         ):
             sim.state.world.faction_beliefs.pop(faction_id, None)
         return completed
+
+    def _handle_completion(self, *, sim: Simulation, event: SimEvent, queue_kind: str) -> None:
+        params = event.params
+        try:
+            faction_id = normalize_faction_id(params.get("faction_id"))
+            job_id = _normalize_string_id(params.get("job_id"), field_name="job_id", max_len=128)
+            claim = _normalize_claim_payload(params.get("claim"))
+        except (TypeError, ValueError):
+            return
+
+        faction_state = sim.state.world.faction_beliefs.setdefault(faction_id, {"belief_records": {}})
+        completed_job_ids: dict[str, int] = faction_state.setdefault("completed_job_ids", {})
+        if job_id in completed_job_ids:
+            self._remove_job_id_from_queue(faction_state=faction_state, queue_kind=queue_kind, job_id=job_id)
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_JOB_COMPLETION_SKIPPED_DUPLICATE_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "job_id": job_id,
+                    "tick": event.tick,
+                },
+            )
+            return
+
+        if queue_kind == "transmission":
+            belief_id = _upsert_claim_belief_record(
+                faction_beliefs=sim.state.world.faction_beliefs,
+                faction_id=faction_id,
+                subject=dict(claim["subject"]),
+                claim_key=str(claim["claim_key"]),
+                confidence_delta=int(claim["confidence"]),
+                tick=event.tick,
+                evidence_increment=1,
+                default_confidence=0,
+                apply_delta_on_create=True,
+            )
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_UPDATED_FROM_TRANSMISSION_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "belief_id": belief_id,
+                    "claim_key": claim["claim_key"],
+                    "tick": event.tick,
+                    "job_id": job_id,
+                },
+            )
+        else:
+            belief_id = _upsert_claim_belief_record(
+                faction_beliefs=sim.state.world.faction_beliefs,
+                faction_id=faction_id,
+                subject=dict(claim["subject"]),
+                claim_key=str(claim["claim_key"]),
+                confidence_delta=INVESTIGATION_CONFIDENCE_DELTA,
+                tick=event.tick,
+                evidence_increment=1,
+                default_confidence=INVESTIGATION_DEFAULT_CONFIDENCE,
+                apply_delta_on_create=True,
+            )
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "belief_id": belief_id,
+                    "claim_key": claim["claim_key"],
+                    "tick": event.tick,
+                    "job_id": job_id,
+                },
+            )
+
+        completed_job_ids[job_id] = int(event.tick)
+        _prune_completed_job_ids(completed_job_ids)
+
+    def _remove_job_id_from_queue(self, *, faction_state: dict[str, Any], queue_kind: str, job_id: str) -> None:
+        queue_key = "transmission_queue" if queue_kind == "transmission" else "investigation_queue"
+        queue = faction_state.get(queue_key)
+        if not isinstance(queue, list) or not queue:
+            return
+        filtered = [row for row in queue if str(row.get("job_id")) != job_id]
+        if filtered:
+            faction_state[queue_key] = filtered
+        else:
+            faction_state.pop(queue_key, None)
 
     def _handle_enqueue(self, *, sim: Simulation, event: SimEvent, queue_kind: str) -> None:
         params = event.params

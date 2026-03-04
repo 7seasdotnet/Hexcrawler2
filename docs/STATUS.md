@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 1B — TransmissionJob/InvestigationJob queue substrates with deterministic bounded queue processing scaffolding (no propagation/geography/diplomacy semantics).
-- **Next action:** Diegetic Intelligence Slice 1C — propagation modifiers + emission semantics (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 1C — queue completion semantics now deterministically mutate serialized/hash-covered `belief_records` with exactly-once completion ledgers (no propagation/geography/diplomacy semantics).
+- **Next action:** Diegetic Intelligence Slice 1D — propagation modifiers / geography / diplomacy (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Clarified and locked Slice 1B processing semantics: `MAX_JOBS_PER_TICK` is enforced per-faction total budget across both queues, with deterministic transmission-first consumption.
-- Added deterministic safety tests that ensure non-empty queues are never omitted by normalization and that malformed queued jobs are rejected deterministically on load (no silent dropping).
-- Expanded Slice 1B test coverage for combined-queue cap behavior and strict invalid-job load rejection, in addition to existing save/load/hash and delay checks.
+- Hardened Slice 1C duplicate-completion semantics: duplicate completion now deterministically removes matching queued jobs (if present), emits duplicate-skip forensics, and preserves exactly-once belief mutation.
+- Preserved serialized/hash-covered `completed_job_ids` idempotence ledgers with deterministic bounded pruning (oldest tick first, lexical `job_id` tiebreak), preventing duplicate completion mutation across replay/save-load/restarts.
+- Expanded Slice 1C deterministic tests to cover queue cleanup on duplicate completion and explicit fixed-point confidence-scale/clamp behavior (0–100) end-to-end.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -195,6 +195,7 @@
   - Move briefly, press `F5`, then quit.
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1b.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1c.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
