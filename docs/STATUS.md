@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M22 — data-driven rumor TTL overrides per site template / campaign region (deterministic, no RNG).
-- **Next action:** Phase 6D-M23 — rumor propagation hardening (TBD).
+- **Current phase:** Diegetic Intelligence Slice 1A — BeliefRecord substrate storage + deterministic player-only claim ingestion (no queues/propagation).
+- **Next action:** Diegetic Intelligence Slice 1B — transmission/investigation queues (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Extended `world.rumor_ttl_config` normalization/validation with deterministic optional override maps: `ttl_by_site_template` and `ttl_by_region` (bounded by existing M21 TTL clamps and default-omission semantics).
-- Updated `RumorPipelineModule` TTL resolution precedence to `site-template > region > per-kind default` using deterministic context resolution from rumor `site_key` / world site metadata without introducing RNG.
-- Strengthened M22 tests for creation-time TTL immutability (`expires_tick` not recomputed), deterministic override-key normalization/duplicate rejection, region-override no-op safety, and serialization/hash save-load stability.
+- Added a serialized/hash-covered `world.faction_beliefs` substrate with strict deterministic normalization/validation, default omission discipline, and deterministic bounded eviction per faction for `belief_records`.
+- Added deterministic BeliefRecord helpers in `sim.beliefs` (player/faction/group/unknown_actor subject validation, deterministic `belief_id` hashing, confidence/evidence clamps, deterministic upsert/merge rules).
+- Added `BeliefClaimIngestionModule` and `belief_claim_emitted` event handling for Slice 1A player-only claim ingestion, and hardened tests for event-pipeline-only mutation plus claim-key canonicalization stability.
 
 
 ## What Exists (folders / entry points)
@@ -42,6 +42,8 @@
   - World spaces substrate (`WorldState.spaces`) with deterministic canonical serialization and back-compat migration from legacy top-level overworld payloads into `spaces["overworld"]`.
   - World sites substrate (`WorldState.sites`) with deterministic canonical serialization/hash coverage, legacy load default (`{}`), and deterministic location query helper (`WorldState.get_sites_at_location(...)`).
   - World groups substrate (`WorldState.groups`) with deterministic canonical serialization/hash coverage, strict JSON-safe validation, and deterministic legacy load default (`{}`).
+  - Diegetic Intelligence Slice 1A substrate: `WorldState.faction_beliefs` stores deterministic faction-scoped `belief_records` keyed by stable `belief_id` with strict validation and deterministic cap eviction.
+  - New belief ingestion seam (`BeliefClaimIngestionModule`) consumes `belief_claim_emitted` events and applies deterministic player-only claim upserts (no transmission/investigation queues).
   - Opaque `LocationRef` substrate (`hexcrawler.sim.location`) now includes `space_id` (defaults to `"overworld"` for legacy payloads) while preserving existing `topology_type` + `coord` contracts.
   - Space substrate now serializes explicit `role` metadata (`campaign`/`local`); topology is no longer used as tactical-permission proxy.
   - Deterministic `transition_space` command seam that records `space_transition` forensic trace entries and rejects unknown `space_id` targets deterministically.
