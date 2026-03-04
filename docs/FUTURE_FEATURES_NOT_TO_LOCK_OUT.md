@@ -54,6 +54,20 @@ Do not implement future features here; preserve feasibility only.
 - **Must support deterministic save migrations across schema versions without requiring ad-hoc one-off migration code paths outside canonical loaders.**
   - Why it matters: centralized migrations preserve reproducibility and reduce compatibility regressions.
 
+
+## Local Map Projection Flexibility (Top-down and Isometric)
+The engine must preserve local-space presentation flexibility without rewriting simulation rules:
+
+- Must support multiple projections selectable per local-space template (for example: top-down or isometric) while preserving identical simulation semantics.
+- Must support interchangeable tile/sprite packs with no simulation code or rules changes.
+- Must support per-projection renderer implementations that consume the same authoritative simulation state/contracts.
+- Must support editor-controlled sprite anchor points and projection tuning as pure presentation metadata.
+- Must support isometric rendering for local/dungeon spaces while the overworld campaign layer remains continuous-plane simulation.
+
+Do not:
+- store projection settings in hash-covered world/simulation state.
+- make combat rules, outcomes, or admissibility depend on camera angle/projection.
+
 ## Continuous Campaign Plane Compatibility
 The engine must remain compatible with a Mount-and-Blade style campaign layer:
 

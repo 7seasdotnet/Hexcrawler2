@@ -72,6 +72,9 @@ Goal: content expansion becomes data entry + balance, not new code.
 - Hex membership is a derived index, not the canonical location.
 - Any new system that depends on hex adjacency as the fundamental spatial metric must be justified in `docs/ARCHITECTURE.md` before implementation.
 
+- Any PR that introduces top-down-only assumptions, screen-space logic in simulation, or projection-coupled combat semantics must be rejected unless `docs/ARCHITECTURE.md` is updated first with a justified contract change.
+- Projection/rendering choices must remain view/editor layer concerns.
+
 
 ## Mandatory Pre-Implementation Review
 Before implementing changes, review these authoritative documents:

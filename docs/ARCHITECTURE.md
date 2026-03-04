@@ -46,6 +46,22 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Hex transitions may trigger events but must not define simulation cadence.
 - **Forward-Compatibility:** Roads, terrain costs, pursuit, escape, and logistics systems must operate on the continuous campaign plane.
 
+## 2D) Local Projection Independence (Architectural Rule)
+- **Contract:** Projection is not topology.
+  - A projection (top-down, isometric, or other render projection) is a rendering transform only.
+  - Simulation operates in topology-owned coordinate space (`CellRef` coordinates), never in screen space.
+- **Contract:** Canonical state is projection-agnostic.
+  - Persistent simulation state must not encode camera angle, sprite-orientation display rules, screen transforms, or per-frame interpolation artifacts.
+  - Projection configuration belongs to content/editor configuration or viewer settings and must not affect `world_hash`/`simulation_hash`.
+- **Contract:** Facing/LOS/coverage must not be camera-coupled.
+  - If facing exists, it is defined in topology terms via the space/topology-owned discrete direction set.
+  - Renderers may visualize facing differently per projection, but simulation semantics and outcomes must remain invariant.
+- **Contract:** Rendering is strictly read-only.
+  - Projection choice must never become a command input requirement.
+  - Viewer/editor rendering layers must not mutate simulation state directly.
+
+**Anti-lock-in warning:** Do not introduce rules that assume a north-up screen or a top-down-only local map presentation. Do not encode isometric-specific offsets (or any projection-specific pixel transform) into simulation coordinates.
+
 ## 3) Time Contract
 - **Contract:** Authoritative simulation advances only via `advance_ticks(n)` and `advance_days(n)`.
 - **Contract:** Tick duration is an in-world quantum; wall-clock stepping/speed controls are viewer concerns.
