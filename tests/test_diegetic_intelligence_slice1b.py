@@ -170,7 +170,9 @@ def test_slice1b_max_jobs_per_tick_is_per_faction_total_transmission_first() -> 
 
     assert len(transmission_completed) == MAX_JOBS_PER_TICK
     assert investigation_completed == []
-    assert "wolves" not in sim.state.world.faction_beliefs
+    wolves_state = sim.state.world.faction_beliefs["wolves"]
+    assert wolves_state.get("transmission_queue") is None
+    assert wolves_state.get("investigation_queue") is None
 
 
 def test_slice1b_load_rejects_invalid_job_payload_instead_of_dropping() -> None:
