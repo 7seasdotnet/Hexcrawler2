@@ -96,6 +96,156 @@ def test_m21_ttl_not_applied_when_disabled() -> None:
     assert all(row.get("expires_tick") is None for row in sim.state.world.rumors)
 
 
+def test_m22_site_template_override_applies_with_precedence() -> None:
+    sim = _build_sim()
+    sim.state.world.rumor_ttl_config = {
+        "enabled": True,
+        "ttl_by_kind": {
+            "group_arrival": 300,
+            "claim_opportunity": 400,
+            "site_claim": 500,
+        },
+        "ttl_by_region": {
+            "frontier": {
+                "group_arrival": 333,
+            }
+        },
+        "ttl_by_site_template": {
+            "dungeon": {
+                "group_arrival": 111,
+            }
+        },
+        "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+    }
+    sim.state.world.sites["camp_01"].location["region_id"] = "frontier"
+
+    _move_to_site(sim)
+
+    arrival = next(row for row in sim.state.world.rumors if row["kind"] == "group_arrival")
+    assert arrival["expires_tick"] == arrival["created_tick"] + 111
+
+
+def test_m22_region_override_is_ignored_without_resolvable_region_context() -> None:
+    sim = _build_sim()
+    sim.state.world.rumor_ttl_config = {
+        "enabled": True,
+        "ttl_by_kind": {
+            "group_arrival": 300,
+            "claim_opportunity": 400,
+            "site_claim": 500,
+        },
+        "ttl_by_region": {
+            "frontier": {
+                "site_claim": 123,
+            }
+        },
+        "ttl_by_site_template": {},
+        "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+    }
+
+    sim.schedule_event_at(
+        tick=0,
+        event_type=CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE,
+        params={
+            "group_id": "caravan",
+            "site_key": {
+                "origin_space_id": "overworld",
+                "origin_coord": {"q": 9, "r": 9},
+                "template_id": "site:missing_site",
+            },
+        },
+    )
+    sim.advance_ticks(1)
+
+    rumor = sim.state.world.rumors[0]
+    assert rumor["kind"] == "site_claim"
+    assert rumor["expires_tick"] == rumor["created_tick"] + 500
+
+
+def test_m22_expires_tick_is_not_recomputed_after_creation_when_config_changes() -> None:
+    sim = _build_sim()
+    sim.state.world.rumor_ttl_config = {
+        "enabled": True,
+        "ttl_by_kind": {
+            "group_arrival": 3,
+            "claim_opportunity": 4,
+            "site_claim": 5,
+        },
+        "ttl_by_site_template": {},
+        "ttl_by_region": {},
+        "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+    }
+    _move_to_site(sim)
+
+    created = next(row for row in sim.state.world.rumors if row["kind"] == "group_arrival")
+    original_expires_tick = int(created["expires_tick"])
+
+    sim.state.world.rumor_ttl_config = {
+        "enabled": True,
+        "ttl_by_kind": {
+            "group_arrival": 999,
+            "claim_opportunity": 999,
+            "site_claim": 999,
+        },
+        "ttl_by_site_template": {},
+        "ttl_by_region": {},
+        "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+    }
+    same_rumor = next(row for row in sim.state.world.rumors if row["rumor_id"] == created["rumor_id"])
+    assert same_rumor["expires_tick"] == original_expires_tick
+
+
+def test_m22_override_key_normalization_is_trimmed_and_deterministic() -> None:
+    world = WorldState.from_dict(
+        {
+            "topology_type": "custom",
+            "topology_params": {},
+            "hexes": [],
+            "rumor_ttl_config": {
+                "enabled": True,
+                "ttl_by_kind": {
+                    "group_arrival": 10,
+                    "claim_opportunity": 11,
+                    "site_claim": 12,
+                },
+                "ttl_by_site_template": {
+                    "  dungeon  ": {"group_arrival": 9},
+                },
+                "ttl_by_region": {
+                    "  frontier  ": {"group_arrival": 8},
+                },
+                "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+            },
+        }
+    )
+
+    assert "dungeon" in world.rumor_ttl_config["ttl_by_site_template"]
+    assert "frontier" in world.rumor_ttl_config["ttl_by_region"]
+
+
+def test_m22_override_key_normalization_rejects_post_trim_duplicates() -> None:
+    payload = {
+        "topology_type": "custom",
+        "topology_params": {},
+        "hexes": [],
+        "rumor_ttl_config": {
+            "enabled": True,
+            "ttl_by_kind": {
+                "group_arrival": 10,
+                "claim_opportunity": 11,
+                "site_claim": 12,
+            },
+            "ttl_by_site_template": {
+                "dungeon": {"group_arrival": 9},
+                " dungeon ": {"group_arrival": 8},
+            },
+            "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
+        },
+    }
+    with pytest.raises(ValueError, match="unique after normalization"):
+        _ = WorldState.from_dict(payload)
+
+
 @pytest.mark.parametrize(
     "config, error_match",
     [
@@ -176,10 +326,25 @@ def test_m21_default_config_omission_and_hash_coverage_semantics() -> None:
             "claim_opportunity": 4000,
             "site_claim": 9999,
         },
+        "ttl_by_site_template": {
+            "dungeon": {
+                "site_claim": 9998,
+            }
+        },
+        "ttl_by_region": {
+            "frontier": {
+                "site_claim": 9997,
+            }
+        },
         "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
     }
     payload = defaulted_world.to_dict()
     assert "rumor_ttl_config" in payload
     assert payload["rumor_ttl_config"]["ttl_by_kind"]["site_claim"] == 9999
+    assert payload["rumor_ttl_config"]["ttl_by_site_template"]["dungeon"]["site_claim"] == 9998
+    assert payload["rumor_ttl_config"]["ttl_by_region"]["frontier"]["site_claim"] == 9997
     assert world_hash(defaulted_world) != world_hash(baseline_world)
 
+    reloaded = WorldState.from_dict(payload)
+    assert reloaded.rumor_ttl_config == defaulted_world.rumor_ttl_config
+    assert world_hash(reloaded) == world_hash(defaulted_world)

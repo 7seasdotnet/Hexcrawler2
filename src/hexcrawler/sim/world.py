@@ -32,8 +32,63 @@ DEFAULT_RUMOR_TTL_BY_KIND = {
 DEFAULT_RUMOR_TTL_CONFIG = {
     "enabled": True,
     "ttl_by_kind": dict(DEFAULT_RUMOR_TTL_BY_KIND),
+    "ttl_by_site_template": {},
+    "ttl_by_region": {},
     "max_ttl_ticks": MAX_RUMOR_TTL_TICKS,
 }
+
+
+def _normalize_rumor_ttl_override_id(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} keys must be strings")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} keys must be non-empty strings")
+    return normalized
+
+
+def _normalize_rumor_ttl_by_kind(
+    value: Any,
+    *,
+    field_name: str,
+    max_ttl_ticks: int,
+) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    ttl_by_kind: dict[str, int] = {}
+    for raw_kind in sorted(value):
+        if raw_kind not in RUMOR_KINDS:
+            raise ValueError(f"{field_name} has unknown rumor kind")
+        ttl_ticks = value[raw_kind]
+        if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
+            raise ValueError(f"{field_name} values must be integers")
+        if ttl_ticks < 0:
+            raise ValueError(f"{field_name} values must be >= 0")
+        if ttl_ticks > max_ttl_ticks:
+            raise ValueError(f"{field_name} value exceeds max_ttl_ticks")
+        ttl_by_kind[str(raw_kind)] = ttl_ticks
+    return ttl_by_kind
+
+
+def _normalize_rumor_ttl_overrides(
+    value: Any,
+    *,
+    field_name: str,
+    max_ttl_ticks: int,
+) -> dict[str, dict[str, int]]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    overrides: dict[str, dict[str, int]] = {}
+    for raw_key in sorted(value):
+        normalized_key = _normalize_rumor_ttl_override_id(raw_key, field_name=field_name)
+        if normalized_key in overrides:
+            raise ValueError(f"{field_name} keys must be unique after normalization")
+        overrides[normalized_key] = _normalize_rumor_ttl_by_kind(
+            value[raw_key],
+            field_name=f"{field_name}[{normalized_key}]",
+            max_ttl_ticks=max_ttl_ticks,
+        )
+    return overrides
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -145,7 +200,7 @@ def _normalize_rumor_records(raw_rumors: list[Any]) -> list[dict[str, Any]]:
 def _normalize_rumor_ttl_config(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("rumor_ttl_config must be an object")
-    allowed = {"enabled", "ttl_by_kind", "max_ttl_ticks"}
+    allowed = {"enabled", "ttl_by_kind", "ttl_by_site_template", "ttl_by_region", "max_ttl_ticks"}
     unknown = set(value) - allowed
     if unknown:
         raise ValueError("rumor_ttl_config has unknown fields")
@@ -162,25 +217,27 @@ def _normalize_rumor_ttl_config(value: Any) -> dict[str, Any]:
     if max_ttl_ticks_raw > MAX_RUMOR_TTL_TICKS:
         raise ValueError("rumor_ttl_config.max_ttl_ticks exceeds MAX_RUMOR_TTL_TICKS")
 
-    ttl_by_kind_raw = value.get("ttl_by_kind", DEFAULT_RUMOR_TTL_BY_KIND)
-    if not isinstance(ttl_by_kind_raw, dict):
-        raise ValueError("rumor_ttl_config.ttl_by_kind must be an object")
-    ttl_by_kind: dict[str, int] = {}
-    for kind in sorted(ttl_by_kind_raw):
-        if kind not in RUMOR_KINDS:
-            raise ValueError("rumor_ttl_config.ttl_by_kind has unknown rumor kind")
-        ttl_ticks = ttl_by_kind_raw[kind]
-        if isinstance(ttl_ticks, bool) or not isinstance(ttl_ticks, int):
-            raise ValueError("rumor_ttl_config.ttl_by_kind values must be integers")
-        if ttl_ticks < 0:
-            raise ValueError("rumor_ttl_config.ttl_by_kind values must be >= 0")
-        if ttl_ticks > max_ttl_ticks_raw:
-            raise ValueError("rumor_ttl_config.ttl_by_kind value exceeds max_ttl_ticks")
-        ttl_by_kind[str(kind)] = ttl_ticks
+    ttl_by_kind = _normalize_rumor_ttl_by_kind(
+        value.get("ttl_by_kind", DEFAULT_RUMOR_TTL_BY_KIND),
+        field_name="rumor_ttl_config.ttl_by_kind",
+        max_ttl_ticks=max_ttl_ticks_raw,
+    )
+    ttl_by_site_template = _normalize_rumor_ttl_overrides(
+        value.get("ttl_by_site_template", {}),
+        field_name="rumor_ttl_config.ttl_by_site_template",
+        max_ttl_ticks=max_ttl_ticks_raw,
+    )
+    ttl_by_region = _normalize_rumor_ttl_overrides(
+        value.get("ttl_by_region", {}),
+        field_name="rumor_ttl_config.ttl_by_region",
+        max_ttl_ticks=max_ttl_ticks_raw,
+    )
 
     return {
         "enabled": enabled,
         "ttl_by_kind": ttl_by_kind,
+        "ttl_by_site_template": ttl_by_site_template,
+        "ttl_by_region": ttl_by_region,
         "max_ttl_ticks": max_ttl_ticks_raw,
     }
 

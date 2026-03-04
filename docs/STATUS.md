@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 6D-M21 — data-driven rumor TTL defaults by kind (deterministic, no RNG).
-- **Next action:** Phase 6D-M22 — data-driven TTL per site template / campaign region.
+- **Current phase:** Phase 6D-M22 — data-driven rumor TTL overrides per site template / campaign region (deterministic, no RNG).
+- **Next action:** Phase 6D-M23 — rumor propagation hardening (TBD).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added strict, hash-covered `world.rumor_ttl_config` normalization/defaulting with per-kind TTL defaults and deterministic validation bounds.
-- Updated `RumorPipelineModule` to deterministically apply `expires_tick = created_tick + ttl_ticks` at rumor creation when no explicit expiration exists.
-- Added focused M21 tests for TTL application, disabled policy behavior, strict config validation, save/load hash stability, decay integration, and default-config omission/hash-coverage semantics.
+- Extended `world.rumor_ttl_config` normalization/validation with deterministic optional override maps: `ttl_by_site_template` and `ttl_by_region` (bounded by existing M21 TTL clamps and default-omission semantics).
+- Updated `RumorPipelineModule` TTL resolution precedence to `site-template > region > per-kind default` using deterministic context resolution from rumor `site_key` / world site metadata without introducing RNG.
+- Strengthened M22 tests for creation-time TTL immutability (`expires_tick` not recomputed), deterministic override-key normalization/duplicate rejection, region-override no-op safety, and serialization/hash save-load stability.
 
 
 ## What Exists (folders / entry points)
