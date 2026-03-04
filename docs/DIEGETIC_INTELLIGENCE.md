@@ -279,9 +279,33 @@ World configs may override within clamped limits.
 
 ---
 
-# 15. Forbidden Anti-Patterns
+# 15. Authored Stimulus Integration Rule
+
+Authored content (editor/world design) may introduce political “initial conditions” and “shocks” for storytelling.
+
+Contract:
+
+- Authored stimuli MUST enter the simulation only as standard claim-bearing events (i.e., the same ClaimCategory/BeliefRecord pathway used by emergent simulation events).
+- Authored stimuli MUST be enqueued into the same deterministic, bounded processing system (TransmissionJob / InvestigationJob where applicable).
+- Authored stimuli MUST respect delay, geography/topology gating, decay, recollection, contradiction handling, and derived-only disposition.
+
+Prohibited shortcuts:
+
+- No direct mutation of disposition tiers (disposition is derived-only).
+- No bypass of transmission/investigation queues (no synchronous global propagation).
+- No hidden objective/quest completion flags or non-diegetic tracking state.
+- No “force hostile/friendly” switches outside belief thresholds.
+
+Rationale:
+
+- Enables OSR-compatible storytelling via world-authored political setup while preserving the engine’s simulation physics and invariants.
+
+---
+
+# 16. Forbidden Anti-Patterns
 
 - Global reputation meter as authority
+- Direct disposition forcing or tier mutation
 - Quest tracking
 - Objective completion flags
 - Instant global knowledge
@@ -291,7 +315,7 @@ World configs may override within clamped limits.
 
 ---
 
-# 16. OSR Alignment Statement
+# 17. OSR Alignment Statement
 
 This system enforces:
 
