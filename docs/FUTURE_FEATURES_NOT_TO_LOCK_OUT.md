@@ -53,3 +53,15 @@ Do not implement future features here; preserve feasibility only.
 
 - **Must support deterministic save migrations across schema versions without requiring ad-hoc one-off migration code paths outside canonical loaders.**
   - Why it matters: centralized migrations preserve reproducibility and reduce compatibility regressions.
+
+## Continuous Campaign Plane Compatibility
+The engine must remain compatible with a Mount-and-Blade style campaign layer:
+
+- continuous entity movement
+- variable speeds
+- pursuit/escape mechanics
+- travel time independent of hex boundaries
+- terrain and road modifiers
+- distance calculations not tied to hex adjacency
+
+Hexes remain an authoring lattice and presentation layer.

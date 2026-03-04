@@ -29,6 +29,23 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** This role boundary does not lock out future zoom/refinement or nested-hex workflows on campaign maps; any zoom implementation must preserve campaign vs local role separation.
 - **Canonical Decision:** Earlier internal exploration considered overworld combat geometry execution in campaign spaces; Model B (role-separated campaign/local execution) is now canonical.
 
+## 2B) Continuous Campaign Plane (Architectural Rule)
+- **Contract:** The campaign simulation operates on a continuous 2D plane.
+- **Contract:** Entity position is stored as continuous coordinates.
+- **Contract:** Hex coordinates are **derived indices** used for content placement, editor tooling, spatial partitioning, cadence/event triggers, and player-facing map presentation.
+- **Contract:** Hexes are **not** the primary physics layer.
+- **Contract:** Movement, pursuit, and campaign interactions operate on continuous positions; hex membership is computed from position and is never the authoritative location of an entity.
+- **Contract:** Systems must not assume meaningful movement only occurs at hex boundaries.
+- **Rationale:** Hexes remain first-class for OSR hexcrawl content organization, editor usability, and marketing/aesthetic alignment with the hexcrawl genre, while simulation logic remains agnostic to the hex grid as a physics substrate.
+
+## 2C) Hex Grid Anti-Lock-In Rule
+- **Contract:** Continuous position is canonical.
+- **Contract:** Hex coordinates are derived and must not be treated as the source of truth.
+- **Contract:** Systems must not require hex-targeting if entity or coordinate targeting is possible.
+- **Contract:** Distance and travel time must not be globally defined as hex distance.
+- **Contract:** Hex transitions may trigger events but must not define simulation cadence.
+- **Forward-Compatibility:** Roads, terrain costs, pursuit, escape, and logistics systems must operate on the continuous campaign plane.
+
 ## 3) Time Contract
 - **Contract:** Authoritative simulation advances only via `advance_ticks(n)` and `advance_days(n)`.
 - **Contract:** Tick duration is an in-world quantum; wall-clock stepping/speed controls are viewer concerns.
