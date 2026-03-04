@@ -253,9 +253,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Viewer Rumors panel now supports a `Mode` toggle: `All` uses `list_rumors_intent`, while `Top` uses `select_rumors_intent` with fixed `seed_tag="top"`.
-- Added Top-mode `k` selector (`10/20/50`) and cursor navigation wiring via outcome-buffer cursors, with viewer-local mode/cursor state only.
-- Added focused viewer/controller tests for Top-mode command issuance, Top-mode read-only substrate behavior, and deterministic mode toggling back to All-mode list queries.
+- Documentation hardening pass: clarified that campaign-layer simulation operates on a continuous 2D plane and that hexes are derived indexing/presentation lattice coordinates (not canonical campaign physics location).
+- Added explicit anti-lock-in rules preventing campaign-layer hex-step or pseudo-turn cadence assumptions and requiring continuous-plane compatibility for future travel/pursuit/logistics systems.
+- No engine code changes were made in this commit (documentation-only update).
 
 
 ## Troubleshooting

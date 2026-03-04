@@ -67,6 +67,12 @@ Goal: content expansion becomes data entry + balance, not new code.
 - Determinism contracts in docs/ARCHITECTURE.md are authoritative and must not be weakened without explicit approval and documentation.
 
 
+## Architecture Discipline Guardrail (Campaign Plane)
+- Contributors must not introduce mechanics that assume hex-step movement or turn-based cadence at the campaign layer.
+- Hex membership is a derived index, not the canonical location.
+- Any new system that depends on hex adjacency as the fundamental spatial metric must be justified in `docs/ARCHITECTURE.md` before implementation.
+
+
 ## Mandatory Pre-Implementation Review
 Before implementing changes, review these authoritative documents:
 - `docs/ARCHITECTURE.md`
