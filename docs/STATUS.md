@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 1C — queue completion semantics now deterministically mutate serialized/hash-covered `belief_records` with exactly-once completion ledgers (no propagation/geography/diplomacy semantics).
-- **Next action:** Diegetic Intelligence Slice 1D — propagation modifiers / geography / diplomacy (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 1D — deterministic enqueue-time delay/confidence modifiers for belief jobs (no propagation/geography/diplomacy semantics).
+- **Next action:** Diegetic Intelligence Slice 1E — propagation/emission expansion (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Hardened Slice 1C duplicate-completion semantics: duplicate completion now deterministically removes matching queued jobs (if present), emits duplicate-skip forensics, and preserves exactly-once belief mutation.
-- Preserved serialized/hash-covered `completed_job_ids` idempotence ledgers with deterministic bounded pruning (oldest tick first, lexical `job_id` tiebreak), preventing duplicate completion mutation across replay/save-load/restarts.
-- Expanded Slice 1C deterministic tests to cover queue cleanup on duplicate completion and explicit fixed-point confidence-scale/clamp behavior (0–100) end-to-end.
+- Completed Diegetic Intelligence Slice 1D enqueue-time modifiers: transmission/investigation enqueue now deterministically compute `not_before_tick` from base delays plus optional site/region precedence modifiers, with delay clamped to bounded ticks.
+- Added serialized/hash-covered world `belief_enqueue_config` tables for deterministic delay/confidence modifiers (site-template/region), including canonical key normalization and deterministic duplicate-key rejection.
+- Added focused Slice 1D tests covering base delay, site-over-region precedence, region fallback, canonicalization rejection, and save/load/hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -196,6 +196,7 @@
 - `PYTHONPATH=src python -m hexcrawler.cli.replay_tool saves/canonical_with_artifacts.json --ticks 400 --print-artifacts`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1b.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1c.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1d.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`

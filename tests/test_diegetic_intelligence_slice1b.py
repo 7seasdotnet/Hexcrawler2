@@ -45,7 +45,7 @@ def test_slice1b_world_with_transmission_job_serializes_and_changes_hash() -> No
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 10, "claim": _claim_payload()},
+        params={"faction_id": "wolves", "claim": _claim_payload()},
     )
     sim.advance_ticks(1)
 
@@ -65,15 +65,15 @@ def test_slice1b_processing_order_is_deterministic_across_factions() -> None:
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "claim": _claim_payload(claim_key="wolf_claim"), "not_before_tick": 0},
+        params={"faction_id": "wolves", "claim": _claim_payload(claim_key="wolf_claim")},
     )
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "bears", "claim": _claim_payload(claim_key="bear_claim"), "not_before_tick": 0},
+        params={"faction_id": "bears", "claim": _claim_payload(claim_key="bear_claim")},
     )
 
-    sim.advance_ticks(2)
+    sim.advance_ticks(12)
 
     completions = _completion_events(sim, BELIEF_TRANSMISSION_JOB_COMPLETED_EVENT_TYPE)
     assert len(completions) == 2
@@ -92,12 +92,11 @@ def test_slice1b_processing_is_bounded_by_max_jobs_per_tick() -> None:
             event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
             params={
                 "faction_id": "wolves",
-                "not_before_tick": 0,
                 "claim": _claim_payload(claim_key=f"claim_{index}"),
             },
         )
 
-    sim.advance_ticks(1)
+    sim.advance_ticks(11)
     faction_state = sim.state.world.faction_beliefs["wolves"]
     remaining = faction_state["transmission_queue"]
     assert len(remaining) == total_jobs - MAX_JOBS_PER_TICK
@@ -111,17 +110,17 @@ def test_slice1b_not_before_tick_delay_is_deterministic() -> None:
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 5, "claim": _claim_payload()},
+        params={"faction_id": "wolves", "claim": _claim_payload()},
     )
 
-    sim.advance_ticks(5)
+    sim.advance_ticks(20)
     assert _completion_events(sim, BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE) == []
     assert len(sim.state.world.faction_beliefs["wolves"]["investigation_queue"]) == 1
 
     sim.advance_ticks(2)
     completions = _completion_events(sim, BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE)
     assert len(completions) == 1
-    assert completions[0]["tick"] == 6
+    assert completions[0]["tick"] == 21
 
 
 def test_slice1b_save_load_hash_stability_for_enqueued_jobs() -> None:
@@ -132,9 +131,9 @@ def test_slice1b_save_load_hash_stability_for_enqueued_jobs() -> None:
         sim.schedule_event_at(
             tick=0,
             event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-            params={"faction_id": "wolves", "not_before_tick": 3, "claim": _claim_payload()},
+            params={"faction_id": "wolves", "claim": _claim_payload()},
         )
-        sim.advance_ticks(2)
+        sim.advance_ticks(6)
 
     assert simulation_hash(sim_a) == simulation_hash(sim_b)
 
@@ -153,17 +152,16 @@ def test_slice1b_max_jobs_per_tick_is_per_faction_total_transmission_first() -> 
             event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
             params={
                 "faction_id": "wolves",
-                "not_before_tick": 0,
                 "claim": _claim_payload(claim_key=f"t_{index}"),
             },
         )
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 0, "claim": _claim_payload(claim_key="i_0")},
+        params={"faction_id": "wolves", "claim": _claim_payload(claim_key="i_0")},
     )
 
-    sim.advance_ticks(2)
+    sim.advance_ticks(12)
 
     transmission_completed = _completion_events(sim, BELIEF_TRANSMISSION_JOB_COMPLETED_EVENT_TYPE)
     investigation_completed = _completion_events(sim, BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE)
@@ -172,7 +170,7 @@ def test_slice1b_max_jobs_per_tick_is_per_faction_total_transmission_first() -> 
     assert investigation_completed == []
     wolves_state = sim.state.world.faction_beliefs["wolves"]
     assert wolves_state.get("transmission_queue") is None
-    assert wolves_state.get("investigation_queue") is None
+    assert len(wolves_state.get("investigation_queue", [])) == 1
 
 
 def test_slice1b_load_rejects_invalid_job_payload_instead_of_dropping() -> None:
@@ -210,7 +208,7 @@ def test_slice1b_non_empty_queue_is_never_omitted_during_normalization() -> None
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 20, "claim": _claim_payload()},
+        params={"faction_id": "wolves", "claim": _claim_payload()},
     )
     sim.advance_ticks(1)
 
