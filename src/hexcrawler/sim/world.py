@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from hexcrawler.sim.beliefs import normalize_world_faction_beliefs
+from hexcrawler.sim.beliefs import normalize_belief_enqueue_config, normalize_world_faction_beliefs
 from hexcrawler.sim.rng import derive_stream_seed
 
 SITE_TYPES = {"none", "town", "dungeon"}
@@ -1200,10 +1200,12 @@ class WorldState:
     rumor_selection_decision_order: list[str] = field(default_factory=list)
     rumor_decay_cursor: int = 0
     faction_beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.rumor_ttl_config = _normalize_rumor_ttl_config(self.rumor_ttl_config)
         self.faction_beliefs = normalize_world_faction_beliefs(self.faction_beliefs)
+        self.belief_enqueue_config = normalize_belief_enqueue_config(self.belief_enqueue_config)
         if self.spaces:
             overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
             if overworld_space is None:
@@ -1310,6 +1312,8 @@ class WorldState:
                 faction_id: dict(self.faction_beliefs[faction_id])
                 for faction_id in sorted(self.faction_beliefs)
             }
+        if self.belief_enqueue_config:
+            payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1386,6 +1390,8 @@ class WorldState:
                 faction_id: dict(self.faction_beliefs[faction_id])
                 for faction_id in sorted(self.faction_beliefs)
             }
+        if self.belief_enqueue_config:
+            payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         return payload
 
     @classmethod
@@ -1532,6 +1538,7 @@ class WorldState:
         world.rumor_ttl_config = _normalize_rumor_ttl_config(data.get("rumor_ttl_config", DEFAULT_RUMOR_TTL_CONFIG))
 
         world.faction_beliefs = normalize_world_faction_beliefs(data.get("faction_beliefs", {}))
+        world.belief_enqueue_config = normalize_belief_enqueue_config(data.get("belief_enqueue_config", {}))
 
         raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})
         if not isinstance(raw_rumor_selection_decisions, dict):

@@ -34,6 +34,88 @@ MAX_JOBS_PER_TICK = 8
 MAX_COMPLETED_JOB_IDS = 1024
 INVESTIGATION_CONFIDENCE_DELTA = 10
 INVESTIGATION_DEFAULT_CONFIDENCE = 50
+BASE_TRANSMISSION_DELAY_TICKS = 10
+BASE_INVESTIGATION_DELAY_TICKS = 20
+TRANSMISSION_CONFIDENCE_BONUS = 0
+MAX_DELAY_TICKS = 1_000_000
+
+
+def _normalize_modifier_key(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} keys must be strings")
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError(f"{field_name} keys must be non-empty strings")
+    return normalized
+
+
+def _normalize_modifier_table(value: Any, *, field_name: str) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    table: dict[str, int] = {}
+    for raw_key in sorted(value):
+        normalized_key = _normalize_modifier_key(raw_key, field_name=field_name)
+        if normalized_key in table:
+            raise ValueError(f"{field_name} keys must be unique after normalization")
+        modifier = value[raw_key]
+        if isinstance(modifier, bool) or not isinstance(modifier, int):
+            raise ValueError(f"{field_name} values must be integers")
+        table[normalized_key] = int(modifier)
+    return table
+
+
+def normalize_belief_enqueue_config(value: Any) -> dict[str, dict[str, int]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("belief_enqueue_config must be an object")
+    allowed = {
+        "delay_mod_by_site_template",
+        "delay_mod_by_region",
+        "confidence_mod_by_site_template",
+        "confidence_mod_by_region",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"belief_enqueue_config has unknown fields: {sorted(unknown)}")
+
+    normalized = {
+        "delay_mod_by_site_template": _normalize_modifier_table(
+            value.get("delay_mod_by_site_template", {}),
+            field_name="belief_enqueue_config.delay_mod_by_site_template",
+        ),
+        "delay_mod_by_region": _normalize_modifier_table(
+            value.get("delay_mod_by_region", {}),
+            field_name="belief_enqueue_config.delay_mod_by_region",
+        ),
+        "confidence_mod_by_site_template": _normalize_modifier_table(
+            value.get("confidence_mod_by_site_template", {}),
+            field_name="belief_enqueue_config.confidence_mod_by_site_template",
+        ),
+        "confidence_mod_by_region": _normalize_modifier_table(
+            value.get("confidence_mod_by_region", {}),
+            field_name="belief_enqueue_config.confidence_mod_by_region",
+        ),
+    }
+
+    if not any(normalized.values()):
+        return {}
+    return normalized
+
+
+def _select_modifier(*, site_template_id: str | None, region_id: str | None, by_site: dict[str, int], by_region: dict[str, int]) -> int:
+    # Deterministic precedence: site template modifier > region modifier > none.
+    if site_template_id is not None and site_template_id in by_site:
+        return int(by_site[site_template_id])
+    if region_id is not None and region_id in by_region:
+        return int(by_region[region_id])
+    return 0
+
+
+def _normalize_optional_context_id(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _normalize_modifier_key(value, field_name=field_name)
 
 
 def _normalize_string_id(value: Any, *, field_name: str, max_len: int) -> str:
@@ -373,6 +455,40 @@ def _build_job(
         "faction_id": normalize_faction_id(faction_id),
         "claim": normalized_claim,
     }
+
+
+def _compute_enqueue_delay_and_confidence(
+    *,
+    queue_kind: str,
+    world_enqueue_config: dict[str, dict[str, int]],
+    tick: int,
+    site_template_id: str | None,
+    region_id: str | None,
+    claim: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    base_delay = BASE_TRANSMISSION_DELAY_TICKS if queue_kind == "transmission" else BASE_INVESTIGATION_DELAY_TICKS
+    confidence_bonus = TRANSMISSION_CONFIDENCE_BONUS if queue_kind == "transmission" else 0
+
+    delay_modifier = _select_modifier(
+        site_template_id=site_template_id,
+        region_id=region_id,
+        by_site=world_enqueue_config.get("delay_mod_by_site_template", {}),
+        by_region=world_enqueue_config.get("delay_mod_by_region", {}),
+    )
+    confidence_modifier = _select_modifier(
+        site_template_id=site_template_id,
+        region_id=region_id,
+        by_site=world_enqueue_config.get("confidence_mod_by_site_template", {}),
+        by_region=world_enqueue_config.get("confidence_mod_by_region", {}),
+    )
+
+    delay_ticks = _clamp_int(base_delay + delay_modifier, minimum=0, maximum=MAX_DELAY_TICKS)
+    not_before_tick = int(tick) + delay_ticks
+    normalized_claim = {
+        **dict(claim),
+        "confidence": clamp_confidence(int(claim["confidence"]) + confidence_bonus + confidence_modifier),
+    }
+    return not_before_tick, normalized_claim
 
 
 def _emit_job_enqueue_forensic(
@@ -726,20 +842,33 @@ class BeliefJobQueueModule(RuleModule):
         params = event.params
         try:
             faction_id = normalize_faction_id(params.get("faction_id"))
-            not_before_tick_raw = params.get("not_before_tick", event.tick)
-            if isinstance(not_before_tick_raw, bool) or not isinstance(not_before_tick_raw, int):
-                raise ValueError("not_before_tick must be integer")
-            not_before_tick = max(event.tick, int(not_before_tick_raw))
+            site_template_id = _normalize_optional_context_id(
+                params.get("site_template_id"),
+                field_name="site_template_id",
+            )
+            region_id = _normalize_optional_context_id(
+                params.get("region_id"),
+                field_name="region_id",
+            )
             claim = _normalize_claim_payload(params.get("claim"))
         except (TypeError, ValueError):
             return
+
+        not_before_tick, modified_claim = _compute_enqueue_delay_and_confidence(
+            queue_kind=queue_kind,
+            world_enqueue_config=sim.state.world.belief_enqueue_config,
+            tick=event.tick,
+            site_template_id=site_template_id,
+            region_id=region_id,
+            claim=claim,
+        )
 
         job = _build_job(
             queue_kind=queue_kind,
             faction_id=faction_id,
             created_tick=event.tick,
             not_before_tick=not_before_tick,
-            claim=claim,
+            claim=modified_claim,
         )
 
         if queue_kind == "transmission":

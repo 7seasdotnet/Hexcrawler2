@@ -34,10 +34,10 @@ def test_slice1c_transmission_completion_mutates_beliefs_and_hash_stable_after_l
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 0, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
 
-    sim.advance_ticks(2)
+    sim.advance_ticks(12)
 
     faction = sim.state.world.faction_beliefs["wolves"]
     assert faction.get("transmission_queue") is None
@@ -49,7 +49,7 @@ def test_slice1c_transmission_completion_mutates_beliefs_and_hash_stable_after_l
     belief = faction["belief_records"][belief_id]
     assert belief["confidence"] == 30
     assert belief["evidence_count"] == 1
-    assert belief["last_updated_tick"] == 1
+    assert belief["last_updated_tick"] == 11
 
     forensic = _events(sim, BELIEF_UPDATED_FROM_TRANSMISSION_EVENT_TYPE)
     assert len(forensic) == 1
@@ -67,10 +67,10 @@ def test_slice1c_investigation_completion_mutates_beliefs_and_hash_stable_after_
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 0, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
 
-    sim.advance_ticks(2)
+    sim.advance_ticks(22)
 
     belief_id = compute_belief_id(
         faction_id="wolves",
@@ -80,7 +80,7 @@ def test_slice1c_investigation_completion_mutates_beliefs_and_hash_stable_after_
     belief = sim.state.world.faction_beliefs["wolves"]["belief_records"][belief_id]
     assert belief["confidence"] == INVESTIGATION_DEFAULT_CONFIDENCE + INVESTIGATION_CONFIDENCE_DELTA
     assert belief["evidence_count"] == 1
-    assert belief["last_updated_tick"] == 1
+    assert belief["last_updated_tick"] == 21
 
     forensic = _events(sim, BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE)
     assert len(forensic) == 1
@@ -99,15 +99,15 @@ def test_slice1c_completion_exactly_once_and_duplicate_job_entries_mutate_once()
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 0, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 0, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
 
-    sim.advance_ticks(2)
+    sim.advance_ticks(22)
 
     belief_id = compute_belief_id(
         faction_id="wolves",
@@ -156,7 +156,7 @@ def test_slice1c_duplicate_completion_removes_matching_queued_job() -> None:
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 5, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
     sim.advance_ticks(1)
 
@@ -188,9 +188,9 @@ def test_slice1c_confidence_scale_is_fixed_point_0_to_100_with_clamp() -> None:
     sim.schedule_event_at(
         tick=0,
         event_type=BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": 0, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
-    sim.advance_ticks(2)
+    sim.advance_ticks(22)
 
     belief_id = compute_belief_id(
         faction_id="wolves",
@@ -203,9 +203,9 @@ def test_slice1c_confidence_scale_is_fixed_point_0_to_100_with_clamp() -> None:
     sim.schedule_event_at(
         tick=sim.state.tick,
         event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
-        params={"faction_id": "wolves", "not_before_tick": sim.state.tick, "claim": claim},
+        params={"faction_id": "wolves", "claim": claim},
     )
-    sim.advance_ticks(2)
+    sim.advance_ticks(22)
 
     belief_after = sim.state.world.faction_beliefs["wolves"]["belief_records"][belief_id]
     assert belief_after["confidence"] == 100
