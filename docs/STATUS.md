@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 3A — belief dynamics expansion (contradictions + investigation semantics).
-- **Next action:** Diegetic Intelligence Slice 3B — optional scapegoat / unknown-actor inference (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 3B — minimal deterministic UnknownActor attribution (scapegoat placeholder).
+- **Next action:** Diegetic Intelligence Slice 3C — optional faction reaction policy hooks (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Completed Diegetic Intelligence Slice 3A by extending serialized/hash-covered belief records with deterministic contradiction semantics (`base_key`, `stance`, optional `opposed_belief_id`) plus backward-compatible defaults for pre-3A saves.
-- Added deterministic contradiction detection and bounded forensic outcomes (`belief_contradiction_detected`, `belief_contradiction_resolved`) during claim ingestion and transmission/investigation upserts.
-- Updated investigation completion semantics to deterministically resolve contested beliefs with bounded confidence shifts, and added focused Slice 3A tests including save/load + hash stability and backward compatibility coverage.
+- Completed Diegetic Intelligence Slice 3B by adding bounded deterministic UnknownActor attribution for long-lived low-confidence contested belief pairs, including forensic event emission (`belief_unknown_actor_attributed`).
+- Extended serialized/hash-covered belief records with `contested_since_tick` and `last_unknown_actor_attribution_tick` plus backward-compatible deterministic defaults for pre-3B saves.
+- Added focused Slice 3B tests for trigger gating, per-tick cap/order determinism, save/load + hash stability, and backward compatibility defaulting.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -204,6 +204,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice2c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice2d.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3a.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3b.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`

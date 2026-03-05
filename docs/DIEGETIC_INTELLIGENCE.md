@@ -319,6 +319,38 @@ Explicitly **not** included in Slice 3A:
 
 ---
 
+
+## 11B. UnknownActor Attribution (Slice 3B)
+
+Space role applicability: **both campaign and local** (belief substrate is role-agnostic and contains no topology-coupled tactical logic).
+
+- UnknownActor attribution is a deterministic additive placeholder belief, not a causal inference system.
+- Trigger condition (all required):
+  1. A contested pair exists for the same `(faction_id, subject, base_key)` with mutual `opposed_belief_id` pointers.
+  2. Both contested sides are low-confidence: `max(conf_a, conf_b) <= UNKNOWN_ACTOR_MAX_CONF_THRESHOLD`.
+  3. Contested age is old enough: `current_tick - contested_since_tick >= UNKNOWN_ACTOR_MIN_CONTESTED_AGE_TICKS`.
+- Attribution effect (additive only):
+  - upsert one UnknownActor belief (`subject.kind=unknown_actor`, `subject.id=unknown`) for the same `base_key` with `stance=affirm`;
+  - set confidence to `UNKNOWN_ACTOR_ATTRIBUTION_CONFIDENCE` (clamped), increment bounded evidence count, update `last_updated_tick`;
+  - emit `belief_unknown_actor_attributed` forensic with `faction_id`, `base_key`, `tick`, and source contested belief ids.
+- Contested records are not resolved by attribution:
+  - do **not** delete contested records;
+  - do **not** alter opposed pointers as a resolution shortcut.
+- Processing discipline:
+  - bounded per tick by `MAX_UNKNOWN_ATTRIBUTIONS_PER_TICK`;
+  - deterministic order: faction lexical order, then contested belief id lexical order;
+  - each contested pair is attributed at most once using serialized marker `last_unknown_actor_attribution_tick` on belief records.
+- Backward compatibility:
+  - old contested records missing `contested_since_tick` default deterministically to `last_updated_tick` during load normalization;
+  - missing `last_unknown_actor_attribution_tick` defaults to omitted/None.
+- Explicitly out of scope in Slice 3B:
+  - no real-actor scapegoat inference,
+  - no multi-hop causal graph reasoning,
+  - no diplomacy scoring expansion.
+
+---
+
+
 # 12. Processing Discipline
 
 All jobs processed via:
