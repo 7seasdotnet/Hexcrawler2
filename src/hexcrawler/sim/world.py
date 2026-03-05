@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from hexcrawler.sim.beliefs import normalize_belief_enqueue_config, normalize_world_faction_beliefs
+from hexcrawler.sim.beliefs import normalize_belief_enqueue_config, normalize_faction_id, normalize_world_faction_beliefs
 from hexcrawler.sim.rng import derive_stream_seed
 
 SITE_TYPES = {"none", "town", "dungeon"}
@@ -23,6 +23,7 @@ MAX_OCCLUSION_EDGES = 2048
 MAX_CLAIM_OPPORTUNITIES = 256
 MAX_RUMORS = 512
 MAX_RUMOR_SELECTION_DECISIONS = 256
+MAX_ACTIVATED_FACTIONS = 128
 RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
 MAX_RUMOR_TTL_TICKS = 1_000_000
 DEFAULT_RUMOR_TTL_BY_KIND = {
@@ -196,6 +197,43 @@ def _normalize_rumor_records(raw_rumors: list[Any]) -> list[dict[str, Any]]:
     if len(normalized) > MAX_RUMORS:
         normalized = normalized[-MAX_RUMORS:]
     return normalized
+
+
+def normalize_faction_registry(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("faction_registry must be a list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_faction_id in value:
+        faction_id = normalize_faction_id(raw_faction_id)
+        if faction_id in seen:
+            raise ValueError("faction_registry ids must be unique after normalization")
+        seen.add(faction_id)
+        normalized.append(faction_id)
+    return sorted(normalized)
+
+
+def normalize_activated_factions(value: Any, *, faction_registry: list[str]) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("activated_factions must be a list")
+    registry_set = set(faction_registry)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_faction_id in value:
+        faction_id = normalize_faction_id(raw_faction_id)
+        if faction_id not in registry_set:
+            raise ValueError("activated_factions must be a subset of faction_registry")
+        if faction_id in seen:
+            raise ValueError("activated_factions ids must be unique after normalization")
+        seen.add(faction_id)
+        normalized.append(faction_id)
+    if len(normalized) > MAX_ACTIVATED_FACTIONS:
+        raise ValueError("activated_factions exceeds maximum")
+    return sorted(normalized)
 
 
 def _normalize_rumor_ttl_config(value: Any) -> dict[str, Any]:
@@ -1199,12 +1237,21 @@ class WorldState:
     rumor_selection_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     rumor_selection_decision_order: list[str] = field(default_factory=list)
     rumor_decay_cursor: int = 0
+    faction_registry: list[str] = field(default_factory=list)
+    activated_factions: list[str] = field(default_factory=list)
     faction_beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
     belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.rumor_ttl_config = _normalize_rumor_ttl_config(self.rumor_ttl_config)
         self.faction_beliefs = normalize_world_faction_beliefs(self.faction_beliefs)
+        self.faction_registry = normalize_faction_registry(self.faction_registry)
+        if not self.faction_registry and self.faction_beliefs:
+            self.faction_registry = sorted(self.faction_beliefs)
+        self.activated_factions = normalize_activated_factions(
+            self.activated_factions,
+            faction_registry=self.faction_registry,
+        )
         self.belief_enqueue_config = normalize_belief_enqueue_config(self.belief_enqueue_config)
         if self.spaces:
             overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
@@ -1312,6 +1359,11 @@ class WorldState:
                 faction_id: dict(self.faction_beliefs[faction_id])
                 for faction_id in sorted(self.faction_beliefs)
             }
+        serialized_faction_registry = list(self.faction_registry) if self.faction_registry else sorted(self.faction_beliefs)
+        if serialized_faction_registry:
+            payload["faction_registry"] = serialized_faction_registry
+        if self.activated_factions:
+            payload["activated_factions"] = list(self.activated_factions)
         if self.belief_enqueue_config:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         return payload
@@ -1390,6 +1442,11 @@ class WorldState:
                 faction_id: dict(self.faction_beliefs[faction_id])
                 for faction_id in sorted(self.faction_beliefs)
             }
+        serialized_faction_registry = list(self.faction_registry) if self.faction_registry else sorted(self.faction_beliefs)
+        if serialized_faction_registry:
+            payload["faction_registry"] = serialized_faction_registry
+        if self.activated_factions:
+            payload["activated_factions"] = list(self.activated_factions)
         if self.belief_enqueue_config:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         return payload
@@ -1538,6 +1595,16 @@ class WorldState:
         world.rumor_ttl_config = _normalize_rumor_ttl_config(data.get("rumor_ttl_config", DEFAULT_RUMOR_TTL_CONFIG))
 
         world.faction_beliefs = normalize_world_faction_beliefs(data.get("faction_beliefs", {}))
+        # Backward compatibility: old saves have no faction_registry. Derive from existing
+        # faction_beliefs keys deterministically to preserve replay/save-load stability.
+        raw_faction_registry = data.get("faction_registry")
+        if raw_faction_registry is None:
+            raw_faction_registry = sorted(world.faction_beliefs)
+        world.faction_registry = normalize_faction_registry(raw_faction_registry)
+        world.activated_factions = normalize_activated_factions(
+            data.get("activated_factions", []),
+            faction_registry=world.faction_registry,
+        )
         world.belief_enqueue_config = normalize_belief_enqueue_config(data.get("belief_enqueue_config", {}))
 
         raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})

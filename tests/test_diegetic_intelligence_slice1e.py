@@ -21,6 +21,8 @@ def _seed_factions(sim: Simulation, faction_ids: list[str]) -> None:
         faction_id: {"belief_records": {}}
         for faction_id in faction_ids
     }
+    sim.state.world.faction_registry = sorted(faction_ids)
+    sim.state.world.activated_factions = sorted(faction_ids)
 
 
 def _outbound_params(*, source_faction_id: str, confidence: int = 25, **extra: object) -> dict[str, object]:

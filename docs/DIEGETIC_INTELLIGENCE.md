@@ -195,6 +195,14 @@ No synchronous cascading.
 
 ---
 
+# 9A. Authoritative Faction Registry and Activation Gate
+
+- `world.faction_registry` is authoritative for what counts as a faction in simulation space (campaign/local role-agnostic identity substrate).
+- `world.activated_factions` is the diegetic activation gate for information fan-out and propagation work queues.
+- Propagation recipients are selected from activated factions only (excluding source), with deterministic lexical ordering and existing bounded caps.
+- Belief state remains lazy: registry membership does not pre-allocate belief graphs. Faction belief state is created only on first use (activation side effects may be forensic only).
+- Backward compatibility: saves lacking `faction_registry` derive it deterministically from existing `faction_beliefs` keys (sorted); if no beliefs exist, registry defaults to empty.
+
 # 10. Carrier Model
 
 The engine must not require physical courier simulation.
