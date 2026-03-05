@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from hexcrawler.sim.beliefs import (
     BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE,
     BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
+    BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE,
     BELIEF_REACTION_INVESTIGATE_CONTESTED_EVENT_TYPE,
     BELIEF_REACTION_INVESTIGATE_UNKNOWN_ACTOR_EVENT_TYPE,
     INVESTIGATION_DEFAULT_CONFIDENCE,
@@ -46,6 +47,16 @@ FACTION_INVESTIGATION_OUTCOME_HOOK_APPLIED_EVENT_TYPE = "faction_investigation_o
 FACTION_INVESTIGATION_OUTCOME_HOOK_IGNORED_EVENT_TYPE = "faction_investigation_outcome_hook_ignored"
 FACTION_INVESTIGATION_COMPLETION_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_investigation_completion_budget_exhausted"
 MAX_FACTION_INVESTIGATION_COMPLETIONS_PER_TICK = 8
+FACTION_WARNING_ISSUED_EVENT_TYPE = "faction_warning_issued"
+FACTION_HOSTILITY_ESCALATED_EVENT_TYPE = "faction_hostility_escalated"
+FACTION_RAID_INTENT_DECLARED_EVENT_TYPE = "faction_raid_intent_declared"
+FACTION_POLITICAL_ACTION_EMITTED_EVENT_TYPE = "faction_political_action_emitted"
+FACTION_POLITICAL_ACTION_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_political_action_budget_exhausted"
+WARNING_THRESHOLD = 30
+HOSTILITY_THRESHOLD = 60
+RAID_THRESHOLD = 80
+MAX_FACTION_POLITICAL_ACTIONS_PER_TICK = 8
+MAX_FACTION_POLITICAL_ACTION_LEDGER_KEYS = 1024
 
 
 class FactionBehaviorReactionIntegrationModule(RuleModule):
@@ -1489,3 +1500,278 @@ class FactionInvestigationOutcomeHooksModule(RuleModule):
             "completed_action_uids": completed_action_uids[-MAX_INVESTIGATOR_LEDGER_UIDS:],
             "pending_completions": pending_completions,
         }
+
+
+class FactionPoliticalActionModule(RuleModule):
+    """Phase 5C deterministic belief-outcome -> political action intent event bridge (campaign role)."""
+
+    name = "faction_political_actions"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE:
+            return
+
+        faction_id = str(event.params.get("faction_id", "")).strip().lower()
+        belief_id = str(event.params.get("belief_id", "")).strip()
+        if not faction_id or not belief_id:
+            return
+
+        belief = self._resolve_belief(sim=sim, faction_id=faction_id, belief_id=belief_id)
+        if belief is None:
+            return
+
+        pending = self._pending_actions_for_belief(
+            tick=int(event.tick),
+            faction_id=faction_id,
+            belief_id=belief_id,
+            belief=belief,
+        )
+        if not pending:
+            return
+
+        state = self._normalized_state(sim=sim)
+        for row in pending:
+            self._append_pending_action(state=state, action=row)
+        sim.set_rules_state(self.name, state)
+
+    def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        state = self._normalized_state(sim=sim)
+        pending = [row for row in state["pending_actions"] if int(row.get("tick", -1)) == tick]
+        if not pending:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending = sorted(
+            pending,
+            key=lambda row: (
+                str(row.get("faction_id", "")),
+                str(row.get("belief_id", "")),
+                str(row.get("base_key", "")),
+                str(row.get("action_type", "")),
+            ),
+        )
+        state["pending_actions"] = [row for row in state["pending_actions"] if int(row.get("tick", -1)) != tick]
+
+        emitted_action_keys = list(state["emitted_action_keys"])
+        emitted_set = set(emitted_action_keys)
+
+        emitted_count = 0
+        budget_exhausted_emitted = False
+        for row in pending:
+            action_key = self._action_key(action=row)
+            if action_key in emitted_set:
+                continue
+            if emitted_count >= MAX_FACTION_POLITICAL_ACTIONS_PER_TICK:
+                if not budget_exhausted_emitted:
+                    sim.schedule_event_at(
+                        tick=tick + 1,
+                        event_type=FACTION_POLITICAL_ACTION_BUDGET_EXHAUSTED_EVENT_TYPE,
+                        params={
+                            "tick": tick,
+                            "max_actions_per_tick": MAX_FACTION_POLITICAL_ACTIONS_PER_TICK,
+                        },
+                    )
+                    budget_exhausted_emitted = True
+                break
+
+            self._schedule_action(sim=sim, tick=tick, action=row)
+            self._schedule_forensic_emitted(sim=sim, tick=tick, action=row)
+
+            emitted_action_keys.append(action_key)
+            emitted_set.add(action_key)
+            emitted_count += 1
+
+        state["emitted_action_keys"] = emitted_action_keys[-MAX_FACTION_POLITICAL_ACTION_LEDGER_KEYS:]
+        sim.set_rules_state(self.name, state)
+
+    def _resolve_belief(self, *, sim: Simulation, faction_id: str, belief_id: str) -> dict[str, Any] | None:
+        faction_state = sim.state.world.faction_beliefs.get(faction_id)
+        if not isinstance(faction_state, dict):
+            return None
+        records = faction_state.get("belief_records")
+        if not isinstance(records, dict):
+            return None
+        belief = records.get(belief_id)
+        if not isinstance(belief, dict):
+            return None
+        return belief
+
+    def _pending_actions_for_belief(
+        self,
+        *,
+        tick: int,
+        faction_id: str,
+        belief_id: str,
+        belief: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        subject = dict(belief["subject"]) if isinstance(belief.get("subject"), dict) else {"kind": "unknown_actor", "id": "unknown"}
+        base_key = str(belief.get("base_key", "")).strip()
+        confidence_raw = belief.get("confidence")
+        if isinstance(confidence_raw, bool) or not isinstance(confidence_raw, int):
+            return []
+        confidence = self._clamp_threshold_value(confidence_raw)
+
+        pending: list[dict[str, Any]] = []
+        if confidence >= self._clamp_threshold_value(RAID_THRESHOLD):
+            pending.append(
+                {
+                    "tick": tick,
+                    "faction_id": faction_id,
+                    "belief_id": belief_id,
+                    "base_key": base_key,
+                    "subject": subject,
+                    "action_type": FACTION_RAID_INTENT_DECLARED_EVENT_TYPE,
+                    "reason": "confidence_at_or_above_raid_threshold",
+                }
+            )
+        if confidence >= self._clamp_threshold_value(HOSTILITY_THRESHOLD):
+            pending.append(
+                {
+                    "tick": tick,
+                    "faction_id": faction_id,
+                    "belief_id": belief_id,
+                    "base_key": base_key,
+                    "subject": subject,
+                    "action_type": FACTION_HOSTILITY_ESCALATED_EVENT_TYPE,
+                    "escalation_level": 1,
+                    "reason": "confidence_at_or_above_hostility_threshold",
+                }
+            )
+        if confidence >= self._clamp_threshold_value(WARNING_THRESHOLD) and belief.get("recollection_tier") is None:
+            pending.append(
+                {
+                    "tick": tick,
+                    "faction_id": faction_id,
+                    "belief_id": belief_id,
+                    "base_key": base_key,
+                    "subject": subject,
+                    "action_type": FACTION_WARNING_ISSUED_EVENT_TYPE,
+                    "reason": "confidence_at_or_above_warning_threshold",
+                }
+            )
+        return pending
+
+    def _schedule_action(self, *, sim: Simulation, tick: int, action: dict[str, Any]) -> None:
+        action_type = str(action["action_type"])
+        params = {
+            "tick": tick,
+            "faction_id": str(action["faction_id"]),
+            "subject": dict(action["subject"]),
+            "belief_id": str(action["belief_id"]),
+            "base_key": str(action["base_key"]),
+            "reason": str(action["reason"]),
+        }
+        if action_type == FACTION_HOSTILITY_ESCALATED_EVENT_TYPE:
+            params["escalation_level"] = int(action.get("escalation_level", 1))
+        sim.schedule_event_at(tick=tick + 1, event_type=action_type, params=params)
+
+    def _schedule_forensic_emitted(self, *, sim: Simulation, tick: int, action: dict[str, Any]) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_POLITICAL_ACTION_EMITTED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "faction_id": str(action["faction_id"]),
+                "belief_id": str(action["belief_id"]),
+                "action_type": str(action["action_type"]),
+                "reason": str(action["reason"]),
+            },
+        )
+
+    def _normalized_state(self, *, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+
+        emitted_action_keys: list[str] = []
+        raw_emitted = state.get("emitted_action_keys", [])
+        if isinstance(raw_emitted, list):
+            for row in raw_emitted:
+                key = str(row).strip()
+                if key and key not in emitted_action_keys:
+                    emitted_action_keys.append(key)
+
+        pending_actions: list[dict[str, Any]] = []
+        raw_pending = state.get("pending_actions", [])
+        if isinstance(raw_pending, list):
+            for row in raw_pending:
+                normalized = self._normalize_pending_action(row)
+                if normalized is not None:
+                    pending_actions.append(normalized)
+
+        return {
+            "emitted_action_keys": emitted_action_keys[-MAX_FACTION_POLITICAL_ACTION_LEDGER_KEYS:],
+            "pending_actions": pending_actions,
+        }
+
+    def _append_pending_action(self, *, state: dict[str, Any], action: dict[str, Any]) -> None:
+        marker = (
+            int(action["tick"]),
+            str(action["faction_id"]),
+            str(action["belief_id"]),
+            str(action["base_key"]),
+            str(action["action_type"]),
+        )
+        for row in state["pending_actions"]:
+            key = (
+                int(row.get("tick", -1)),
+                str(row.get("faction_id", "")),
+                str(row.get("belief_id", "")),
+                str(row.get("base_key", "")),
+                str(row.get("action_type", "")),
+            )
+            if key == marker:
+                return
+        state["pending_actions"].append(action)
+
+    def _normalize_pending_action(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        tick = value.get("tick")
+        if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+            return None
+        faction_id = str(value.get("faction_id", "")).strip().lower()
+        belief_id = str(value.get("belief_id", "")).strip()
+        base_key = str(value.get("base_key", "")).strip()
+        action_type = str(value.get("action_type", "")).strip()
+        reason = str(value.get("reason", "")).strip()
+        if not faction_id or not belief_id or not action_type or not reason:
+            return None
+        if action_type not in {
+            FACTION_WARNING_ISSUED_EVENT_TYPE,
+            FACTION_HOSTILITY_ESCALATED_EVENT_TYPE,
+            FACTION_RAID_INTENT_DECLARED_EVENT_TYPE,
+        }:
+            return None
+        subject = value.get("subject")
+        if not isinstance(subject, dict):
+            return None
+        normalized: dict[str, Any] = {
+            "tick": tick,
+            "faction_id": faction_id,
+            "belief_id": belief_id,
+            "base_key": base_key,
+            "subject": dict(subject),
+            "action_type": action_type,
+            "reason": reason,
+        }
+        if action_type == FACTION_HOSTILITY_ESCALATED_EVENT_TYPE:
+            escalation_level = value.get("escalation_level", 1)
+            if isinstance(escalation_level, bool) or not isinstance(escalation_level, int):
+                return None
+            normalized["escalation_level"] = int(escalation_level)
+        return normalized
+
+    @staticmethod
+    def _clamp_threshold_value(value: int) -> int:
+        if value < 0:
+            return 0
+        if value > 100:
+            return 100
+        return int(value)
+
+    @staticmethod
+    def _action_key(*, action: dict[str, Any]) -> str:
+        return (
+            f"{str(action.get('faction_id', '')).strip().lower()}|"
+            f"{str(action.get('belief_id', '')).strip()}|"
+            f"{str(action.get('action_type', '')).strip()}"
+        )

@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5B — Investigation Outcome Hooks (implemented).
-- **Next action:** Phase 5C — Political Actions.
+- **Current phase:** Phase 5C — Political Actions (implemented).
+- **Next action:** Viewer Oversight Phase.
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added `FactionInvestigationOutcomeHooksModule` (Phase 5B) to deterministically consume investigator completion seams, emit forensic completion/hook events, and bridge completion into `belief_investigation_job_completed` without introducing a parallel belief resolution subsystem.
-- Added serialized/idempotent completion ledgering in `rules_state["faction_investigator_outcomes"]` (`completed_action_uids` bounded FIFO) plus deterministic lexical completion ordering and per-tick budget enforcement (`MAX_FACTION_INVESTIGATION_COMPLETIONS_PER_TICK`).
-- Added Slice 5B regression coverage for completion hooks, bridge-back semantics, idempotence, ordering independence, budget cap halting, save/load/hash stability, and single-emission-boundary behavior.
+- Added `FactionPoliticalActionModule` (Phase 5C) to deterministically consume `belief_updated_from_investigation` outcomes and translate qualifying belief states into intent-only political action events (`faction_warning_issued`, `faction_hostility_escalated`, `faction_raid_intent_declared`) plus bounded forensic emissions.
+- Added serialized/idempotent political action ledgering in `rules_state["faction_political_actions"]` (`emitted_action_keys` bounded FIFO), deterministic lexical processing (`faction_id`, `belief_id`, `base_key`), and per-tick budget enforcement (`MAX_FACTION_POLITICAL_ACTIONS_PER_TICK`) with `faction_political_action_budget_exhausted`.
+- Added Slice 5C regression coverage for warning/hostility/raid triggers, ordering independence, idempotence, budget-cap behavior, and save/load simulation-hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -214,6 +214,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice5a.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice5b.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice5c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4d.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
