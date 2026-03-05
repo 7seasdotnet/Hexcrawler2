@@ -8,7 +8,11 @@ from hexcrawler.sim.beliefs import (
     BELIEF_REACTION_INVESTIGATE_UNKNOWN_ACTOR_EVENT_TYPE,
     INVESTIGATION_DEFAULT_CONFIDENCE,
 )
+from hexcrawler.sim.core import EntityState, SimCommand
+from hexcrawler.sim.groups import GROUP_MOVE_ARRIVED_EVENT_TYPE, MOVE_GROUP_INTENT_COMMAND_TYPE
+from hexcrawler.sim.movement import axial_to_world_xy
 from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, DEFAULT_OVERWORLD_SPACE_ID, GroupRecord, HexCoord, SpaceState
 
 if TYPE_CHECKING:
     from hexcrawler.sim.core import SimEvent, Simulation
@@ -30,6 +34,12 @@ MAX_FACTION_BEHAVIOR_EXECUTE_REQUESTS_PER_TICK = 8
 MAX_FACTION_BEHAVIOR_BRIDGES_PER_TICK = 8
 MAX_APPLIED_SOURCE_EVENT_IDS = 512
 MAX_APPLIED_ACTION_UIDS = 1024
+MAX_FACTION_INVESTIGATORS_PER_FACTION = 8
+MAX_INVESTIGATORS_SPAWNED_PER_TICK = 4
+MAX_INVESTIGATOR_LEDGER_UIDS = 1024
+FACTION_INVESTIGATOR_SPAWNED_EVENT_TYPE = "faction_investigator_spawned"
+FACTION_INVESTIGATOR_TASKED_EVENT_TYPE = "faction_investigator_tasked"
+FACTION_INVESTIGATOR_SPAWN_REJECTED_EVENT_TYPE = "faction_investigator_spawn_rejected"
 
 
 class FactionBehaviorReactionIntegrationModule(RuleModule):
@@ -844,4 +854,325 @@ class FactionBehaviorExecutionBridgeModule(RuleModule):
             "applied_action_uids": applied_action_uids,
             "pending_bridge_requests": pending_bridge_requests,
             "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
+        }
+
+
+class FactionInvestigationActorModule(RuleModule):
+    """Phase 5A visible campaign-role investigator actors for belief investigation jobs."""
+
+    name = "faction_investigators"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE:
+            self._stage_job(sim=sim, event=event)
+            return
+        if event.event_type == GROUP_MOVE_ARRIVED_EVENT_TYPE:
+            self._sync_entity_to_group_arrival(sim=sim, event=event)
+
+    def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        state = self._normalized_state(sim=sim)
+        pending = [item for item in state["pending_jobs"] if int(item.get("tick", -1)) == tick]
+        if not pending:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending = sorted(
+            pending,
+            key=lambda row: (str(row.get("faction_id", "")), str(row.get("belief_id", "")), str(row.get("action_uid", ""))),
+        )
+        remaining_pending = [item for item in state["pending_jobs"] if int(item.get("tick", -1)) != tick]
+
+        spawned = list(state["spawned_action_uids"])
+        spawned_set = set(spawned)
+        spawned_this_tick = 0
+
+        for item in pending:
+            action_uid = str(item.get("action_uid", ""))
+            if not action_uid or action_uid in spawned_set:
+                continue
+
+            faction_id = str(item.get("faction_id", ""))
+            if self._count_investigators_for_faction(sim=sim, faction_id=faction_id) >= MAX_FACTION_INVESTIGATORS_PER_FACTION:
+                self._schedule_spawn_rejected(sim=sim, tick=tick, item=item, reason="cap_exceeded")
+                spawned.append(action_uid)
+                spawned_set.add(action_uid)
+                continue
+
+            if spawned_this_tick >= MAX_INVESTIGATORS_SPAWNED_PER_TICK:
+                self._schedule_spawn_rejected(sim=sim, tick=tick, item=item, reason="cap_exceeded")
+                continue
+
+            entity_id = f"investigator:{action_uid}:0"
+            spawn_location = self._resolve_spawn_location(sim=sim, item=item)
+            target_location = self._parse_campaign_location(sim=sim, payload=item.get("target_location"))
+            self._spawn_investigator_entity(
+                sim=sim,
+                item=item,
+                entity_id=entity_id,
+                spawn_location=spawn_location,
+                target_location=target_location,
+            )
+            self._schedule_spawned(sim=sim, tick=tick, item=item, entity_id=entity_id, location=spawn_location)
+
+            did_task = self._task_group_movement_if_available(
+                sim=sim,
+                tick=tick,
+                item=item,
+                entity_id=entity_id,
+                spawn_location=spawn_location,
+                target_location=target_location,
+            )
+            if did_task:
+                self._schedule_tasked(sim=sim, tick=tick, item=item, entity_id=entity_id, target_location=target_location)
+
+            spawned.append(action_uid)
+            spawned_set.add(action_uid)
+            spawned_this_tick += 1
+
+        state["spawned_action_uids"] = spawned[-MAX_INVESTIGATOR_LEDGER_UIDS:]
+        state["pending_jobs"] = remaining_pending
+        sim.set_rules_state(self.name, state)
+
+    def _stage_job(self, *, sim: Simulation, event: SimEvent) -> None:
+        state = self._normalized_state(sim=sim)
+        action_uid = str(event.params.get("source_action_uid", "")).strip() or str(event.event_id)
+        faction_id = str(event.params.get("faction_id", "")).strip().lower()
+        belief_id = str(event.params.get("belief_id", event.params.get("claim_key", ""))).strip()
+        if not action_uid or not faction_id or not belief_id:
+            sim.set_rules_state(self.name, state)
+            return
+
+        if action_uid in set(state["spawned_action_uids"]):
+            sim.set_rules_state(self.name, state)
+            return
+        pending_action_uids = {str(item.get("action_uid", "")) for item in state["pending_jobs"]}
+        if action_uid in pending_action_uids:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending = list(state["pending_jobs"])
+        pending.append(
+            {
+                "tick": int(event.tick),
+                "faction_id": faction_id,
+                "belief_id": belief_id,
+                "action_uid": action_uid,
+                "target_location": self._extract_target_location(event.params),
+            }
+        )
+        state["pending_jobs"] = pending
+        sim.set_rules_state(self.name, state)
+
+    def _sync_entity_to_group_arrival(self, *, sim: Simulation, event: SimEvent) -> None:
+        group_id = str(event.params.get("group_id", ""))
+        group = sim.state.world.groups.get(group_id)
+        entity = sim.state.entities.get(group_id)
+        if group is None or entity is None:
+            return
+        coord = group.cell
+        if not isinstance(coord, dict):
+            return
+        entity.space_id = str(group.location.get("space_id", DEFAULT_OVERWORLD_SPACE_ID))
+        if "q" in coord and "r" in coord:
+            x, y = axial_to_world_xy(HexCoord.from_dict(coord))
+            entity.position_x = x
+            entity.position_y = y
+            return
+        entity.position_x = float(int(coord.get("x", 0)) + 0.5)
+        entity.position_y = float(int(coord.get("y", 0)) + 0.5)
+
+    def _spawn_investigator_entity(
+        self,
+        *,
+        sim: Simulation,
+        item: dict[str, Any],
+        entity_id: str,
+        spawn_location: dict[str, Any],
+        target_location: dict[str, Any] | None,
+    ) -> None:
+        coord = dict(spawn_location["coord"])
+        if "q" in coord and "r" in coord:
+            entity = EntityState.from_hex(entity_id=entity_id, hex_coord=HexCoord.from_dict(coord))
+        else:
+            entity = EntityState(entity_id=entity_id, position_x=float(int(coord.get("x", 0)) + 0.5), position_y=float(int(coord.get("y", 0)) + 0.5))
+        entity.space_id = str(spawn_location["space_id"])
+        entity.template_id = "faction_investigator"
+        entity.source_action_uid = str(item["action_uid"])
+        entity.stats = {
+            "faction_id": str(item["faction_id"]),
+            "role": "investigator",
+            "source_belief_id": str(item["belief_id"]),
+            "source_action_uid": str(item["action_uid"]),
+            "location": dict(spawn_location),
+            "target_location": (dict(target_location) if isinstance(target_location, dict) else None),
+        }
+        sim.add_entity(entity)
+
+    def _task_group_movement_if_available(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        item: dict[str, Any],
+        entity_id: str,
+        spawn_location: dict[str, Any],
+        target_location: dict[str, Any] | None,
+    ) -> bool:
+        if target_location is None or target_location == spawn_location:
+            return False
+        if "group_movement" not in {module.name for module in sim.rule_modules}:
+            return False
+
+        sim.state.world.groups[entity_id] = GroupRecord(
+            group_id=entity_id,
+            group_type="investigator",
+            location={"space_id": str(spawn_location["space_id"]), "coord": dict(spawn_location["coord"])},
+            cell=dict(spawn_location["coord"]),
+            strength=1,
+            tags=[f"faction:{item['faction_id']}", "investigator"],
+        )
+        sim.append_command(
+            SimCommand(
+                tick=tick + 1,
+                entity_id=None,
+                command_type=MOVE_GROUP_INTENT_COMMAND_TYPE,
+                params={
+                    "group_id": entity_id,
+                    "dest_cell": dict(target_location),
+                    "travel_ticks": 1,
+                },
+            )
+        )
+        return True
+
+    def _resolve_spawn_location(self, *, sim: Simulation, item: dict[str, Any]) -> dict[str, Any]:
+        target = self._parse_campaign_location(sim=sim, payload=item.get("target_location"))
+        if target is not None:
+            return target
+        space = sim.state.world.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
+        if isinstance(space, SpaceState):
+            return {"space_id": DEFAULT_OVERWORLD_SPACE_ID, "coord": space.default_spawn_coord()}
+        return {"space_id": DEFAULT_OVERWORLD_SPACE_ID, "coord": {"q": 0, "r": 0}}
+
+    def _extract_target_location(self, params: dict[str, Any]) -> dict[str, Any] | None:
+        location_payload = params.get("target_location")
+        if not isinstance(location_payload, dict):
+            claim_payload = params.get("claim")
+            if isinstance(claim_payload, dict):
+                location_payload = claim_payload.get("location")
+        if not isinstance(location_payload, dict):
+            return None
+        return {
+            "space_id": location_payload.get("space_id"),
+            "coord": location_payload.get("coord"),
+        }
+
+    def _parse_campaign_location(self, *, sim: Simulation, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        if set(payload.keys()) != {"space_id", "coord"}:
+            return None
+        space_id = payload.get("space_id")
+        coord = payload.get("coord")
+        if not isinstance(space_id, str) or not isinstance(coord, dict):
+            return None
+        space = sim.state.world.spaces.get(space_id)
+        if space is None or space.role != CAMPAIGN_SPACE_ROLE or not space.is_valid_cell(coord):
+            return None
+        return {"space_id": space_id, "coord": dict(coord)}
+
+    def _count_investigators_for_faction(self, *, sim: Simulation, faction_id: str) -> int:
+        total = 0
+        for entity in sim.state.entities.values():
+            stats = entity.stats if isinstance(entity.stats, dict) else {}
+            if stats.get("role") == "investigator" and str(stats.get("faction_id", "")) == faction_id:
+                total += 1
+        return total
+
+    def _schedule_spawned(self, *, sim: Simulation, tick: int, item: dict[str, Any], entity_id: str, location: dict[str, Any]) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_INVESTIGATOR_SPAWNED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": entity_id,
+                "faction_id": str(item["faction_id"]),
+                "belief_id": str(item["belief_id"]),
+                "source_action_uid": str(item["action_uid"]),
+                "location": dict(location),
+            },
+        )
+
+    def _schedule_tasked(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        item: dict[str, Any],
+        entity_id: str,
+        target_location: dict[str, Any] | None,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_INVESTIGATOR_TASKED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": entity_id,
+                "faction_id": str(item["faction_id"]),
+                "belief_id": str(item["belief_id"]),
+                "source_action_uid": str(item["action_uid"]),
+                "target_location": (dict(target_location) if isinstance(target_location, dict) else None),
+            },
+        )
+
+    def _schedule_spawn_rejected(self, *, sim: Simulation, tick: int, item: dict[str, Any], reason: str) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_INVESTIGATOR_SPAWN_REJECTED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "faction_id": str(item["faction_id"]),
+                "belief_id": str(item["belief_id"]),
+                "source_action_uid": str(item["action_uid"]),
+                "reason": reason,
+            },
+        )
+
+    def _normalized_state(self, *, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        raw_spawned = state.get("spawned_action_uids", [])
+        spawned_action_uids: list[str] = []
+        if isinstance(raw_spawned, list):
+            for row in raw_spawned:
+                token = str(row).strip()
+                if token and token not in spawned_action_uids:
+                    spawned_action_uids.append(token)
+
+        raw_pending = state.get("pending_jobs", [])
+        pending_jobs: list[dict[str, Any]] = []
+        if isinstance(raw_pending, list):
+            for row in raw_pending:
+                if not isinstance(row, dict):
+                    continue
+                tick = row.get("tick")
+                if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                    continue
+                faction_id = str(row.get("faction_id", "")).strip().lower()
+                belief_id = str(row.get("belief_id", "")).strip()
+                action_uid = str(row.get("action_uid", "")).strip()
+                if not faction_id or not belief_id or not action_uid:
+                    continue
+                pending_jobs.append(
+                    {
+                        "tick": tick,
+                        "faction_id": faction_id,
+                        "belief_id": belief_id,
+                        "action_uid": action_uid,
+                        "target_location": dict(row["target_location"]) if isinstance(row.get("target_location"), dict) else None,
+                    }
+                )
+
+        return {
+            "spawned_action_uids": spawned_action_uids[-MAX_INVESTIGATOR_LEDGER_UIDS:],
+            "pending_jobs": pending_jobs,
         }
