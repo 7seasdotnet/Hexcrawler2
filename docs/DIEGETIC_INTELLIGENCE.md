@@ -351,6 +351,42 @@ Space role applicability: **both campaign and local** (belief substrate is role-
 ---
 
 
+## 11C. Reaction Hooks (Slice 3C)
+
+Space role applicability: **both campaign and local** (belief substrate only; no topology-gated tactical semantics).
+
+- Slice 3C adds deterministic **reaction forensics** and optional bounded enqueue policy hooks from existing belief state.
+- Reaction pass is optional and driven by serialized/hash-covered `world.belief_reaction_config`:
+  - `enabled` (default `false`)
+  - `max_reactions_per_tick`
+  - `contested_investigation_threshold`
+  - `contested_min_age_ticks`
+  - `unknown_actor_investigation_threshold`
+  - `max_investigation_jobs_enqueued_per_tick`
+- Trigger families:
+  1. `belief_reaction_investigate_contested` for mature contested pairs above confidence threshold.
+  2. `belief_reaction_investigate_unknown_actor` for UnknownActor beliefs above confidence threshold.
+- Optional enqueue policy:
+  - reaction hooks may enqueue existing `belief_investigation_job_enqueued` events only;
+  - enqueue remains subject to existing deterministic queue bounds/gating/modifier logic.
+- Deterministic bounded processing:
+  - lexical faction order, then lexical `belief_id` order;
+  - global per-tick reaction cap and investigation-enqueue cap;
+  - when reaction budget is exhausted, emit `belief_reaction_budget_exhausted` and stop processing.
+- Spam/idempotence guard:
+  - belief records carry optional serialized markers:
+    - `last_contested_investigation_reaction_tick`
+    - `last_unknown_actor_investigation_reaction_tick`
+  - reactions honor deterministic cooldown `REACTION_COOLDOWN_TICKS`.
+- Explicit non-goals in Slice 3C:
+  - no AI behavior changes,
+  - no diplomacy scoring,
+  - no movement/pathfinding/geography logic,
+  - no quests/objectives/UI shortcuts.
+
+---
+
+
 # 12. Processing Discipline
 
 All jobs processed via:
