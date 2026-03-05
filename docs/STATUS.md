@@ -10,7 +10,8 @@
 ## What changed in this commit
 - Completed Diegetic Intelligence Slice 1F by adding serialized/hash-covered `world.faction_registry` and bounded `world.activated_factions` with deterministic normalization/validation and canonical ordering.
 - Added deterministic activation events (`faction_activated` / `faction_deactivated`) with forensic `faction_activation_changed` output and updated fan-out recipient universe to activated factions only (excluding source).
-- Added Slice 1F tests for registry/activation validation, backward-compatible registry defaulting from legacy belief keys, fan-out gating behavior, and save/load + hash stability.
+- Hardened Slice 1F canonicalization: backward-compatible derived `faction_registry` remains runtime-available but is default-omitted from canonical saves unless explicitly authored in input payloads.
+- Added/updated Slice 1F tests for no-growth load/save cycles, explicit registry persistence, runtime activation validation under derived registry, and hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
