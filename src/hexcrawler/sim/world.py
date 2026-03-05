@@ -30,6 +30,13 @@ MAX_RUMORS = 512
 MAX_RUMOR_SELECTION_DECISIONS = 256
 MAX_ACTIVATED_FACTIONS = 128
 MAX_CONTACTS_PER_FACTION = 64
+MAX_CONTACT_TTL_TICKS = 1_000_000
+MAX_CONTACT_DECAY_PER_TICK = 128
+DEFAULT_CONTACT_TTL_CONFIG = {
+    "enabled": False,
+    "contact_ttl_ticks": 0,
+    "max_decay_per_tick": 16,
+}
 RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
 MAX_RUMOR_TTL_TICKS = 1_000_000
 DEFAULT_RUMOR_TTL_BY_KIND = {
@@ -281,6 +288,103 @@ def normalize_faction_contacts(value: Any, *, faction_registry: list[str]) -> di
             normalized_contacts[source_id] = sorted(recipients)
 
     return normalized_contacts
+
+
+def normalize_faction_contact_meta(
+    value: Any,
+    *,
+    faction_registry: list[str],
+    faction_contacts: dict[str, list[str]],
+) -> dict[str, dict[str, dict[str, int]]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("faction_contact_meta must be an object")
+
+    registry_set = set(faction_registry)
+    normalized_meta: dict[str, dict[str, dict[str, int]]] = {}
+    for raw_source_id in sorted(value):
+        source_id = normalize_faction_id(raw_source_id)
+        if source_id in normalized_meta:
+            raise ValueError("faction_contact_meta source ids must be unique after normalization")
+        if source_id not in registry_set:
+            raise ValueError("faction_contact_meta source ids must exist in faction_registry")
+
+        raw_targets = value[raw_source_id]
+        if not isinstance(raw_targets, dict):
+            raise ValueError("faction_contact_meta target maps must be objects")
+
+        normalized_targets: dict[str, dict[str, int]] = {}
+        contact_targets = set(faction_contacts.get(source_id, []))
+        for raw_target_id in sorted(raw_targets):
+            target_id = normalize_faction_id(raw_target_id)
+            if target_id in normalized_targets:
+                raise ValueError("faction_contact_meta target ids must be unique after normalization")
+            if target_id not in registry_set:
+                raise ValueError("faction_contact_meta target ids must exist in faction_registry")
+            if target_id not in contact_targets:
+                raise ValueError("faction_contact_meta entries must reference existing faction_contacts edges")
+
+            raw_meta = raw_targets[raw_target_id]
+            if not isinstance(raw_meta, dict):
+                raise ValueError("faction_contact_meta entries must be objects")
+            allowed = {"last_touch_tick"}
+            unknown = set(raw_meta) - allowed
+            if unknown:
+                raise ValueError("faction_contact_meta entries have unknown fields")
+            last_touch_tick = raw_meta.get("last_touch_tick")
+            if isinstance(last_touch_tick, bool) or not isinstance(last_touch_tick, int):
+                raise ValueError("faction_contact_meta.last_touch_tick must be an integer")
+            if last_touch_tick < 0:
+                raise ValueError("faction_contact_meta.last_touch_tick must be >= 0")
+
+            normalized_targets[target_id] = {"last_touch_tick": int(last_touch_tick)}
+
+        if normalized_targets:
+            normalized_meta[source_id] = normalized_targets
+
+    return normalized_meta
+
+
+def normalize_contact_ttl_config(value: Any) -> dict[str, Any]:
+    if value is None:
+        return dict(DEFAULT_CONTACT_TTL_CONFIG)
+    if not isinstance(value, dict):
+        raise ValueError("contact_ttl_config must be an object")
+
+    allowed = {"enabled", "contact_ttl_ticks", "max_decay_per_tick"}
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError("contact_ttl_config has unknown fields")
+
+    enabled = value.get("enabled", DEFAULT_CONTACT_TTL_CONFIG["enabled"])
+    if not isinstance(enabled, bool):
+        raise ValueError("contact_ttl_config.enabled must be a boolean")
+
+    raw_ttl = value.get("contact_ttl_ticks", DEFAULT_CONTACT_TTL_CONFIG["contact_ttl_ticks"])
+    if isinstance(raw_ttl, bool) or not isinstance(raw_ttl, int):
+        raise ValueError("contact_ttl_config.contact_ttl_ticks must be an integer")
+    if raw_ttl < 0:
+        raise ValueError("contact_ttl_config.contact_ttl_ticks must be >= 0")
+    if raw_ttl > MAX_CONTACT_TTL_TICKS:
+        raise ValueError("contact_ttl_config.contact_ttl_ticks exceeds maximum")
+
+    raw_decay = value.get("max_decay_per_tick", DEFAULT_CONTACT_TTL_CONFIG["max_decay_per_tick"])
+    if isinstance(raw_decay, bool) or not isinstance(raw_decay, int):
+        raise ValueError("contact_ttl_config.max_decay_per_tick must be an integer")
+    if raw_decay < 1:
+        raise ValueError("contact_ttl_config.max_decay_per_tick must be >= 1")
+    if raw_decay > MAX_CONTACT_DECAY_PER_TICK:
+        raise ValueError("contact_ttl_config.max_decay_per_tick exceeds maximum")
+
+    if enabled and raw_ttl <= 0:
+        raise ValueError("contact_ttl_config.contact_ttl_ticks must be > 0 when enabled")
+
+    return {
+        "enabled": enabled,
+        "contact_ttl_ticks": int(raw_ttl),
+        "max_decay_per_tick": int(raw_decay),
+    }
 
 
 def _normalize_rumor_ttl_config(value: Any) -> dict[str, Any]:
@@ -1290,6 +1394,8 @@ class WorldState:
     belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
     belief_geo_gating_config: dict[str, Any] = field(default_factory=dict)
     faction_contacts: dict[str, list[str]] = field(default_factory=dict)
+    faction_contact_meta: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    contact_ttl_config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CONTACT_TTL_CONFIG))
     _faction_registry_authored: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1310,6 +1416,12 @@ class WorldState:
             self.faction_contacts,
             faction_registry=self.faction_registry,
         )
+        self.faction_contact_meta = normalize_faction_contact_meta(
+            self.faction_contact_meta,
+            faction_registry=self.faction_registry,
+            faction_contacts=self.faction_contacts,
+        )
+        self.contact_ttl_config = normalize_contact_ttl_config(self.contact_ttl_config)
         if self.spaces:
             overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
             if overworld_space is None:
@@ -1429,6 +1541,17 @@ class WorldState:
                 source_faction_id: list(self.faction_contacts[source_faction_id])
                 for source_faction_id in sorted(self.faction_contacts)
             }
+        if self.faction_contact_meta:
+            payload["faction_contact_meta"] = {
+                source_faction_id: {
+                    target_faction_id: dict(self.faction_contact_meta[source_faction_id][target_faction_id])
+                    for target_faction_id in sorted(self.faction_contact_meta[source_faction_id])
+                }
+                for source_faction_id in sorted(self.faction_contact_meta)
+            }
+        normalized_contact_ttl_config = normalize_contact_ttl_config(self.contact_ttl_config)
+        if normalized_contact_ttl_config != DEFAULT_CONTACT_TTL_CONFIG:
+            payload["contact_ttl_config"] = normalized_contact_ttl_config
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1518,6 +1641,17 @@ class WorldState:
                 source_faction_id: list(self.faction_contacts[source_faction_id])
                 for source_faction_id in sorted(self.faction_contacts)
             }
+        if self.faction_contact_meta:
+            payload["faction_contact_meta"] = {
+                source_faction_id: {
+                    target_faction_id: dict(self.faction_contact_meta[source_faction_id][target_faction_id])
+                    for target_faction_id in sorted(self.faction_contact_meta[source_faction_id])
+                }
+                for source_faction_id in sorted(self.faction_contact_meta)
+            }
+        normalized_contact_ttl_config = normalize_contact_ttl_config(self.contact_ttl_config)
+        if normalized_contact_ttl_config != DEFAULT_CONTACT_TTL_CONFIG:
+            payload["contact_ttl_config"] = normalized_contact_ttl_config
         return payload
 
     @classmethod
@@ -1682,6 +1816,12 @@ class WorldState:
             data.get("faction_contacts", {}),
             faction_registry=world.faction_registry,
         )
+        world.faction_contact_meta = normalize_faction_contact_meta(
+            data.get("faction_contact_meta", {}),
+            faction_registry=world.faction_registry,
+            faction_contacts=world.faction_contacts,
+        )
+        world.contact_ttl_config = normalize_contact_ttl_config(data.get("contact_ttl_config", None))
 
         raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})
         if not isinstance(raw_rumor_selection_decisions, dict):

@@ -234,6 +234,21 @@ No synchronous cascading.
 - Canonical omission remains in effect: when a source has zero contacts after removal, that source key is omitted from `world.faction_contacts`.
 - These updates are structural propagation constraints only and remain out of scope for relationship scoring, diplomacy graphs, and TTL/decay.
 
+# 9E. Contact TTL / Decay (Deterministic, Bounded)
+
+- Contact decay remains optional and fully deterministic via `world.contact_ttl_config`:
+  - `enabled` (default `false`)
+  - `contact_ttl_ticks` (required `>0` when enabled)
+  - `max_decay_per_tick` (bounded per-tick cleanup cap)
+- Contact touch metadata is serialized/hash-covered in `world.faction_contact_meta[source][target].last_touch_tick` and is omitted when empty.
+- Touch semantics are diegetic and event-driven (`faction_contact_touched`):
+  - contact add success schedules a touch,
+  - successful fan-out enqueue emission (`belief_fanout_emitted`) schedules a touch,
+  - touch against a missing edge is deterministic no-op forensic with `reason="touch_no_edge"`.
+- Decay ordering is fixed and deterministic (not configurable): lexical source order, lexical target order.
+- Decay processing is bounded per tick by `max_decay_per_tick` and emits `faction_contact_decayed` per removed edge; optional `faction_contact_decay_budget_exhausted` forensic is emitted when expired contacts remain after budget cap is hit.
+- Legacy compatibility policy for old saves with contacts but no meta: first decay pass assigns `last_touch_tick=current_tick` for missing meta entries before evaluation, preventing immediate decay while preserving deterministic replay/save-load behavior.
+
 # 10. Carrier Model
 
 The engine must not require physical courier simulation.
