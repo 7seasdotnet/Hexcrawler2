@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 1D — deterministic enqueue-time delay/confidence modifiers for belief jobs (no propagation/geography/diplomacy semantics).
-- **Next action:** Diegetic Intelligence Slice 1E — propagation/emission expansion (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 1E — bounded deterministic fan-out job emission for campaign-role diegetic intelligence events (no diplomacy/geography systems).
+- **Next action:** Diegetic Intelligence Slice 1F — diplomacy/geography modifier expansion (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Completed Diegetic Intelligence Slice 1D enqueue-time modifiers: transmission/investigation enqueue now deterministically compute `not_before_tick` from base delays plus optional site/region precedence modifiers, with delay clamped to bounded ticks.
-- Added serialized/hash-covered world `belief_enqueue_config` tables for deterministic delay/confidence modifiers (site-template/region), including canonical key normalization and deterministic duplicate-key rejection.
-- Added focused Slice 1D tests covering base delay, site-over-region precedence, region fallback, canonicalization rejection, and save/load/hash stability.
+- Completed Diegetic Intelligence Slice 1E by adding deterministic campaign-role outbound claim fan-out (`belief_outbound_claim_available`) that selects lexical recipients (excluding source), applies bounded caps, and enqueues only transmission jobs.
+- Added deterministic fan-out forensics (`belief_fanout_emission_attempted`, `belief_fanout_emitted`, `belief_fanout_skipped`) plus deterministic deferral through the existing event queue when per-tick emission budget is exhausted.
+- Added focused Slice 1E tests covering lexical bounded recipient selection, queue-full skip forensics, and deterministic integration with existing Slice 1D enqueue modifiers.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -197,6 +197,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1b.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1d.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1e.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
