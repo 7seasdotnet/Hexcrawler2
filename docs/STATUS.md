@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 3C — deterministic reaction hooks (forensics + bounded policy enqueues).
-- **Next action:** Diegetic Intelligence Slice 4A — integration into faction behavior systems (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 4A — reaction integration seam (implemented).
+- **Next action:** Diegetic Intelligence Slice 4B — faction behavior request consumption seam (placeholder).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Completed Diegetic Intelligence Slice 3C by adding deterministic reaction hooks for contested and UnknownActor belief states, with bounded forensics (`belief_reaction_investigate_contested`, `belief_reaction_investigate_unknown_actor`, `belief_reaction_budget_exhausted`).
-- Added optional serialized/hash-covered `world.belief_reaction_config` (default omitted) plus strict canonical validation and backward-compatible loading defaults.
-- Extended belief record serialization with optional cooldown markers for reaction idempotence and added focused Slice 3C deterministic tests (including budget caps, save/load hash stability, and backward compatibility).
+- Hardened Slice 4A idempotence by proving duplicate reaction `source_event_id` handling does not duplicate staged `pending_requests` and still emits at most one downstream `faction_behavior_request`.
+- Added deterministic ordering proof for scrambled same-tick reaction arrival: emitted requests are lexical-sorted by (`faction_id`, `belief_id`, `request_type`, `source_event_id`) before bounded flush.
+- Added save/load boundary coverage for persisted `pending_requests`: load-time staged requests flush deterministically at next tick-end with identical emitted payloads and identical `simulation_hash`.
 
 
 ## What Exists (folders / entry points)
@@ -207,6 +207,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3a.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3b.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3c.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4a.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
