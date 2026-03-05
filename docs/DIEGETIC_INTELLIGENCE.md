@@ -204,6 +204,13 @@ No synchronous cascading.
 - Backward compatibility: saves lacking `faction_registry` derive it deterministically from existing `faction_beliefs` keys (sorted); if no beliefs exist, registry defaults to empty.
 - Canonical serialization discipline: a registry derived only for backward compatibility/runtime use is default-omitted on save. `faction_registry` is emitted only when it was explicitly authored in input/content.
 
+# 9B. Geography Gating (Region/Site Template)
+
+- Geography gating is an explicit deterministic allow/deny policy over existing event context fields only: `region_id` and `site_template_id`.
+- It is role-compatible for campaign/local routing metadata, but does **not** introduce distance/pathfinding/travel-time semantics.
+- No inference/derivation is permitted: if context fields are absent, gating decisions operate strictly on configured policy (including optional `require_context`).
+- Fan-out and enqueue gating are both deterministic and bounded: deny-lists override allow-lists, and when both region/site context are present, both dimensions are evaluated conservatively.
+
 # 10. Carrier Model
 
 The engine must not require physical courier simulation.

@@ -25,6 +25,8 @@ BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE = "belief_outbound_claim_available"
 BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
 BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
 BELIEF_FANOUT_SKIPPED_EVENT_TYPE = "belief_fanout_skipped"
+BELIEF_FANOUT_GATED_EVENT_TYPE = "belief_fanout_gated"
+BELIEF_JOB_ENQUEUE_GATED_EVENT_TYPE = "belief_job_enqueue_gated"
 FACTION_ACTIVATED_EVENT_TYPE = "faction_activated"
 FACTION_DEACTIVATED_EVENT_TYPE = "faction_deactivated"
 FACTION_ACTIVATION_CHANGED_EVENT_TYPE = "faction_activation_changed"
@@ -110,6 +112,149 @@ def normalize_belief_enqueue_config(value: Any) -> dict[str, dict[str, int]]:
     if not any(normalized.values()):
         return {}
     return normalized
+
+
+def _normalize_identifier_list(value: Any, *, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        identifier = _normalize_modifier_key(raw, field_name=field_name)
+        if identifier in seen:
+            raise ValueError(f"{field_name} entries must be unique after normalization")
+        seen.add(identifier)
+        normalized.append(identifier)
+    return sorted(normalized)
+
+
+def normalize_belief_geo_gating_config(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("belief_geo_gating_config must be an object")
+
+    allowed = {
+        "allow_regions",
+        "deny_regions",
+        "allow_site_templates",
+        "deny_site_templates",
+        "require_context",
+        "gate_enqueue_by_region",
+        "gate_enqueue_by_site_template",
+        "enqueue_allow_regions",
+        "enqueue_deny_regions",
+        "enqueue_allow_site_templates",
+        "enqueue_deny_site_templates",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"belief_geo_gating_config has unknown fields: {sorted(unknown)}")
+
+    normalized: dict[str, Any] = {}
+    require_context = value.get("require_context", False)
+    if not isinstance(require_context, bool):
+        raise ValueError("belief_geo_gating_config.require_context must be a boolean")
+    if require_context:
+        normalized["require_context"] = True
+
+    gate_enqueue_by_region = value.get("gate_enqueue_by_region", False)
+    if not isinstance(gate_enqueue_by_region, bool):
+        raise ValueError("belief_geo_gating_config.gate_enqueue_by_region must be a boolean")
+    if gate_enqueue_by_region:
+        normalized["gate_enqueue_by_region"] = True
+
+    gate_enqueue_by_site_template = value.get("gate_enqueue_by_site_template", False)
+    if not isinstance(gate_enqueue_by_site_template, bool):
+        raise ValueError("belief_geo_gating_config.gate_enqueue_by_site_template must be a boolean")
+    if gate_enqueue_by_site_template:
+        normalized["gate_enqueue_by_site_template"] = True
+
+    list_fields = (
+        "allow_regions",
+        "deny_regions",
+        "allow_site_templates",
+        "deny_site_templates",
+        "enqueue_allow_regions",
+        "enqueue_deny_regions",
+        "enqueue_allow_site_templates",
+        "enqueue_deny_site_templates",
+    )
+    for field_name in list_fields:
+        raw = value.get(field_name)
+        if raw is None:
+            continue
+        entries = _normalize_identifier_list(raw, field_name=f"belief_geo_gating_config.{field_name}")
+        if entries:
+            normalized[field_name] = entries
+
+    return normalized
+
+
+def _evaluate_dimension_gate(*, identifier: str | None, allowlist: list[str], denylist: list[str]) -> tuple[bool, str | None]:
+    if identifier is not None and identifier in denylist:
+        return False, "in_denylist"
+    if allowlist and (identifier is None or identifier not in allowlist):
+        return False, "not_in_allowlist"
+    return True, None
+
+
+def is_fanout_allowed(*, context: dict[str, str | None], config: dict[str, Any]) -> tuple[bool, str | None]:
+    region_id = _normalize_optional_context_id(context.get("region_id"), field_name="region_id")
+    site_template_id = _normalize_optional_context_id(context.get("site_template_id"), field_name="site_template_id")
+    normalized_config = normalize_belief_geo_gating_config(config)
+
+    if normalized_config.get("require_context", False) and region_id is None and site_template_id is None:
+        return False, "missing_context"
+
+    region_allowed, region_reason = _evaluate_dimension_gate(
+        identifier=region_id,
+        allowlist=list(normalized_config.get("allow_regions", [])),
+        denylist=list(normalized_config.get("deny_regions", [])),
+    )
+    site_allowed, site_reason = _evaluate_dimension_gate(
+        identifier=site_template_id,
+        allowlist=list(normalized_config.get("allow_site_templates", [])),
+        denylist=list(normalized_config.get("deny_site_templates", [])),
+    )
+    if not region_allowed:
+        return False, region_reason
+    if not site_allowed:
+        return False, site_reason
+    return True, None
+
+
+def is_enqueue_allowed(*, queue_kind: str, context: dict[str, str | None], config: dict[str, Any]) -> tuple[bool, str | None]:
+    if queue_kind not in {"transmission", "investigation"}:
+        raise ValueError("queue_kind must be 'transmission' or 'investigation'")
+
+    region_id = _normalize_optional_context_id(context.get("region_id"), field_name="region_id")
+    site_template_id = _normalize_optional_context_id(context.get("site_template_id"), field_name="site_template_id")
+    normalized_config = normalize_belief_geo_gating_config(config)
+
+    region_allowed = True
+    region_reason: str | None = None
+    if normalized_config.get("gate_enqueue_by_region", False):
+        region_allowed, region_reason = _evaluate_dimension_gate(
+            identifier=region_id,
+            allowlist=list(normalized_config.get("enqueue_allow_regions", [])),
+            denylist=list(normalized_config.get("enqueue_deny_regions", [])),
+        )
+
+    site_allowed = True
+    site_reason: str | None = None
+    if normalized_config.get("gate_enqueue_by_site_template", False):
+        site_allowed, site_reason = _evaluate_dimension_gate(
+            identifier=site_template_id,
+            allowlist=list(normalized_config.get("enqueue_allow_site_templates", [])),
+            denylist=list(normalized_config.get("enqueue_deny_site_templates", [])),
+        )
+
+    if not region_allowed:
+        return False, region_reason
+    if not site_allowed:
+        return False, site_reason
+    return True, None
 
 
 def _select_modifier(*, site_template_id: str | None, region_id: str | None, by_site: dict[str, int], by_region: dict[str, int]) -> int:
@@ -872,6 +1017,29 @@ class BeliefJobQueueModule(RuleModule):
         except (TypeError, ValueError):
             return
 
+        enqueue_allowed, enqueue_reason = is_enqueue_allowed(
+            queue_kind=queue_kind,
+            context={
+                "site_template_id": site_template_id,
+                "region_id": region_id,
+            },
+            config=sim.state.world.belief_geo_gating_config,
+        )
+        if not enqueue_allowed:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_JOB_ENQUEUE_GATED_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "queue_kind": queue_kind,
+                    "reason": enqueue_reason,
+                    "site_template_id": site_template_id,
+                    "region_id": region_id,
+                    "tick": event.tick,
+                },
+            )
+            return
+
         not_before_tick, modified_claim = _compute_enqueue_delay_and_confidence(
             queue_kind=queue_kind,
             world_enqueue_config=sim.state.world.belief_enqueue_config,
@@ -937,6 +1105,27 @@ class BeliefJobQueueModule(RuleModule):
                 }
             )
         except (TypeError, ValueError):
+            return
+
+        fanout_allowed, fanout_reason = is_fanout_allowed(
+            context={
+                "site_template_id": site_template_id,
+                "region_id": region_id,
+            },
+            config=sim.state.world.belief_geo_gating_config,
+        )
+        if not fanout_allowed:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_FANOUT_GATED_EVENT_TYPE,
+                params={
+                    "source_faction_id": source_faction_id,
+                    "reason": fanout_reason,
+                    "site_template_id": site_template_id,
+                    "region_id": region_id,
+                    "tick": event.tick,
+                },
+            )
             return
 
         recipient_ids: list[str]
