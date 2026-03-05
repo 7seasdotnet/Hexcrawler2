@@ -290,6 +290,35 @@ Investigation may:
 
 ---
 
+
+## 11A. Contradictions and Investigation Resolution (Slice 3A)
+
+Space role applicability: **both campaign and local** (belief substrate is role-agnostic and contains no topology-coupled tactical logic).
+
+- Opposing stances are represented by claim-key stance suffixes with deterministic parsing:
+  - `"<base_key>:affirm"`
+  - `"<base_key>:deny"`
+  - legacy keys with no suffix deterministically map to `base_key=<claim_key>, stance=affirm`.
+- Belief records persist `base_key`, `stance`, and optional `opposed_belief_id` (hash-covered state).
+- Contradiction detection is deterministic and RNG-free during ingestion/upsert:
+  - if same `(faction_id, subject, base_key)` has opposite stance, both records point at each other via `opposed_belief_id`.
+  - forensic event `belief_contradiction_detected` is emitted with the paired belief ids and tick.
+- Investigation completion behavior (bounded):
+  - if target has an opposing record, apply deterministic bounded shift:
+    - target `confidence += INVESTIGATION_RESOLVE_DELTA` (clamped 0..100),
+    - opposing `confidence -= INVESTIGATION_RESOLVE_DELTA` (clamped 0..100).
+  - if opposing reaches 0 confidence, clear both `opposed_belief_id` pointers and emit `belief_contradiction_resolved`.
+  - if no opposing record exists, apply the existing bounded non-contested investigation increase path.
+
+Explicitly **not** included in Slice 3A:
+- no scapegoat/unknown-actor inference,
+- no record deletion,
+- no diplomacy graph/scoring expansion,
+- no UI/viewer changes,
+- no geography/pathfinding additions.
+
+---
+
 # 12. Processing Discipline
 
 All jobs processed via:

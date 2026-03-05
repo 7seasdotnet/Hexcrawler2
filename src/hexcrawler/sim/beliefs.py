@@ -21,6 +21,8 @@ BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE = "belief_investigation_job_comple
 BELIEF_UPDATED_FROM_TRANSMISSION_EVENT_TYPE = "belief_updated_from_transmission"
 BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE = "belief_updated_from_investigation"
 BELIEF_JOB_COMPLETION_SKIPPED_DUPLICATE_EVENT_TYPE = "belief_job_completion_skipped_duplicate"
+BELIEF_CONTRADICTION_DETECTED_EVENT_TYPE = "belief_contradiction_detected"
+BELIEF_CONTRADICTION_RESOLVED_EVENT_TYPE = "belief_contradiction_resolved"
 BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE = "belief_outbound_claim_available"
 BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
 BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
@@ -53,6 +55,7 @@ MAX_JOBS_PER_TICK = 8
 MAX_COMPLETED_JOB_IDS = 1024
 INVESTIGATION_CONFIDENCE_DELTA = 10
 INVESTIGATION_DEFAULT_CONFIDENCE = 50
+INVESTIGATION_RESOLVE_DELTA = 10
 BASE_TRANSMISSION_DELAY_TICKS = 10
 BASE_INVESTIGATION_DELAY_TICKS = 20
 TRANSMISSION_CONFIDENCE_BONUS = 0
@@ -310,6 +313,21 @@ def normalize_claim_key(value: Any) -> str:
     return _normalize_string_id(value, field_name="claim_key", max_len=MAX_BELIEF_CLAIM_KEY_LEN)
 
 
+def split_claim_key(claim_key: str) -> tuple[str, str]:
+    normalized_claim_key = normalize_claim_key(claim_key)
+    if normalized_claim_key.endswith(":affirm"):
+        base_key = normalized_claim_key[: -len(":affirm")]
+        if not base_key:
+            raise ValueError("claim_key base must be non-empty")
+        return base_key, "affirm"
+    if normalized_claim_key.endswith(":deny"):
+        base_key = normalized_claim_key[: -len(":deny")]
+        if not base_key:
+            raise ValueError("claim_key base must be non-empty")
+        return base_key, "deny"
+    return normalized_claim_key, "affirm"
+
+
 def normalize_faction_id(value: Any) -> str:
     return _normalize_string_id(value, field_name="faction_id", max_len=MAX_BELIEF_SUBJECT_ID_LEN)
 
@@ -495,6 +513,9 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
         "belief_id",
         "subject",
         "claim_key",
+        "base_key",
+        "stance",
+        "opposed_belief_id",
         "confidence",
         "first_seen_tick",
         "last_updated_tick",
@@ -510,6 +531,31 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
 
     subject = normalize_belief_subject(value.get("subject"))
     claim_key = normalize_claim_key(value.get("claim_key"))
+    derived_base_key, derived_stance = split_claim_key(claim_key)
+
+    base_key_raw = value.get("base_key")
+    if base_key_raw is None:
+        base_key = derived_base_key
+    else:
+        base_key = _normalize_string_id(base_key_raw, field_name="belief record base_key", max_len=MAX_BELIEF_CLAIM_KEY_LEN)
+
+    stance_raw = value.get("stance")
+    if stance_raw is None:
+        stance = derived_stance
+    elif stance_raw in {"affirm", "deny"}:
+        stance = str(stance_raw)
+    else:
+        raise ValueError("belief record stance must be 'affirm' or 'deny'")
+
+    opposed_belief_id_raw = value.get("opposed_belief_id")
+    if opposed_belief_id_raw is None:
+        opposed_belief_id: str | None = None
+    else:
+        opposed_belief_id = _normalize_string_id(
+            opposed_belief_id_raw,
+            field_name="belief record opposed_belief_id",
+            max_len=128,
+        )
 
     first_seen_tick = value.get("first_seen_tick")
     if isinstance(first_seen_tick, bool) or not isinstance(first_seen_tick, int) or first_seen_tick < 0:
@@ -524,15 +570,91 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
     confidence = clamp_confidence(value.get("confidence"))
     evidence_count = clamp_evidence_count(value.get("evidence_count"))
 
-    return {
+    normalized_record: dict[str, Any] = {
         "belief_id": belief_id,
         "subject": subject,
         "claim_key": claim_key,
+        "base_key": base_key,
+        "stance": stance,
         "confidence": confidence,
         "first_seen_tick": int(first_seen_tick),
         "last_updated_tick": int(last_updated_tick),
         "evidence_count": evidence_count,
     }
+    if opposed_belief_id is not None:
+        normalized_record["opposed_belief_id"] = opposed_belief_id
+    return normalized_record
+
+
+def _find_opposed_belief_id(
+    *,
+    belief_records: dict[str, dict[str, Any]],
+    belief_id: str,
+    subject: dict[str, str | None],
+    base_key: str,
+    stance: str,
+) -> str | None:
+    target_stance = "deny" if stance == "affirm" else "affirm"
+    for candidate_id in sorted(belief_records):
+        if candidate_id == belief_id:
+            continue
+        candidate = belief_records[candidate_id]
+        if (
+            candidate.get("subject") == subject
+            and str(candidate.get("base_key", "")) == base_key
+            and str(candidate.get("stance", "affirm")) == target_stance
+        ):
+            return candidate_id
+    return None
+
+
+def _apply_contradiction_state(
+    *,
+    belief_records: dict[str, dict[str, Any]],
+    faction_id: str,
+    belief_id: str,
+    tick: int,
+) -> dict[str, Any] | None:
+    record = belief_records.get(belief_id)
+    if record is None:
+        return None
+
+    opposed_belief_id = _find_opposed_belief_id(
+        belief_records=belief_records,
+        belief_id=belief_id,
+        subject=dict(record["subject"]),
+        base_key=str(record["base_key"]),
+        stance=str(record["stance"]),
+    )
+    if opposed_belief_id is None:
+        _clear_opposed_pointer(belief_records=belief_records, belief_id=belief_id)
+        return None
+
+    opposing = belief_records[opposed_belief_id]
+    if str(record.get("opposed_belief_id")) == opposed_belief_id and str(opposing.get("opposed_belief_id")) == belief_id:
+        return None
+
+    belief_records[belief_id] = {**record, "opposed_belief_id": opposed_belief_id}
+    belief_records[opposed_belief_id] = {**opposing, "opposed_belief_id": belief_id}
+    return {
+        "faction_id": faction_id,
+        "subject": dict(record["subject"]),
+        "base_key": str(record["base_key"]),
+        "belief_id_a": belief_id,
+        "belief_id_b": opposed_belief_id,
+        "tick": tick,
+    }
+
+
+def _clear_opposed_pointer(*, belief_records: dict[str, dict[str, Any]], belief_id: str) -> None:
+    record = belief_records.get(belief_id)
+    if record is None:
+        return
+    if "opposed_belief_id" not in record:
+        return
+    updated = dict(record)
+    updated.pop("opposed_belief_id", None)
+    belief_records[belief_id] = updated
 
 
 def _evict_excess_records(records: dict[str, dict[str, Any]]) -> None:
@@ -705,9 +827,10 @@ def upsert_player_claim_belief(
     confidence_delta: int,
     tick: int,
     evidence_increment: int,
-) -> str:
+) -> tuple[str, dict[str, Any] | None]:
     normalized_faction_id = normalize_faction_id(faction_id)
     normalized_claim_key = normalize_claim_key(claim_key)
+    base_key, stance = split_claim_key(normalized_claim_key)
     if isinstance(confidence_delta, bool) or not isinstance(confidence_delta, int):
         raise ValueError("confidence_delta must be an integer")
     if isinstance(evidence_increment, bool) or not isinstance(evidence_increment, int) or evidence_increment < 0:
@@ -730,6 +853,8 @@ def upsert_player_claim_belief(
             "belief_id": belief_id,
             "subject": subject,
             "claim_key": normalized_claim_key,
+            "base_key": base_key,
+            "stance": stance,
             "confidence": clamp_confidence(confidence_delta),
             "first_seen_tick": tick,
             "last_updated_tick": tick,
@@ -746,7 +871,13 @@ def upsert_player_claim_belief(
         }
 
     _evict_excess_records(belief_records)
-    return belief_id
+    contradiction = _apply_contradiction_state(
+        belief_records=belief_records,
+        faction_id=normalized_faction_id,
+        belief_id=belief_id,
+        tick=tick,
+    )
+    return belief_id, contradiction
 
 
 def _upsert_claim_belief_record(
@@ -760,9 +891,10 @@ def _upsert_claim_belief_record(
     evidence_increment: int,
     default_confidence: int,
     apply_delta_on_create: bool,
-) -> str:
+) -> tuple[str, dict[str, Any] | None]:
     normalized_faction_id = normalize_faction_id(faction_id)
     normalized_claim_key = normalize_claim_key(claim_key)
+    base_key, stance = split_claim_key(normalized_claim_key)
     normalized_subject = normalize_belief_subject(subject)
     if isinstance(confidence_delta, bool) or not isinstance(confidence_delta, int):
         raise ValueError("confidence_delta must be an integer")
@@ -788,6 +920,8 @@ def _upsert_claim_belief_record(
             "belief_id": belief_id,
             "subject": normalized_subject,
             "claim_key": normalized_claim_key,
+            "base_key": base_key,
+            "stance": stance,
             "confidence": created_confidence,
             "first_seen_tick": tick,
             "last_updated_tick": tick,
@@ -802,7 +936,13 @@ def _upsert_claim_belief_record(
         }
 
     _evict_excess_records(belief_records)
-    return belief_id
+    contradiction = _apply_contradiction_state(
+        belief_records=belief_records,
+        faction_id=normalized_faction_id,
+        belief_id=belief_id,
+        tick=tick,
+    )
+    return belief_id, contradiction
 
 
 class BeliefClaimIngestionModule(RuleModule):
@@ -827,7 +967,7 @@ class BeliefClaimIngestionModule(RuleModule):
         except (TypeError, ValueError):
             return
 
-        upsert_player_claim_belief(
+        _belief_id, contradiction = upsert_player_claim_belief(
             faction_beliefs=sim.state.world.faction_beliefs,
             faction_id=faction_id,
             claim_key=claim_key,
@@ -835,6 +975,12 @@ class BeliefClaimIngestionModule(RuleModule):
             tick=event.tick,
             evidence_increment=evidence_increment,
         )
+        if contradiction is not None:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_CONTRADICTION_DETECTED_EVENT_TYPE,
+                params=contradiction,
+            )
 
 
 class BeliefJobQueueModule(RuleModule):
@@ -1241,7 +1387,7 @@ class BeliefJobQueueModule(RuleModule):
             return
 
         if queue_kind == "transmission":
-            belief_id = _upsert_claim_belief_record(
+            belief_id, contradiction = _upsert_claim_belief_record(
                 faction_beliefs=sim.state.world.faction_beliefs,
                 faction_id=faction_id,
                 subject=dict(claim["subject"]),
@@ -1264,17 +1410,57 @@ class BeliefJobQueueModule(RuleModule):
                 },
             )
         else:
-            belief_id = _upsert_claim_belief_record(
+            belief_id, contradiction = _upsert_claim_belief_record(
                 faction_beliefs=sim.state.world.faction_beliefs,
                 faction_id=faction_id,
                 subject=dict(claim["subject"]),
                 claim_key=str(claim["claim_key"]),
-                confidence_delta=INVESTIGATION_CONFIDENCE_DELTA,
+                confidence_delta=0,
                 tick=event.tick,
                 evidence_increment=1,
                 default_confidence=INVESTIGATION_DEFAULT_CONFIDENCE,
-                apply_delta_on_create=True,
+                apply_delta_on_create=False,
             )
+            belief_records = faction_state.setdefault("belief_records", {})
+            belief = belief_records.get(belief_id)
+            if belief is not None:
+                opposing_id = belief.get("opposed_belief_id")
+                if isinstance(opposing_id, str) and opposing_id in belief_records:
+                    opposing = belief_records[opposing_id]
+                    belief_records[belief_id] = {
+                        **belief,
+                        "confidence": clamp_confidence(int(belief["confidence"]) + INVESTIGATION_RESOLVE_DELTA),
+                        "last_updated_tick": event.tick,
+                    }
+                    opposing_confidence = clamp_confidence(int(opposing["confidence"]) - INVESTIGATION_RESOLVE_DELTA)
+                    belief_records[opposing_id] = {
+                        **opposing,
+                        "confidence": opposing_confidence,
+                        "last_updated_tick": event.tick,
+                    }
+                    if opposing_confidence == 0:
+                        _clear_opposed_pointer(belief_records=belief_records, belief_id=belief_id)
+                        _clear_opposed_pointer(belief_records=belief_records, belief_id=opposing_id)
+                        contradiction = None
+                        sim.schedule_event_at(
+                            tick=event.tick,
+                            event_type=BELIEF_CONTRADICTION_RESOLVED_EVENT_TYPE,
+                            params={
+                                "faction_id": faction_id,
+                                "subject": dict(claim["subject"]),
+                                "base_key": str(belief["base_key"]),
+                                "winner_belief_id": belief_id,
+                                "loser_belief_id": opposing_id,
+                                "tick": event.tick,
+                            },
+                        )
+                else:
+                    belief_records[belief_id] = {
+                        **belief,
+                        "confidence": clamp_confidence(int(belief["confidence"]) + INVESTIGATION_CONFIDENCE_DELTA),
+                        "last_updated_tick": event.tick,
+                    }
+
             sim.schedule_event_at(
                 tick=event.tick,
                 event_type=BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE,
@@ -1285,6 +1471,13 @@ class BeliefJobQueueModule(RuleModule):
                     "tick": event.tick,
                     "job_id": job_id,
                 },
+            )
+
+        if contradiction is not None:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=BELIEF_CONTRADICTION_DETECTED_EVENT_TYPE,
+                params=contradiction,
             )
 
         completed_job_ids[job_id] = int(event.tick)
