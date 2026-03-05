@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 4C — behavior action execution seam (implemented).
-- **Next action:** Diegetic Intelligence Slice 4D — execution-request consumer / investigation job bridge (placeholder).
+- **Current phase:** Diegetic Intelligence Slice 4D — execution-request to investigation-job bridge (implemented).
+- **Next action:** Diegetic Intelligence Slice 5A — faction investigation expression / actor-level integration (placeholder).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added `FactionBehaviorExecutionSeamModule` (Slice 4C) that consumes only `faction_behavior_action_stub` and emits deterministic `faction_behavior_action_execute_request` events for supported `investigate_belief` / `belief_investigation` actions.
-- Added deterministic bounded per-tick execution-request emission with lexical ordering `(faction_id, belief_id, action_type, action_uid)`, idempotent `applied_action_uids` ledger persistence, FIFO ledger bounding, and forensics for unsupported actions and budget exhaustion.
-- Added focused Slice 4C tests for canonical execute-request payloads, unsupported safety, ordering independence, budget enforcement, idempotence, single emission boundary, and save/load hash stability.
+- Added `FactionBehaviorExecutionBridgeModule` (Slice 4D) that consumes only `faction_behavior_action_execute_request` and bridges supported `investigate_belief` / `belief_investigation` actions into the existing `belief_investigation_job_enqueued` seam.
+- Added deterministic bounded per-tick bridge emission with lexical ordering `(faction_id, belief_id, action_type, action_uid)`, serialized idempotent `applied_action_uids` + `pending_bridge_requests` state, and bridge forensics for applied, unsupported, and budget-exhausted outcomes.
+- Added focused Slice 4D tests for bridge payload compatibility, unsupported safety, ordering independence, budget cap, exactly-once idempotence, single emission boundary across save/load, hash stability, and existing investigation queue reuse.
 
 
 ## What Exists (folders / entry points)
@@ -26,6 +26,7 @@
   - Encounter selection seam (`EncounterSelectionModule`) that consumes a validated default encounter table and deterministically emits descriptive `encounter_selection_stub` events from `encounter_resolve_request` using a dedicated RNG stream (`encounter_selection`) only.
   - Encounter action grammar seam (`EncounterActionModule`) that consumes `encounter_selection_stub` and deterministically emits descriptive `encounter_action_stub` events with extensible `actions` intents (fallback `signal_intent` when entry payload has no explicit actions).
   - Encounter action execution seam (`EncounterActionExecutionModule`) that consumes `encounter_action_stub`, schedules `encounter_action_execute`, executes the provisional supported action set (`signal_intent`, `track_intent`, `spawn_intent`), records deterministic forensic outcomes, appends data-only `world.spawn_descriptors` records for spawn intents, and enforces idempotence via serialized executed-action UID ledger in `rules_state`.
+  - Faction behavior execution bridge seam (`FactionBehaviorExecutionBridgeModule`) that consumes `faction_behavior_action_execute_request`, deterministically stages/flushes bridge requests, and reuses `belief_investigation_job_enqueued` for supported `investigate_belief` actions with serialized idempotence + bounded bridge forensics.
   - Local encounter instancing/return bridge (`LocalEncounterInstanceModule`) that consumes `local_encounter_request`, creates/reuses deterministic local-role square spaces, transitions one deterministic actor into the local instance, records `local_encounter_begin`, persists serialized return context in `rules_state["local_encounter_instance"].active_by_local_space`, and handles Local-role `end_local_encounter_intent` to schedule deterministic `local_encounter_end`/`local_encounter_return` events back to stored campaign origin space IDs; site state now persists claim anchors and growth-step ledgers for ecology scaffolding.
   - Site ecology scaffolding module (`SiteEcologyModule`) that runs deterministic campaign-role ecology ticks via serialized periodic events, uses stable-ordered bounded processing with deterministic cursor deferral, schedules marker-only growth effects into pending site effects, and records deterministic ecology scheduling forensics.
   - Spawn materialization seam (`SpawnMaterializationModule`) that deterministically materializes inert entities from `world.spawn_descriptors` using stable IDs (`spawn:<action_uid>:<i>`), preserves idempotence with serialized materialization ledger state, and never mutates combat/AI systems.
@@ -210,6 +211,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4a.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4b.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4c.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4d.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
