@@ -7,7 +7,12 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from hexcrawler.sim.beliefs import normalize_belief_enqueue_config, normalize_faction_id, normalize_world_faction_beliefs
+from hexcrawler.sim.beliefs import (
+    normalize_belief_enqueue_config,
+    normalize_belief_geo_gating_config,
+    normalize_faction_id,
+    normalize_world_faction_beliefs,
+)
 from hexcrawler.sim.rng import derive_stream_seed
 
 SITE_TYPES = {"none", "town", "dungeon"}
@@ -1241,6 +1246,7 @@ class WorldState:
     activated_factions: list[str] = field(default_factory=list)
     faction_beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
     belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
+    belief_geo_gating_config: dict[str, Any] = field(default_factory=dict)
     _faction_registry_authored: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1256,6 +1262,7 @@ class WorldState:
             faction_registry=self.faction_registry,
         )
         self.belief_enqueue_config = normalize_belief_enqueue_config(self.belief_enqueue_config)
+        self.belief_geo_gating_config = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
         if self.spaces:
             overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
             if overworld_space is None:
@@ -1368,6 +1375,8 @@ class WorldState:
             payload["activated_factions"] = list(self.activated_factions)
         if self.belief_enqueue_config:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
+        if self.belief_geo_gating_config:
+            payload["belief_geo_gating_config"] = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1450,6 +1459,8 @@ class WorldState:
             payload["activated_factions"] = list(self.activated_factions)
         if self.belief_enqueue_config:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
+        if self.belief_geo_gating_config:
+            payload["belief_geo_gating_config"] = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
         return payload
 
     @classmethod
@@ -1609,6 +1620,7 @@ class WorldState:
             faction_registry=world.faction_registry,
         )
         world.belief_enqueue_config = normalize_belief_enqueue_config(data.get("belief_enqueue_config", {}))
+        world.belief_geo_gating_config = normalize_belief_geo_gating_config(data.get("belief_geo_gating_config", {}))
 
         raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})
         if not isinstance(raw_rumor_selection_decisions, dict):

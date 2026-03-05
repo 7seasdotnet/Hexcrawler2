@@ -1,17 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 1F — authoritative faction registry + diegetic activation gate for belief propagation (no diplomacy/geography systems).
-- **Next action:** Diegetic Intelligence Slice 2A — diplomacy/geography modifier expansion (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 2A — deterministic geography gating for fan-out and enqueue using existing region/site-template context fields.
+- **Next action:** Diegetic Intelligence Slice 2B — diplomacy/contact-list gating (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Completed Diegetic Intelligence Slice 1F by adding serialized/hash-covered `world.faction_registry` and bounded `world.activated_factions` with deterministic normalization/validation and canonical ordering.
-- Added deterministic activation events (`faction_activated` / `faction_deactivated`) with forensic `faction_activation_changed` output and updated fan-out recipient universe to activated factions only (excluding source).
-- Hardened Slice 1F canonicalization: backward-compatible derived `faction_registry` remains runtime-available but is default-omitted from canonical saves unless explicitly authored in input payloads.
-- Added/updated Slice 1F tests for no-growth load/save cycles, explicit registry persistence, runtime activation validation under derived registry, and hash stability.
+- Completed Diegetic Intelligence Slice 2A by adding serialized/hash-covered `world.belief_geo_gating_config` with deterministic normalization, canonical sorting, duplicate rejection, and default omission.
+- Added deterministic geography gating semantics for fan-out and optional enqueue using only explicit `region_id`/`site_template_id` context, with forensic deny events (`belief_fanout_gated`, `belief_job_enqueue_gated`).
+- Added focused Slice 2A tests covering default behavior parity, require-context deny behavior, allow/deny precedence, conservative combined gating, enqueue gating, canonicalization rejection, and save/load hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -200,6 +199,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1d.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1e.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1f.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice2a.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
