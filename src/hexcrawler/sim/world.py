@@ -29,6 +29,7 @@ MAX_CLAIM_OPPORTUNITIES = 256
 MAX_RUMORS = 512
 MAX_RUMOR_SELECTION_DECISIONS = 256
 MAX_ACTIVATED_FACTIONS = 128
+MAX_CONTACTS_PER_FACTION = 64
 RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
 MAX_RUMOR_TTL_TICKS = 1_000_000
 DEFAULT_RUMOR_TTL_BY_KIND = {
@@ -239,6 +240,47 @@ def normalize_activated_factions(value: Any, *, faction_registry: list[str]) -> 
     if len(normalized) > MAX_ACTIVATED_FACTIONS:
         raise ValueError("activated_factions exceeds maximum")
     return sorted(normalized)
+
+
+def normalize_faction_contacts(value: Any, *, faction_registry: list[str]) -> dict[str, list[str]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("faction_contacts must be an object")
+
+    registry_set = set(faction_registry)
+    normalized_contacts: dict[str, list[str]] = {}
+    for raw_source_id in sorted(value):
+        source_id = normalize_faction_id(raw_source_id)
+        if source_id in normalized_contacts:
+            raise ValueError("faction_contacts source ids must be unique after normalization")
+        if source_id not in registry_set:
+            raise ValueError("faction_contacts source ids must exist in faction_registry")
+
+        raw_contacts = value[raw_source_id]
+        if not isinstance(raw_contacts, list):
+            raise ValueError("faction_contacts recipient lists must be lists")
+
+        recipients: list[str] = []
+        seen_recipients: set[str] = set()
+        for raw_recipient_id in raw_contacts:
+            recipient_id = normalize_faction_id(raw_recipient_id)
+            if recipient_id not in registry_set:
+                raise ValueError("faction_contacts recipient ids must exist in faction_registry")
+            if recipient_id == source_id:
+                raise ValueError("faction_contacts must not include self-contact")
+            if recipient_id in seen_recipients:
+                raise ValueError("faction_contacts recipient ids must be unique after normalization")
+            seen_recipients.add(recipient_id)
+            recipients.append(recipient_id)
+
+        if len(recipients) > MAX_CONTACTS_PER_FACTION:
+            raise ValueError("faction_contacts exceeds maximum per faction")
+
+        if recipients:
+            normalized_contacts[source_id] = sorted(recipients)
+
+    return normalized_contacts
 
 
 def _normalize_rumor_ttl_config(value: Any) -> dict[str, Any]:
@@ -1247,6 +1289,7 @@ class WorldState:
     faction_beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
     belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
     belief_geo_gating_config: dict[str, Any] = field(default_factory=dict)
+    faction_contacts: dict[str, list[str]] = field(default_factory=dict)
     _faction_registry_authored: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1263,6 +1306,10 @@ class WorldState:
         )
         self.belief_enqueue_config = normalize_belief_enqueue_config(self.belief_enqueue_config)
         self.belief_geo_gating_config = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
+        self.faction_contacts = normalize_faction_contacts(
+            self.faction_contacts,
+            faction_registry=self.faction_registry,
+        )
         if self.spaces:
             overworld_space = self.spaces.get(DEFAULT_OVERWORLD_SPACE_ID)
             if overworld_space is None:
@@ -1377,6 +1424,11 @@ class WorldState:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         if self.belief_geo_gating_config:
             payload["belief_geo_gating_config"] = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
+        if self.faction_contacts:
+            payload["faction_contacts"] = {
+                source_faction_id: list(self.faction_contacts[source_faction_id])
+                for source_faction_id in sorted(self.faction_contacts)
+            }
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -1461,6 +1513,11 @@ class WorldState:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         if self.belief_geo_gating_config:
             payload["belief_geo_gating_config"] = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
+        if self.faction_contacts:
+            payload["faction_contacts"] = {
+                source_faction_id: list(self.faction_contacts[source_faction_id])
+                for source_faction_id in sorted(self.faction_contacts)
+            }
         return payload
 
     @classmethod
@@ -1621,6 +1678,10 @@ class WorldState:
         )
         world.belief_enqueue_config = normalize_belief_enqueue_config(data.get("belief_enqueue_config", {}))
         world.belief_geo_gating_config = normalize_belief_geo_gating_config(data.get("belief_geo_gating_config", {}))
+        world.faction_contacts = normalize_faction_contacts(
+            data.get("faction_contacts", {}),
+            faction_registry=world.faction_registry,
+        )
 
         raw_rumor_selection_decisions = data.get("rumor_selection_decisions", {})
         if not isinstance(raw_rumor_selection_decisions, dict):

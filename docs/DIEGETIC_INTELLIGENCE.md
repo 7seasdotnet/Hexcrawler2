@@ -211,6 +211,13 @@ No synchronous cascading.
 - No inference/derivation is permitted: if context fields are absent, gating decisions operate strictly on configured policy (including optional `require_context`).
 - Fan-out and enqueue gating are both deterministic and bounded: deny-lists override allow-lists, and when both region/site context are present, both dimensions are evaluated conservatively.
 
+# 9C. Contact Lists (Structural Propagation)
+
+- `world.faction_contacts` is an authored structural propagation constraint, not a relationship score and not a diplomacy graph.
+- For fan-out recipient universe selection: recipients are drawn from `activated_factions ∩ faction_contacts[source_faction_id]` when a source-specific contact list exists.
+- If a source has no authored contact list, fan-out remains backward-compatible open-network behavior over `activated_factions` (subject to existing caps and exclusion of source).
+- Contact lists are deterministic substrate data only; they do not force disposition changes, diplomacy state, or direct behavior overrides.
+
 # 10. Carrier Model
 
 The engine must not require physical courier simulation.
