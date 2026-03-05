@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 1E — bounded deterministic fan-out job emission for campaign-role diegetic intelligence events (no diplomacy/geography systems).
-- **Next action:** Diegetic Intelligence Slice 1F — diplomacy/geography modifier expansion (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 1F — authoritative faction registry + diegetic activation gate for belief propagation (no diplomacy/geography systems).
+- **Next action:** Diegetic Intelligence Slice 2A — diplomacy/geography modifier expansion (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Completed Diegetic Intelligence Slice 1E by adding deterministic campaign-role outbound claim fan-out (`belief_outbound_claim_available`) that selects lexical recipients (excluding source), applies bounded caps, and enqueues only transmission jobs.
-- Added deterministic fan-out forensics (`belief_fanout_emission_attempted`, `belief_fanout_emitted`, `belief_fanout_skipped`) plus deterministic deferral through the existing event queue when per-tick emission budget is exhausted.
-- Added focused Slice 1E tests covering lexical bounded recipient selection, queue-full skip forensics, and deterministic integration with existing Slice 1D enqueue modifiers.
+- Completed Diegetic Intelligence Slice 1F by adding serialized/hash-covered `world.faction_registry` and bounded `world.activated_factions` with deterministic normalization/validation and canonical ordering.
+- Added deterministic activation events (`faction_activated` / `faction_deactivated`) with forensic `faction_activation_changed` output and updated fan-out recipient universe to activated factions only (excluding source).
+- Added Slice 1F tests for registry/activation validation, backward-compatible registry defaulting from legacy belief keys, fan-out gating behavior, and save/load + hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -198,6 +198,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1d.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1e.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1f.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`

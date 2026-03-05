@@ -25,6 +25,9 @@ BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE = "belief_outbound_claim_available"
 BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
 BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
 BELIEF_FANOUT_SKIPPED_EVENT_TYPE = "belief_fanout_skipped"
+FACTION_ACTIVATED_EVENT_TYPE = "faction_activated"
+FACTION_DEACTIVATED_EVENT_TYPE = "faction_deactivated"
+FACTION_ACTIVATION_CHANGED_EVENT_TYPE = "faction_activation_changed"
 BELIEF_SUBJECT_KINDS = {"player", "faction", "group", "unknown_actor"}
 MAX_BELIEF_RECORDS_PER_FACTION = 512
 MAX_BELIEF_CLAIM_KEY_LEN = 64
@@ -680,6 +683,12 @@ class BeliefJobQueueModule(RuleModule):
     name = "belief_job_queue"
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == FACTION_ACTIVATED_EVENT_TYPE:
+            self._handle_faction_activation_change(sim=sim, event=event, active=True)
+            return
+        if event.event_type == FACTION_DEACTIVATED_EVENT_TYPE:
+            self._handle_faction_activation_change(sim=sim, event=event, active=False)
+            return
         if event.event_type == BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE:
             self._handle_outbound_claim_available(sim=sim, event=event)
             return
@@ -934,7 +943,7 @@ class BeliefJobQueueModule(RuleModule):
         raw_recipients = params.get("recipient_faction_ids")
         if raw_recipients is None:
             recipient_ids = self._select_fanout_recipients(
-                faction_beliefs=sim.state.world.faction_beliefs,
+                activated_factions=sim.state.world.activated_factions,
                 source_faction_id=source_faction_id,
             )
         else:
@@ -989,6 +998,36 @@ class BeliefJobQueueModule(RuleModule):
                     "region_id": region_id,
                 },
             )
+
+    def _handle_faction_activation_change(self, *, sim: Simulation, event: SimEvent, active: bool) -> None:
+        try:
+            faction_id = normalize_faction_id(event.params.get("faction_id"))
+        except (TypeError, ValueError):
+            return
+        if faction_id not in set(sim.state.world.faction_registry):
+            return
+
+        activated = set(sim.state.world.activated_factions)
+        did_change = False
+        if active and faction_id not in activated:
+            activated.add(faction_id)
+            did_change = True
+        if not active and faction_id in activated:
+            activated.remove(faction_id)
+            did_change = True
+        if did_change:
+            sim.state.world.activated_factions = sorted(activated)
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=FACTION_ACTIVATION_CHANGED_EVENT_TYPE,
+            params={
+                "faction_id": faction_id,
+                "active": active,
+                "did_change": did_change,
+                "tick": event.tick,
+            },
+        )
 
     def _emit_fanout_job_for_recipient(
         self,
@@ -1099,9 +1138,9 @@ class BeliefJobQueueModule(RuleModule):
         used += sum(1 for row in pending_same_tick if row.event_type == BELIEF_FANOUT_EMITTED_EVENT_TYPE)
         return used
 
-    def _select_fanout_recipients(self, *, faction_beliefs: dict[str, dict[str, Any]], source_faction_id: str) -> list[str]:
+    def _select_fanout_recipients(self, *, activated_factions: list[str], source_faction_id: str) -> list[str]:
         return [
             faction_id
-            for faction_id in sorted(faction_beliefs)
+            for faction_id in sorted(activated_factions)
             if faction_id != source_faction_id
         ][:MAX_FANOUT_RECIPIENTS]
