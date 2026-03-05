@@ -13,8 +13,11 @@ if TYPE_CHECKING:
 
 FACTION_BEHAVIOR_REQUEST_EVENT_TYPE = "faction_behavior_request"
 FACTION_BEHAVIOR_REQUEST_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_request_budget_exhausted"
+FACTION_BEHAVIOR_ACTION_STUB_EVENT_TYPE = "faction_behavior_action_stub"
+FACTION_BEHAVIOR_ACTION_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_action_budget_exhausted"
 
 MAX_FACTION_BEHAVIOR_REQUESTS_PER_TICK = 8
+MAX_FACTION_BEHAVIOR_ACTIONS_PER_TICK = 8
 MAX_APPLIED_SOURCE_EVENT_IDS = 512
 
 
@@ -219,5 +222,204 @@ class FactionBehaviorReactionIntegrationModule(RuleModule):
         return {
             "applied_source_event_ids": applied_source_event_ids,
             "pending_requests": pending_requests,
+            "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
+        }
+
+
+class FactionBehaviorPlannerModule(RuleModule):
+    """Slice 4B deterministic behavior-planning grammar seam (campaign+local role-agnostic).
+
+    Single emission boundary: requests are staged only in ``on_event_executed`` and emitted
+    only during ``on_tick_end`` flush for that tick, so there is exactly one deterministic
+    emission path for ``pending_action_stubs`` across replay/save-load boundaries.
+    """
+
+    name = "faction_behavior_planner"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != FACTION_BEHAVIOR_REQUEST_EVENT_TYPE:
+            return
+
+        tick = int(event.tick)
+        state = self._normalized_state(sim=sim)
+        source_request_event_id = str(event.event_id)
+        applied_request_event_ids = set(state["applied_request_event_ids"])
+        if source_request_event_id in applied_request_event_ids:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending = [
+            item
+            for item in state["pending_action_stubs"]
+            if int(item.get("tick", -1)) == tick
+        ]
+        if any(str(item.get("source_request_event_id", "")) == source_request_event_id for item in pending):
+            sim.set_rules_state(self.name, state)
+            return
+
+        faction_id = str(event.params.get("faction_id", "")).strip().lower()
+        belief_id = str(event.params.get("belief_id", "")).strip()
+        request_type = str(event.params.get("request_type", "")).strip()
+        if not faction_id or not belief_id or request_type not in {"investigate_contested", "investigate_unknown_actor"}:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending.append(
+            {
+                "tick": tick,
+                "source_request_event_id": source_request_event_id,
+                "faction_id": faction_id,
+                "request_type": request_type,
+                "belief_id": belief_id,
+                "base_key": self._normalize_base_key(event.params.get("base_key")),
+                "subject": dict(event.params["subject"]) if isinstance(event.params.get("subject"), dict) else {},
+                "reason": self._resolve_reason_token(request_type=request_type),
+                "priority": self._resolve_priority(event.params.get("priority"), request_type=request_type),
+            }
+        )
+        state["pending_action_stubs"] = pending
+        sim.set_rules_state(self.name, state)
+
+    def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        state = self._normalized_state(sim=sim)
+        pending = [item for item in state["pending_action_stubs"] if int(item.get("tick", -1)) == tick]
+        if not pending:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending = sorted(
+            pending,
+            key=lambda item: (
+                str(item.get("faction_id", "")),
+                str(item.get("belief_id", "")),
+                str(item.get("request_type", "")),
+                str(item.get("source_request_event_id", "")),
+            ),
+        )
+
+        remaining_pending = [item for item in state["pending_action_stubs"] if int(item.get("tick", -1)) != tick]
+        applied = list(state["applied_request_event_ids"])
+        applied_set = set(applied)
+        emitted = 0
+
+        for item in pending:
+            if emitted >= MAX_FACTION_BEHAVIOR_ACTIONS_PER_TICK:
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=FACTION_BEHAVIOR_ACTION_BUDGET_EXHAUSTED_EVENT_TYPE,
+                    params={
+                        "tick": tick,
+                        "max_actions_per_tick": MAX_FACTION_BEHAVIOR_ACTIONS_PER_TICK,
+                    },
+                )
+                break
+
+            source_request_event_id = str(item.get("source_request_event_id", ""))
+            if not source_request_event_id or source_request_event_id in applied_set:
+                continue
+
+            action_stub_payload = {
+                "tick": int(item["tick"]),
+                "source_request_event_id": source_request_event_id,
+                "faction_id": str(item["faction_id"]),
+                "request_type": str(item["request_type"]),
+                "belief_id": str(item["belief_id"]),
+                "base_key": self._normalize_base_key(item.get("base_key")),
+                "subject": dict(item["subject"]) if isinstance(item.get("subject"), dict) else {},
+                "actions": [
+                    {
+                        "action_type": "investigate_belief",
+                        "template_id": "belief_investigation",
+                        "params": {
+                            "belief_id": str(item["belief_id"]),
+                            "request_type": str(item["request_type"]),
+                            "reason": str(item["reason"]),
+                            "priority": int(item["priority"]),
+                        },
+                    }
+                ],
+            }
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=FACTION_BEHAVIOR_ACTION_STUB_EVENT_TYPE,
+                params=action_stub_payload,
+            )
+            emitted += 1
+            applied.append(source_request_event_id)
+            applied_set.add(source_request_event_id)
+
+        if len(applied) > MAX_APPLIED_SOURCE_EVENT_IDS:
+            applied = applied[-MAX_APPLIED_SOURCE_EVENT_IDS:]
+        state["applied_request_event_ids"] = applied
+        state["pending_action_stubs"] = remaining_pending
+        state["last_processed_tick"] = tick
+        sim.set_rules_state(self.name, state)
+
+    @staticmethod
+    def _resolve_reason_token(*, request_type: str) -> str:
+        if request_type == "investigate_contested":
+            return "contested_belief"
+        return "unknown_actor"
+
+    @staticmethod
+    def _resolve_priority(priority: Any, *, request_type: str) -> int:
+        if isinstance(priority, int) and not isinstance(priority, bool):
+            return priority
+        return 2 if request_type == "investigate_contested" else 1
+
+    @staticmethod
+    def _normalize_base_key(value: Any) -> str | None:
+        if value is None:
+            return None
+        token = str(value)
+        return token if token else None
+
+    def _normalized_state(self, *, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+
+        applied_request_event_ids: list[str] = []
+        raw_applied = state.get("applied_request_event_ids", [])
+        if isinstance(raw_applied, list):
+            for value in raw_applied:
+                token = str(value)
+                if token and token not in applied_request_event_ids:
+                    applied_request_event_ids.append(token)
+        if len(applied_request_event_ids) > MAX_APPLIED_SOURCE_EVENT_IDS:
+            applied_request_event_ids = applied_request_event_ids[-MAX_APPLIED_SOURCE_EVENT_IDS:]
+
+        pending_action_stubs: list[dict[str, Any]] = []
+        raw_pending = state.get("pending_action_stubs", [])
+        if isinstance(raw_pending, list):
+            for item in raw_pending:
+                if not isinstance(item, dict):
+                    continue
+                tick = item.get("tick")
+                if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                    continue
+                source_request_event_id = str(item.get("source_request_event_id", ""))
+                faction_id = str(item.get("faction_id", "")).strip().lower()
+                request_type = str(item.get("request_type", ""))
+                belief_id = str(item.get("belief_id", "")).strip()
+                if not source_request_event_id or not faction_id or not belief_id:
+                    continue
+                if request_type not in {"investigate_contested", "investigate_unknown_actor"}:
+                    continue
+                pending_action_stubs.append(
+                    {
+                        "tick": tick,
+                        "source_request_event_id": source_request_event_id,
+                        "faction_id": faction_id,
+                        "request_type": request_type,
+                        "belief_id": belief_id,
+                        "base_key": self._normalize_base_key(item.get("base_key")),
+                        "subject": dict(item["subject"]) if isinstance(item.get("subject"), dict) else {},
+                        "reason": str(item.get("reason", self._resolve_reason_token(request_type=request_type))),
+                        "priority": self._resolve_priority(item.get("priority"), request_type=request_type),
+                    }
+                )
+
+        return {
+            "applied_request_event_ids": applied_request_event_ids,
+            "pending_action_stubs": pending_action_stubs,
             "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
         }

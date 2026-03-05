@@ -1,16 +1,17 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 4A — reaction integration seam (implemented).
-- **Next action:** Diegetic Intelligence Slice 4B — faction behavior request consumption seam (placeholder).
+- **Current phase:** Diegetic Intelligence Slice 4B — behavior planning grammar stub (implemented).
+- **Next action:** Diegetic Intelligence Slice 4C — execution seam placeholder (no behavior execution yet).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Hardened Slice 4A idempotence by proving duplicate reaction `source_event_id` handling does not duplicate staged `pending_requests` and still emits at most one downstream `faction_behavior_request`.
-- Added deterministic ordering proof for scrambled same-tick reaction arrival: emitted requests are lexical-sorted by (`faction_id`, `belief_id`, `request_type`, `source_event_id`) before bounded flush.
-- Added save/load boundary coverage for persisted `pending_requests`: load-time staged requests flush deterministically at next tick-end with identical emitted payloads and identical `simulation_hash`.
+- Added `FactionBehaviorPlannerModule` (Slice 4B) that consumes only `faction_behavior_request` and emits deterministic descriptive `faction_behavior_action_stub` grammar events with fixed `investigate_belief` action payloads.
+- Added deterministic bounded per-tick action-stub emission with lexical ordering, idempotent `applied_request_event_ids` ledger persistence, FIFO ledger bounding, and single forensic `faction_behavior_action_budget_exhausted` on cap hit.
+- Added focused Slice 4B tests for payload shape, lexical ordering independence, budget exhaustion, idempotence, and save/load hash stability including pending-after-load deterministic flush behavior.
+- Added a final sanity regression for the single emission boundary: staged request processing crosses exactly one tick boundary and emits exactly once after save/load with matching `simulation_hash`.
 
 
 ## What Exists (folders / entry points)
@@ -208,6 +209,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3b.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4a.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4b.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
