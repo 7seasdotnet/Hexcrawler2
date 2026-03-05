@@ -1,16 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 2B — deterministic contact-list gating for fan-out recipient universe.
-- **Next action:** Diegetic Intelligence Slice 2C — optional contact discovery / diegetic contact updates (NOT implemented here).
+- **Current phase:** Diegetic Intelligence Slice 2C — deterministic diegetic contact updates (add/remove) via event pipeline.
+- **Next action:** Diegetic Intelligence Slice 2D — optional diegetic contact TTL/decay (NOT implemented here).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Completed Diegetic Intelligence Slice 2B by adding serialized/hash-covered `world.faction_contacts` with deterministic normalization/validation (canonicalized IDs, registry membership enforcement, self-contact rejection, duplicate rejection, bounded per-faction contacts, sorted recipient lists, default omission).
-- Updated fan-out recipient-universe selection to apply contact-list gating after Slice 2A geography gating, intersecting `activated_factions` with `faction_contacts[source]` when configured, plus compact forensics (`belief_fanout_contact_gated`) when the universe is reduced.
-- Added focused Slice 2B tests covering backward-compatible defaults, deterministic contact gating and ordering, activation/contact intersection behavior, validation failures, bounds enforcement, and save/load + world/simulation hash stability.
+- Completed Diegetic Intelligence Slice 2C by adding deterministic event-driven contact mutations (`faction_contact_added` / `faction_contact_removed`) in the simulation module pipeline only, including canonicalized id validation against `faction_registry`, self-contact rejection, bounded cap enforcement, sorted stable ordering, and no mutation on deterministic rejects.
+- Added forensic outcomes for contact update flows: success (`faction_contact_added`/`faction_contact_removed` with `did_change=true`), no-ops (`faction_contact_add_noop` / `faction_contact_remove_noop`), and deterministic rejections (`faction_contact_add_rejected` / `faction_contact_remove_rejected`, including `reason="cap_full"` where applicable).
+- Added focused Slice 2C tests covering add/remove success, no-op behavior, cap rejection, validation rejection, canonical omission when lists empty, and save/load + world/simulation hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/sim/`
@@ -201,6 +201,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice1f.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice2a.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice2b.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice2c.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`

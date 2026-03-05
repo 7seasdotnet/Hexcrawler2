@@ -31,6 +31,12 @@ BELIEF_JOB_ENQUEUE_GATED_EVENT_TYPE = "belief_job_enqueue_gated"
 FACTION_ACTIVATED_EVENT_TYPE = "faction_activated"
 FACTION_DEACTIVATED_EVENT_TYPE = "faction_deactivated"
 FACTION_ACTIVATION_CHANGED_EVENT_TYPE = "faction_activation_changed"
+FACTION_CONTACT_ADDED_EVENT_TYPE = "faction_contact_added"
+FACTION_CONTACT_REMOVED_EVENT_TYPE = "faction_contact_removed"
+FACTION_CONTACT_ADD_NOOP_EVENT_TYPE = "faction_contact_add_noop"
+FACTION_CONTACT_REMOVE_NOOP_EVENT_TYPE = "faction_contact_remove_noop"
+FACTION_CONTACT_ADD_REJECTED_EVENT_TYPE = "faction_contact_add_rejected"
+FACTION_CONTACT_REMOVE_REJECTED_EVENT_TYPE = "faction_contact_remove_rejected"
 BELIEF_SUBJECT_KINDS = {"player", "faction", "group", "unknown_actor"}
 MAX_BELIEF_RECORDS_PER_FACTION = 512
 MAX_BELIEF_CLAIM_KEY_LEN = 64
@@ -50,6 +56,10 @@ TRANSMISSION_CONFIDENCE_BONUS = 0
 MAX_DELAY_TICKS = 1_000_000
 MAX_FANOUT_RECIPIENTS = 3
 MAX_FANOUT_EMISSIONS_PER_TICK = 16
+# Keep aligned with world.MAX_CONTACTS_PER_FACTION to preserve deterministic
+# cap enforcement for event-driven contact updates without introducing a
+# world->beliefs import cycle.
+MAX_CONTACTS_PER_FACTION = 64
 
 
 def _normalize_modifier_key(value: Any, *, field_name: str) -> str:
@@ -829,6 +839,12 @@ class BeliefJobQueueModule(RuleModule):
     name = "belief_job_queue"
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == FACTION_CONTACT_ADDED_EVENT_TYPE:
+            self._handle_faction_contact_update(sim=sim, event=event, add_contact=True)
+            return
+        if event.event_type == FACTION_CONTACT_REMOVED_EVENT_TYPE:
+            self._handle_faction_contact_update(sim=sim, event=event, add_contact=False)
+            return
         if event.event_type == FACTION_ACTIVATED_EVENT_TYPE:
             self._handle_faction_activation_change(sim=sim, event=event, active=True)
             return
@@ -849,6 +865,142 @@ class BeliefJobQueueModule(RuleModule):
             return
         if event.event_type == BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE:
             self._handle_completion(sim=sim, event=event, queue_kind="investigation")
+
+    def _handle_faction_contact_update(self, *, sim: Simulation, event: SimEvent, add_contact: bool) -> None:
+        if bool(event.params.get("forensic", False)):
+            return
+        try:
+            source_faction_id = normalize_faction_id(event.params.get("source_faction_id"))
+            target_faction_id = normalize_faction_id(event.params.get("target_faction_id"))
+        except (TypeError, ValueError):
+            self._schedule_contact_rejected(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=event.params.get("source_faction_id"),
+                target_faction_id=event.params.get("target_faction_id"),
+                add_contact=add_contact,
+                reason="invalid_payload",
+            )
+            return
+
+        if source_faction_id == target_faction_id:
+            self._schedule_contact_rejected(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                target_faction_id=target_faction_id,
+                add_contact=add_contact,
+                reason="self_contact",
+            )
+            return
+
+        faction_registry = set(sim.state.world.faction_registry)
+        if source_faction_id not in faction_registry or target_faction_id not in faction_registry:
+            self._schedule_contact_rejected(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                target_faction_id=target_faction_id,
+                add_contact=add_contact,
+                reason="unknown_faction",
+            )
+            return
+
+        current_contacts = list(sim.state.world.faction_contacts.get(source_faction_id, []))
+        has_contact = target_faction_id in set(current_contacts)
+        if add_contact:
+            if has_contact:
+                sim.schedule_event_at(
+                    tick=event.tick,
+                    event_type=FACTION_CONTACT_ADD_NOOP_EVENT_TYPE,
+                    params={
+                        "source_faction_id": source_faction_id,
+                        "target_faction_id": target_faction_id,
+                        "did_change": False,
+                        "tick": event.tick,
+                    },
+                )
+                return
+            if len(current_contacts) >= MAX_CONTACTS_PER_FACTION:
+                self._schedule_contact_rejected(
+                    sim=sim,
+                    tick=event.tick,
+                    source_faction_id=source_faction_id,
+                    target_faction_id=target_faction_id,
+                    add_contact=True,
+                    reason="cap_full",
+                )
+                return
+            current_contacts.append(target_faction_id)
+            sim.state.world.faction_contacts[source_faction_id] = sorted(current_contacts)
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=FACTION_CONTACT_ADDED_EVENT_TYPE,
+                params={
+                    "source_faction_id": source_faction_id,
+                    "target_faction_id": target_faction_id,
+                    "did_change": True,
+                    "forensic": True,
+                    "tick": event.tick,
+                },
+            )
+            return
+
+        if not has_contact:
+            sim.schedule_event_at(
+                tick=event.tick,
+                event_type=FACTION_CONTACT_REMOVE_NOOP_EVENT_TYPE,
+                params={
+                    "source_faction_id": source_faction_id,
+                    "target_faction_id": target_faction_id,
+                    "did_change": False,
+                    "tick": event.tick,
+                },
+            )
+            return
+
+        next_contacts = sorted(contact_id for contact_id in current_contacts if contact_id != target_faction_id)
+        if next_contacts:
+            sim.state.world.faction_contacts[source_faction_id] = next_contacts
+        else:
+            sim.state.world.faction_contacts.pop(source_faction_id, None)
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=FACTION_CONTACT_REMOVED_EVENT_TYPE,
+            params={
+                "source_faction_id": source_faction_id,
+                "target_faction_id": target_faction_id,
+                "did_change": True,
+                "forensic": True,
+                "tick": event.tick,
+            },
+        )
+
+    def _schedule_contact_rejected(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        source_faction_id: Any,
+        target_faction_id: Any,
+        add_contact: bool,
+        reason: str,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=(
+                FACTION_CONTACT_ADD_REJECTED_EVENT_TYPE
+                if add_contact
+                else FACTION_CONTACT_REMOVE_REJECTED_EVENT_TYPE
+            ),
+            params={
+                "source_faction_id": source_faction_id,
+                "target_faction_id": target_faction_id,
+                "reason": reason,
+                "did_change": False,
+                "tick": tick,
+            },
+        )
 
     def on_tick_end(self, sim: Simulation, tick: int) -> None:
         for faction_id in sorted(sim.state.world.faction_beliefs):

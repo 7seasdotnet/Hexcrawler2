@@ -218,6 +218,22 @@ No synchronous cascading.
 - If a source has no authored contact list, fan-out remains backward-compatible open-network behavior over `activated_factions` (subject to existing caps and exclusion of source).
 - Contact lists are deterministic substrate data only; they do not force disposition changes, diplomacy state, or direct behavior overrides.
 
+# 9D. Contact Updates (Diegetic)
+
+- Contact updates are processed through deterministic simulation events only:
+  - `faction_contact_added`
+  - `faction_contact_removed`
+- Both ids are canonicalized (`strip().lower()`), validated against `world.faction_registry`, and self-contact is deterministically rejected.
+- Add behavior is bounded:
+  - existing edge => no-op forensic (`faction_contact_add_noop`),
+  - source at `MAX_CONTACTS_PER_FACTION` => deterministic reject (`faction_contact_add_rejected`, `reason="cap_full"`),
+  - otherwise add edge and lexically sort recipient list.
+- Remove behavior is bounded:
+  - absent edge => no-op forensic (`faction_contact_remove_noop`),
+  - present edge => remove and keep lexical ordering.
+- Canonical omission remains in effect: when a source has zero contacts after removal, that source key is omitted from `world.faction_contacts`.
+- These updates are structural propagation constraints only and remain out of scope for relationship scoring, diplomacy graphs, and TTL/decay.
+
 # 10. Carrier Model
 
 The engine must not require physical courier simulation.
