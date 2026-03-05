@@ -37,6 +37,9 @@ FACTION_CONTACT_ADD_NOOP_EVENT_TYPE = "faction_contact_add_noop"
 FACTION_CONTACT_REMOVE_NOOP_EVENT_TYPE = "faction_contact_remove_noop"
 FACTION_CONTACT_ADD_REJECTED_EVENT_TYPE = "faction_contact_add_rejected"
 FACTION_CONTACT_REMOVE_REJECTED_EVENT_TYPE = "faction_contact_remove_rejected"
+FACTION_CONTACT_TOUCHED_EVENT_TYPE = "faction_contact_touched"
+FACTION_CONTACT_DECAYED_EVENT_TYPE = "faction_contact_decayed"
+FACTION_CONTACT_DECAY_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_contact_decay_budget_exhausted"
 BELIEF_SUBJECT_KINDS = {"player", "faction", "group", "unknown_actor"}
 MAX_BELIEF_RECORDS_PER_FACTION = 512
 MAX_BELIEF_CLAIM_KEY_LEN = 64
@@ -60,6 +63,7 @@ MAX_FANOUT_EMISSIONS_PER_TICK = 16
 # cap enforcement for event-driven contact updates without introducing a
 # world->beliefs import cycle.
 MAX_CONTACTS_PER_FACTION = 64
+MAX_CONTACT_DECAY_PER_TICK = 128
 
 
 def _normalize_modifier_key(value: Any, *, field_name: str) -> str:
@@ -845,6 +849,9 @@ class BeliefJobQueueModule(RuleModule):
         if event.event_type == FACTION_CONTACT_REMOVED_EVENT_TYPE:
             self._handle_faction_contact_update(sim=sim, event=event, add_contact=False)
             return
+        if event.event_type == FACTION_CONTACT_TOUCHED_EVENT_TYPE:
+            self._handle_faction_contact_touched(sim=sim, event=event)
+            return
         if event.event_type == FACTION_ACTIVATED_EVENT_TYPE:
             self._handle_faction_activation_change(sim=sim, event=event, active=True)
             return
@@ -944,6 +951,12 @@ class BeliefJobQueueModule(RuleModule):
                     "tick": event.tick,
                 },
             )
+            self._schedule_touch_event(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                target_faction_id=target_faction_id,
+            )
             return
 
         if not has_contact:
@@ -964,6 +977,13 @@ class BeliefJobQueueModule(RuleModule):
             sim.state.world.faction_contacts[source_faction_id] = next_contacts
         else:
             sim.state.world.faction_contacts.pop(source_faction_id, None)
+        source_meta = sim.state.world.faction_contact_meta.get(source_faction_id, {})
+        if target_faction_id in source_meta:
+            source_meta.pop(target_faction_id, None)
+        if source_meta:
+            sim.state.world.faction_contact_meta[source_faction_id] = source_meta
+        else:
+            sim.state.world.faction_contact_meta.pop(source_faction_id, None)
         sim.schedule_event_at(
             tick=event.tick,
             event_type=FACTION_CONTACT_REMOVED_EVENT_TYPE,
@@ -975,6 +995,132 @@ class BeliefJobQueueModule(RuleModule):
                 "tick": event.tick,
             },
         )
+
+    def _schedule_touch_event(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        source_faction_id: str,
+        target_faction_id: str,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=FACTION_CONTACT_TOUCHED_EVENT_TYPE,
+            params={
+                "source_faction_id": source_faction_id,
+                "target_faction_id": target_faction_id,
+            },
+        )
+
+    def _handle_faction_contact_touched(self, *, sim: Simulation, event: SimEvent) -> None:
+        if bool(event.params.get("forensic", False)):
+            return
+        try:
+            source_faction_id = normalize_faction_id(event.params.get("source_faction_id"))
+            target_faction_id = normalize_faction_id(event.params.get("target_faction_id"))
+        except (TypeError, ValueError):
+            return
+
+        contact_targets = set(sim.state.world.faction_contacts.get(source_faction_id, []))
+        did_change = False
+        reason = None
+        if target_faction_id not in contact_targets:
+            reason = "touch_no_edge"
+        else:
+            source_meta = dict(sim.state.world.faction_contact_meta.get(source_faction_id, {}))
+            prior_tick = source_meta.get(target_faction_id, {}).get("last_touch_tick")
+            did_change = prior_tick != event.tick
+            source_meta[target_faction_id] = {"last_touch_tick": event.tick}
+            sim.state.world.faction_contact_meta[source_faction_id] = source_meta
+
+        params = {
+            "source_faction_id": source_faction_id,
+            "target_faction_id": target_faction_id,
+            "did_change": did_change,
+            "tick": event.tick,
+            "forensic": True,
+        }
+        if reason is not None:
+            params["reason"] = reason
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=FACTION_CONTACT_TOUCHED_EVENT_TYPE,
+            params=params,
+        )
+
+    def _apply_contact_ttl_decay(self, *, sim: Simulation, tick: int) -> None:
+        config = sim.state.world.contact_ttl_config
+        if not bool(config.get("enabled", False)):
+            return
+
+        contact_ttl_ticks = int(config.get("contact_ttl_ticks", 0))
+        max_decay_per_tick = int(config.get("max_decay_per_tick", 0))
+        if max_decay_per_tick < 1:
+            return
+        max_decay_per_tick = min(max_decay_per_tick, MAX_CONTACT_DECAY_PER_TICK)
+        threshold_tick = tick - contact_ttl_ticks
+
+        removals = 0
+        budget_exhausted = False
+        for source_id in sorted(list(sim.state.world.faction_contacts)):
+            targets = list(sim.state.world.faction_contacts.get(source_id, []))
+            source_meta = dict(sim.state.world.faction_contact_meta.get(source_id, {}))
+            next_targets: list[str] = []
+            for target_id in sorted(targets):
+                meta_entry = source_meta.get(target_id)
+                if meta_entry is None:
+                    source_meta[target_id] = {"last_touch_tick": tick}
+                    next_targets.append(target_id)
+                    continue
+                last_touch_tick = int(meta_entry.get("last_touch_tick", 0))
+                if last_touch_tick <= threshold_tick and removals < max_decay_per_tick:
+                    removals += 1
+                    source_meta.pop(target_id, None)
+                    sim.schedule_event_at(
+                        tick=tick + 1,
+                        event_type=FACTION_CONTACT_DECAYED_EVENT_TYPE,
+                        params={
+                            "source_faction_id": source_id,
+                            "target_faction_id": target_id,
+                            "tick": tick,
+                            "last_touch_tick": last_touch_tick,
+                        },
+                    )
+                    continue
+                if last_touch_tick <= threshold_tick and removals >= max_decay_per_tick:
+                    budget_exhausted = True
+                next_targets.append(target_id)
+
+            if next_targets:
+                sim.state.world.faction_contacts[source_id] = sorted(next_targets)
+            else:
+                sim.state.world.faction_contacts.pop(source_id, None)
+
+            filtered_meta = {target_id: source_meta[target_id] for target_id in sorted(source_meta) if target_id in set(next_targets)}
+            if filtered_meta:
+                sim.state.world.faction_contact_meta[source_id] = filtered_meta
+            else:
+                sim.state.world.faction_contact_meta.pop(source_id, None)
+
+            if removals >= max_decay_per_tick:
+                budget_exhausted = budget_exhausted or any(
+                    int(sim.state.world.faction_contact_meta.get(source_id, {}).get(target, {}).get("last_touch_tick", tick)) <= threshold_tick
+                    for target in next_targets
+                )
+                if budget_exhausted:
+                    break
+
+        if removals >= max_decay_per_tick and budget_exhausted:
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=FACTION_CONTACT_DECAY_BUDGET_EXHAUSTED_EVENT_TYPE,
+                params={
+                    "tick": tick,
+                    "max_decay_per_tick": max_decay_per_tick,
+                    "removed": removals,
+                },
+            )
 
     def _schedule_contact_rejected(
         self,
@@ -1003,6 +1149,7 @@ class BeliefJobQueueModule(RuleModule):
         )
 
     def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        self._apply_contact_ttl_decay(sim=sim, tick=tick)
         for faction_id in sorted(sim.state.world.faction_beliefs):
             completed = 0
             completed += self._process_queue(
@@ -1455,6 +1602,12 @@ class BeliefJobQueueModule(RuleModule):
                 "job_id": str(job["job_id"]),
                 "tick": event.tick,
             },
+        )
+        self._schedule_touch_event(
+            sim=sim,
+            tick=event.tick,
+            source_faction_id=source_faction_id,
+            target_faction_id=recipient_faction_id,
         )
 
     def _schedule_fanout_skipped(
