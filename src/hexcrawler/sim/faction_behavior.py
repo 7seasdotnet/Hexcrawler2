@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from hexcrawler.sim.beliefs import (
+    BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE,
     BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
     BELIEF_REACTION_INVESTIGATE_CONTESTED_EVENT_TYPE,
     BELIEF_REACTION_INVESTIGATE_UNKNOWN_ACTOR_EVENT_TYPE,
@@ -10,7 +11,7 @@ from hexcrawler.sim.beliefs import (
 )
 from hexcrawler.sim.core import EntityState, SimCommand
 from hexcrawler.sim.groups import GROUP_MOVE_ARRIVED_EVENT_TYPE, MOVE_GROUP_INTENT_COMMAND_TYPE
-from hexcrawler.sim.movement import axial_to_world_xy
+from hexcrawler.sim.movement import axial_to_world_xy, world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, DEFAULT_OVERWORLD_SPACE_ID, GroupRecord, HexCoord, SpaceState
 
@@ -40,6 +41,11 @@ MAX_INVESTIGATOR_LEDGER_UIDS = 1024
 FACTION_INVESTIGATOR_SPAWNED_EVENT_TYPE = "faction_investigator_spawned"
 FACTION_INVESTIGATOR_TASKED_EVENT_TYPE = "faction_investigator_tasked"
 FACTION_INVESTIGATOR_SPAWN_REJECTED_EVENT_TYPE = "faction_investigator_spawn_rejected"
+FACTION_INVESTIGATOR_COMPLETED_EVENT_TYPE = "faction_investigator_completed"
+FACTION_INVESTIGATION_OUTCOME_HOOK_APPLIED_EVENT_TYPE = "faction_investigation_outcome_hook_applied"
+FACTION_INVESTIGATION_OUTCOME_HOOK_IGNORED_EVENT_TYPE = "faction_investigation_outcome_hook_ignored"
+FACTION_INVESTIGATION_COMPLETION_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_investigation_completion_budget_exhausted"
+MAX_FACTION_INVESTIGATION_COMPLETIONS_PER_TICK = 8
 
 
 class FactionBehaviorReactionIntegrationModule(RuleModule):
@@ -1175,4 +1181,311 @@ class FactionInvestigationActorModule(RuleModule):
         return {
             "spawned_action_uids": spawned_action_uids[-MAX_INVESTIGATOR_LEDGER_UIDS:],
             "pending_jobs": pending_jobs,
+        }
+
+
+class FactionInvestigationOutcomeHooksModule(RuleModule):
+    """Phase 5B deterministic investigation outcome hooks for faction investigators (campaign role)."""
+
+    name = "faction_investigator_outcomes"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != GROUP_MOVE_ARRIVED_EVENT_TYPE:
+            return
+        entity_id = str(event.params.get("group_id", ""))
+        if not entity_id:
+            return
+        entity = sim.state.entities.get(entity_id)
+        if entity is None:
+            return
+        completion = self._completion_payload_from_entity(sim=sim, tick=int(event.tick), entity=entity, completion_reason="arrived_at_target")
+        if completion is None:
+            return
+        self._stage_pending(sim=sim, completion=completion)
+
+    def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        state = self._normalized_state(sim=sim)
+
+        for entity_id in sorted(sim.state.entities):
+            entity = sim.state.entities[entity_id]
+            completion = self._completion_payload_from_entity(sim=sim, tick=tick, entity=entity, completion_reason="no_target_location")
+            if completion is None:
+                continue
+            if completion["target_location"] is not None:
+                continue
+            self._append_pending(state=state, completion=completion)
+
+        pending = [item for item in state["pending_completions"] if int(item.get("tick", -1)) == tick]
+        if not pending:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending = sorted(
+            pending,
+            key=lambda row: (
+                str(row.get("faction_id", "")),
+                str(row.get("belief_id", "")),
+                str(row.get("source_action_uid", "")),
+                str(row.get("entity_id", "")),
+            ),
+        )
+        state["pending_completions"] = [item for item in state["pending_completions"] if int(item.get("tick", -1)) != tick]
+        completed = list(state["completed_action_uids"])
+        completed_set = set(completed)
+
+        processed = 0
+        budget_exhausted_emitted = False
+        for item in pending:
+            action_uid = str(item.get("source_action_uid", "")).strip()
+            if not action_uid:
+                self._schedule_outcome_ignored(sim=sim, tick=tick, item=item, reason="unsupported_assignment")
+                continue
+            if action_uid in completed_set:
+                self._schedule_outcome_ignored(sim=sim, tick=tick, item=item, reason="already_completed")
+                continue
+            if processed >= MAX_FACTION_INVESTIGATION_COMPLETIONS_PER_TICK:
+                if not budget_exhausted_emitted:
+                    sim.schedule_event_at(
+                        tick=tick + 1,
+                        event_type=FACTION_INVESTIGATION_COMPLETION_BUDGET_EXHAUSTED_EVENT_TYPE,
+                        params={
+                            "tick": tick,
+                            "max_completions_per_tick": MAX_FACTION_INVESTIGATION_COMPLETIONS_PER_TICK,
+                        },
+                    )
+                    budget_exhausted_emitted = True
+                break
+
+            self._schedule_completed(sim=sim, tick=tick, item=item)
+            if self._bridge_to_belief_completion(sim=sim, tick=tick, item=item):
+                self._schedule_outcome_applied(sim=sim, tick=tick, item=item)
+            else:
+                self._schedule_outcome_ignored(sim=sim, tick=tick, item=item, reason="unsupported_assignment")
+
+            completed.append(action_uid)
+            completed_set.add(action_uid)
+            processed += 1
+
+        state["completed_action_uids"] = completed[-MAX_INVESTIGATOR_LEDGER_UIDS:]
+        sim.set_rules_state(self.name, state)
+
+    def _completion_payload_from_entity(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        entity: EntityState,
+        completion_reason: str,
+    ) -> dict[str, Any] | None:
+        stats = entity.stats if isinstance(entity.stats, dict) else {}
+        if stats.get("role") != "investigator":
+            return None
+        faction_id = str(stats.get("faction_id", "")).strip().lower()
+        belief_id = str(stats.get("source_belief_id", "")).strip()
+        source_action_uid = str(stats.get("source_action_uid", entity.source_action_uid or "")).strip()
+        if not faction_id or not belief_id or not source_action_uid:
+            return None
+        location = self._entity_location(sim=sim, entity=entity)
+        target_location = self._parse_campaign_location(sim=sim, payload=stats.get("target_location"))
+        if completion_reason == "arrived_at_target" and target_location is None:
+            return None
+        if completion_reason == "arrived_at_target" and location != target_location:
+            return None
+        return {
+            "tick": tick,
+            "entity_id": str(entity.entity_id),
+            "faction_id": faction_id,
+            "belief_id": belief_id,
+            "source_action_uid": source_action_uid,
+            "location": location,
+            "target_location": target_location,
+            "completion_reason": completion_reason,
+        }
+
+    def _stage_pending(self, *, sim: Simulation, completion: dict[str, Any]) -> None:
+        state = self._normalized_state(sim=sim)
+        self._append_pending(state=state, completion=completion)
+        sim.set_rules_state(self.name, state)
+
+    @staticmethod
+    def _append_pending(*, state: dict[str, Any], completion: dict[str, Any]) -> None:
+        marker = (
+            int(completion["tick"]),
+            str(completion["entity_id"]),
+            str(completion["source_action_uid"]),
+            str(completion["completion_reason"]),
+        )
+        for item in state["pending_completions"]:
+            key = (
+                int(item.get("tick", -1)),
+                str(item.get("entity_id", "")),
+                str(item.get("source_action_uid", "")),
+                str(item.get("completion_reason", "")),
+            )
+            if key == marker:
+                return
+        state["pending_completions"].append(completion)
+
+    def _bridge_to_belief_completion(self, *, sim: Simulation, tick: int, item: dict[str, Any]) -> bool:
+        faction_id = str(item.get("faction_id", "")).strip().lower()
+        belief_id = str(item.get("belief_id", "")).strip()
+        action_uid = str(item.get("source_action_uid", "")).strip()
+        if not faction_id or not belief_id or not action_uid:
+            return False
+
+        claim = self._resolve_claim_payload(sim=sim, faction_id=faction_id, belief_id=belief_id)
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "job_id": action_uid,
+                "faction_id": faction_id,
+                "claim": claim,
+                "source_action_uid": action_uid,
+            },
+        )
+        return True
+
+    def _resolve_claim_payload(self, *, sim: Simulation, faction_id: str, belief_id: str) -> dict[str, Any]:
+        subject: dict[str, Any] = {"kind": "unknown_actor", "id": "unknown"}
+        claim_key = belief_id
+        confidence = INVESTIGATION_DEFAULT_CONFIDENCE
+        faction_state = sim.state.world.faction_beliefs.get(faction_id, {})
+        if isinstance(faction_state, dict):
+            belief_records = faction_state.get("belief_records", {})
+            if isinstance(belief_records, dict):
+                belief = belief_records.get(belief_id, {})
+                if isinstance(belief, dict):
+                    if isinstance(belief.get("subject"), dict):
+                        subject = dict(belief["subject"])
+                    token = str(belief.get("base_key", "")).strip()
+                    if token:
+                        claim_key = token
+                    raw_conf = belief.get("confidence")
+                    if isinstance(raw_conf, int) and not isinstance(raw_conf, bool):
+                        confidence = raw_conf
+        return {
+            "subject": subject,
+            "claim_key": claim_key,
+            "confidence": confidence,
+        }
+
+    def _schedule_completed(self, *, sim: Simulation, tick: int, item: dict[str, Any]) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_INVESTIGATOR_COMPLETED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": str(item["entity_id"]),
+                "faction_id": str(item["faction_id"]),
+                "belief_id": str(item["belief_id"]),
+                "source_action_uid": str(item["source_action_uid"]),
+                "location": dict(item["location"]),
+                "target_location": (dict(item["target_location"]) if isinstance(item.get("target_location"), dict) else None),
+                "completion_reason": str(item["completion_reason"]),
+            },
+        )
+
+    def _schedule_outcome_applied(self, *, sim: Simulation, tick: int, item: dict[str, Any]) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_INVESTIGATION_OUTCOME_HOOK_APPLIED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": str(item["entity_id"]),
+                "faction_id": str(item["faction_id"]),
+                "belief_id": str(item["belief_id"]),
+                "source_action_uid": str(item["source_action_uid"]),
+                "bridged_event_type": BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE,
+                "completion_reason": str(item["completion_reason"]),
+            },
+        )
+
+    def _schedule_outcome_ignored(self, *, sim: Simulation, tick: int, item: dict[str, Any], reason: str) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=FACTION_INVESTIGATION_OUTCOME_HOOK_IGNORED_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "entity_id": str(item.get("entity_id", "")),
+                "faction_id": str(item.get("faction_id", "")),
+                "belief_id": str(item.get("belief_id", "")),
+                "source_action_uid": str(item.get("source_action_uid", "")),
+                "reason": reason,
+            },
+        )
+
+    def _entity_location(self, *, sim: Simulation, entity: EntityState) -> dict[str, Any]:
+        space_id = str(entity.space_id or DEFAULT_OVERWORLD_SPACE_ID)
+        space = sim.state.world.spaces.get(space_id)
+        if space is not None and space.role == CAMPAIGN_SPACE_ROLE:
+            if "hex" in space.topology_type:
+                return {"space_id": space_id, "coord": world_xy_to_axial(entity.position_x, entity.position_y).to_dict()}
+            x, y = world_xy_to_square_grid_cell(entity.position_x, entity.position_y)
+            return {"space_id": space_id, "coord": {"x": x, "y": y}}
+        return {"space_id": space_id, "coord": world_xy_to_axial(entity.position_x, entity.position_y).to_dict()}
+
+    def _parse_campaign_location(self, *, sim: Simulation, payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        if set(payload.keys()) != {"space_id", "coord"}:
+            return None
+        space_id = payload.get("space_id")
+        coord = payload.get("coord")
+        if not isinstance(space_id, str) or not isinstance(coord, dict):
+            return None
+        space = sim.state.world.spaces.get(space_id)
+        if space is None or space.role != CAMPAIGN_SPACE_ROLE or not space.is_valid_cell(coord):
+            return None
+        return {"space_id": space_id, "coord": dict(coord)}
+
+    def _normalized_state(self, *, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+
+        completed_action_uids: list[str] = []
+        raw_completed = state.get("completed_action_uids", [])
+        if isinstance(raw_completed, list):
+            for row in raw_completed:
+                token = str(row).strip()
+                if token and token not in completed_action_uids:
+                    completed_action_uids.append(token)
+
+        pending_completions: list[dict[str, Any]] = []
+        raw_pending = state.get("pending_completions", [])
+        if isinstance(raw_pending, list):
+            for row in raw_pending:
+                if not isinstance(row, dict):
+                    continue
+                tick = row.get("tick")
+                if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                    continue
+                entity_id = str(row.get("entity_id", "")).strip()
+                faction_id = str(row.get("faction_id", "")).strip().lower()
+                belief_id = str(row.get("belief_id", "")).strip()
+                source_action_uid = str(row.get("source_action_uid", "")).strip()
+                completion_reason = str(row.get("completion_reason", "")).strip()
+                if not entity_id or not faction_id or not belief_id or not source_action_uid:
+                    continue
+                if completion_reason not in {"arrived_at_target", "no_target_location"}:
+                    continue
+                location = self._parse_campaign_location(sim=sim, payload=row.get("location"))
+                if location is None:
+                    continue
+                pending_completions.append(
+                    {
+                        "tick": tick,
+                        "entity_id": entity_id,
+                        "faction_id": faction_id,
+                        "belief_id": belief_id,
+                        "source_action_uid": source_action_uid,
+                        "location": location,
+                        "target_location": self._parse_campaign_location(sim=sim, payload=row.get("target_location")),
+                        "completion_reason": completion_reason,
+                    }
+                )
+
+        return {
+            "completed_action_uids": completed_action_uids[-MAX_INVESTIGATOR_LEDGER_UIDS:],
+            "pending_completions": pending_completions,
         }
