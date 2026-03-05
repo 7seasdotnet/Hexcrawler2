@@ -23,6 +23,7 @@ BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE = "belief_updated_from_investigatio
 BELIEF_JOB_COMPLETION_SKIPPED_DUPLICATE_EVENT_TYPE = "belief_job_completion_skipped_duplicate"
 BELIEF_CONTRADICTION_DETECTED_EVENT_TYPE = "belief_contradiction_detected"
 BELIEF_CONTRADICTION_RESOLVED_EVENT_TYPE = "belief_contradiction_resolved"
+BELIEF_UNKNOWN_ACTOR_ATTRIBUTED_EVENT_TYPE = "belief_unknown_actor_attributed"
 BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE = "belief_outbound_claim_available"
 BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
 BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
@@ -56,6 +57,10 @@ MAX_COMPLETED_JOB_IDS = 1024
 INVESTIGATION_CONFIDENCE_DELTA = 10
 INVESTIGATION_DEFAULT_CONFIDENCE = 50
 INVESTIGATION_RESOLVE_DELTA = 10
+UNKNOWN_ACTOR_MAX_CONF_THRESHOLD = 30
+UNKNOWN_ACTOR_MIN_CONTESTED_AGE_TICKS = 50
+UNKNOWN_ACTOR_ATTRIBUTION_CONFIDENCE = 40
+MAX_UNKNOWN_ATTRIBUTIONS_PER_TICK = 8
 BASE_TRANSMISSION_DELAY_TICKS = 10
 BASE_INVESTIGATION_DELAY_TICKS = 20
 TRANSMISSION_CONFIDENCE_BONUS = 0
@@ -516,6 +521,8 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
         "base_key",
         "stance",
         "opposed_belief_id",
+        "contested_since_tick",
+        "last_unknown_actor_attribution_tick",
         "confidence",
         "first_seen_tick",
         "last_updated_tick",
@@ -557,6 +564,28 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
             max_len=128,
         )
 
+
+
+    contested_since_tick_raw = value.get("contested_since_tick")
+    if contested_since_tick_raw is None:
+        contested_since_tick: int | None = None
+    elif isinstance(contested_since_tick_raw, bool) or not isinstance(contested_since_tick_raw, int) or contested_since_tick_raw < 0:
+        raise ValueError("belief record contested_since_tick must be integer >= 0")
+    else:
+        contested_since_tick = int(contested_since_tick_raw)
+
+    last_unknown_actor_attribution_tick_raw = value.get("last_unknown_actor_attribution_tick")
+    if last_unknown_actor_attribution_tick_raw is None:
+        last_unknown_actor_attribution_tick: int | None = None
+    elif (
+        isinstance(last_unknown_actor_attribution_tick_raw, bool)
+        or not isinstance(last_unknown_actor_attribution_tick_raw, int)
+        or last_unknown_actor_attribution_tick_raw < 0
+    ):
+        raise ValueError("belief record last_unknown_actor_attribution_tick must be integer >= 0")
+    else:
+        last_unknown_actor_attribution_tick = int(last_unknown_actor_attribution_tick_raw)
+
     first_seen_tick = value.get("first_seen_tick")
     if isinstance(first_seen_tick, bool) or not isinstance(first_seen_tick, int) or first_seen_tick < 0:
         raise ValueError("belief record first_seen_tick must be integer >= 0")
@@ -566,6 +595,10 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
         raise ValueError("belief record last_updated_tick must be integer >= 0")
     if last_updated_tick < first_seen_tick:
         raise ValueError("belief record last_updated_tick must be >= first_seen_tick")
+    if contested_since_tick is not None and contested_since_tick > last_updated_tick:
+        raise ValueError("belief record contested_since_tick must be <= last_updated_tick")
+    if last_unknown_actor_attribution_tick is not None and last_unknown_actor_attribution_tick > last_updated_tick:
+        raise ValueError("belief record last_unknown_actor_attribution_tick must be <= last_updated_tick")
 
     confidence = clamp_confidence(value.get("confidence"))
     evidence_count = clamp_evidence_count(value.get("evidence_count"))
@@ -583,6 +616,11 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
     }
     if opposed_belief_id is not None:
         normalized_record["opposed_belief_id"] = opposed_belief_id
+        normalized_record["contested_since_tick"] = (
+            int(last_updated_tick) if contested_since_tick is None else contested_since_tick
+        )
+    if last_unknown_actor_attribution_tick is not None:
+        normalized_record["last_unknown_actor_attribution_tick"] = last_unknown_actor_attribution_tick
     return normalized_record
 
 
@@ -631,11 +669,27 @@ def _apply_contradiction_state(
         return None
 
     opposing = belief_records[opposed_belief_id]
+    contested_since_tick = int(
+        record.get(
+            "contested_since_tick",
+            opposing.get("contested_since_tick", tick),
+        )
+    )
     if str(record.get("opposed_belief_id")) == opposed_belief_id and str(opposing.get("opposed_belief_id")) == belief_id:
+        belief_records[belief_id] = {**record, "contested_since_tick": contested_since_tick}
+        belief_records[opposed_belief_id] = {**opposing, "contested_since_tick": contested_since_tick}
         return None
 
-    belief_records[belief_id] = {**record, "opposed_belief_id": opposed_belief_id}
-    belief_records[opposed_belief_id] = {**opposing, "opposed_belief_id": belief_id}
+    belief_records[belief_id] = {
+        **record,
+        "opposed_belief_id": opposed_belief_id,
+        "contested_since_tick": contested_since_tick,
+    }
+    belief_records[opposed_belief_id] = {
+        **opposing,
+        "opposed_belief_id": belief_id,
+        "contested_since_tick": contested_since_tick,
+    }
     return {
         "faction_id": faction_id,
         "subject": dict(record["subject"]),
@@ -654,7 +708,52 @@ def _clear_opposed_pointer(*, belief_records: dict[str, dict[str, Any]], belief_
         return
     updated = dict(record)
     updated.pop("opposed_belief_id", None)
+    updated.pop("contested_since_tick", None)
+    updated.pop("last_unknown_actor_attribution_tick", None)
     belief_records[belief_id] = updated
+
+
+def _claim_key_for_base_stance(*, base_key: str, stance: str) -> str:
+    if stance not in {"affirm", "deny"}:
+        raise ValueError("stance must be 'affirm' or 'deny'")
+    return f"{base_key}:{stance}"
+
+
+def _upsert_unknown_actor_belief(
+    *,
+    faction_state: dict[str, Any],
+    faction_id: str,
+    base_key: str,
+    tick: int,
+) -> str:
+    belief_records: dict[str, dict[str, Any]] = faction_state.setdefault("belief_records", {})
+    subject = {"kind": "unknown_actor", "id": "unknown"}
+    claim_key = _claim_key_for_base_stance(base_key=base_key, stance="affirm")
+    belief_id = compute_belief_id(faction_id=faction_id, subject=subject, claim_key=claim_key)
+    existing = belief_records.get(belief_id)
+
+    if existing is None:
+        belief_records[belief_id] = {
+            "belief_id": belief_id,
+            "subject": subject,
+            "claim_key": claim_key,
+            "base_key": base_key,
+            "stance": "affirm",
+            "confidence": clamp_confidence(UNKNOWN_ACTOR_ATTRIBUTION_CONFIDENCE),
+            "first_seen_tick": tick,
+            "last_updated_tick": tick,
+            "evidence_count": clamp_evidence_count(1),
+        }
+    else:
+        belief_records[belief_id] = {
+            **existing,
+            "confidence": clamp_confidence(UNKNOWN_ACTOR_ATTRIBUTION_CONFIDENCE),
+            "last_updated_tick": tick,
+            "evidence_count": clamp_evidence_count(int(existing.get("evidence_count", 0)) + 1),
+        }
+
+    _evict_excess_records(belief_records)
+    return belief_id
 
 
 def _evict_excess_records(records: dict[str, dict[str, Any]]) -> None:
@@ -1314,6 +1413,76 @@ class BeliefJobQueueModule(RuleModule):
                 completion_event_type=BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE,
                 remaining_budget=MAX_JOBS_PER_TICK - completed,
             )
+        self._attribute_unknown_actor_beliefs(sim=sim, tick=tick)
+
+    def _attribute_unknown_actor_beliefs(self, *, sim: Simulation, tick: int) -> None:
+        attributions = 0
+        for faction_id in sorted(sim.state.world.faction_beliefs):
+            if attributions >= MAX_UNKNOWN_ATTRIBUTIONS_PER_TICK:
+                return
+            faction_state = sim.state.world.faction_beliefs.get(faction_id)
+            if not isinstance(faction_state, dict):
+                continue
+            belief_records = faction_state.get("belief_records", {})
+            if not isinstance(belief_records, dict) or not belief_records:
+                continue
+
+            for belief_id in sorted(belief_records):
+                if attributions >= MAX_UNKNOWN_ATTRIBUTIONS_PER_TICK:
+                    return
+
+                belief = belief_records.get(belief_id)
+                if not isinstance(belief, dict):
+                    continue
+                opposed_belief_id = belief.get("opposed_belief_id")
+                if not isinstance(opposed_belief_id, str) or opposed_belief_id not in belief_records:
+                    continue
+                if belief_id >= opposed_belief_id:
+                    continue
+
+                opposing = belief_records[opposed_belief_id]
+                if str(opposing.get("opposed_belief_id", "")) != belief_id:
+                    continue
+                if "last_unknown_actor_attribution_tick" in belief or "last_unknown_actor_attribution_tick" in opposing:
+                    continue
+
+                confidence_a = int(belief.get("confidence", 0))
+                confidence_b = int(opposing.get("confidence", 0))
+                if max(confidence_a, confidence_b) > UNKNOWN_ACTOR_MAX_CONF_THRESHOLD:
+                    continue
+
+                contested_since_tick = int(
+                    belief.get(
+                        "contested_since_tick",
+                        opposing.get("contested_since_tick", belief.get("last_updated_tick", tick)),
+                    )
+                )
+                if tick - contested_since_tick < UNKNOWN_ACTOR_MIN_CONTESTED_AGE_TICKS:
+                    continue
+
+                base_key = str(belief.get("base_key", ""))
+                _upsert_unknown_actor_belief(
+                    faction_state=faction_state,
+                    faction_id=faction_id,
+                    base_key=base_key,
+                    tick=tick,
+                )
+                belief_records[belief_id] = {**belief, "last_unknown_actor_attribution_tick": tick}
+                belief_records[opposed_belief_id] = {
+                    **opposing,
+                    "last_unknown_actor_attribution_tick": tick,
+                }
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=BELIEF_UNKNOWN_ACTOR_ATTRIBUTED_EVENT_TYPE,
+                    params={
+                        "faction_id": faction_id,
+                        "base_key": base_key,
+                        "tick": tick,
+                        "source_belief_ids": [belief_id, opposed_belief_id],
+                    },
+                )
+                attributions += 1
 
     def _process_queue(
         self,
