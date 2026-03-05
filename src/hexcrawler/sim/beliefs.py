@@ -21,6 +21,10 @@ BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE = "belief_investigation_job_comple
 BELIEF_UPDATED_FROM_TRANSMISSION_EVENT_TYPE = "belief_updated_from_transmission"
 BELIEF_UPDATED_FROM_INVESTIGATION_EVENT_TYPE = "belief_updated_from_investigation"
 BELIEF_JOB_COMPLETION_SKIPPED_DUPLICATE_EVENT_TYPE = "belief_job_completion_skipped_duplicate"
+BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE = "belief_outbound_claim_available"
+BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
+BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
+BELIEF_FANOUT_SKIPPED_EVENT_TYPE = "belief_fanout_skipped"
 BELIEF_SUBJECT_KINDS = {"player", "faction", "group", "unknown_actor"}
 MAX_BELIEF_RECORDS_PER_FACTION = 512
 MAX_BELIEF_CLAIM_KEY_LEN = 64
@@ -38,6 +42,8 @@ BASE_TRANSMISSION_DELAY_TICKS = 10
 BASE_INVESTIGATION_DELAY_TICKS = 20
 TRANSMISSION_CONFIDENCE_BONUS = 0
 MAX_DELAY_TICKS = 1_000_000
+MAX_FANOUT_RECIPIENTS = 3
+MAX_FANOUT_EMISSIONS_PER_TICK = 16
 
 
 def _normalize_modifier_key(value: Any, *, field_name: str) -> str:
@@ -674,6 +680,9 @@ class BeliefJobQueueModule(RuleModule):
     name = "belief_job_queue"
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE:
+            self._handle_outbound_claim_available(sim=sim, event=event)
+            return
         if event.event_type == BELIEF_TRANSMISSION_JOB_ENQUEUED_EVENT_TYPE:
             self._handle_enqueue(sim=sim, event=event, queue_kind="transmission")
             return
@@ -898,3 +907,201 @@ class BeliefJobQueueModule(RuleModule):
             job_id=str(job["job_id"]),
             outcome=("enqueued" if accepted else "queue_full"),
         )
+
+    def _handle_outbound_claim_available(self, *, sim: Simulation, event: SimEvent) -> None:
+        params = event.params
+        try:
+            source_faction_id = normalize_faction_id(params.get("source_faction_id"))
+            site_template_id = _normalize_optional_context_id(
+                params.get("site_template_id"),
+                field_name="site_template_id",
+            )
+            region_id = _normalize_optional_context_id(
+                params.get("region_id"),
+                field_name="region_id",
+            )
+            claim = _normalize_claim_payload(
+                {
+                    "subject": params.get("subject"),
+                    "claim_key": params.get("claim_key"),
+                    "confidence": params.get("confidence"),
+                }
+            )
+        except (TypeError, ValueError):
+            return
+
+        recipient_ids: list[str]
+        raw_recipients = params.get("recipient_faction_ids")
+        if raw_recipients is None:
+            recipient_ids = self._select_fanout_recipients(
+                faction_beliefs=sim.state.world.faction_beliefs,
+                source_faction_id=source_faction_id,
+            )
+        else:
+            if not isinstance(raw_recipients, list):
+                return
+            normalized: list[str] = []
+            for raw_recipient_id in raw_recipients:
+                try:
+                    normalized.append(normalize_faction_id(raw_recipient_id))
+                except ValueError:
+                    continue
+            recipient_ids = normalized[:MAX_FANOUT_RECIPIENTS]
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE,
+            params={
+                "source_faction_id": source_faction_id,
+                "claim_key": claim["claim_key"],
+                "tick": event.tick,
+                "intended_recipients_count": len(recipient_ids),
+            },
+        )
+
+        emissions_used = self._fanout_emissions_used_this_tick(sim=sim, tick=event.tick)
+        remaining_budget = max(0, MAX_FANOUT_EMISSIONS_PER_TICK - emissions_used)
+        recipients_to_emit = recipient_ids[:remaining_budget]
+        deferred_recipients = recipient_ids[remaining_budget:]
+
+        for recipient_faction_id in recipients_to_emit:
+            self._emit_fanout_job_for_recipient(
+                sim=sim,
+                event=event,
+                source_faction_id=source_faction_id,
+                recipient_faction_id=recipient_faction_id,
+                site_template_id=site_template_id,
+                region_id=region_id,
+                claim=claim,
+            )
+
+        if deferred_recipients:
+            sim.schedule_event_at(
+                tick=event.tick + 1,
+                event_type=BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE,
+                params={
+                    "source_faction_id": source_faction_id,
+                    "subject": dict(claim["subject"]),
+                    "claim_key": claim["claim_key"],
+                    "confidence": claim["confidence"],
+                    "recipient_faction_ids": list(deferred_recipients),
+                    "site_template_id": site_template_id,
+                    "region_id": region_id,
+                },
+            )
+
+    def _emit_fanout_job_for_recipient(
+        self,
+        *,
+        sim: Simulation,
+        event: SimEvent,
+        source_faction_id: str,
+        recipient_faction_id: str,
+        site_template_id: str | None,
+        region_id: str | None,
+        claim: dict[str, Any],
+    ) -> None:
+        if recipient_faction_id == source_faction_id:
+            self._schedule_fanout_skipped(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                recipient_faction_id=recipient_faction_id,
+                reason="invalid_recipient",
+            )
+            return
+
+        not_before_tick, modified_claim = _compute_enqueue_delay_and_confidence(
+            queue_kind="transmission",
+            world_enqueue_config=sim.state.world.belief_enqueue_config,
+            tick=event.tick,
+            site_template_id=site_template_id,
+            region_id=region_id,
+            claim=claim,
+        )
+        job = _build_job(
+            queue_kind="transmission",
+            faction_id=recipient_faction_id,
+            created_tick=event.tick,
+            not_before_tick=not_before_tick,
+            claim=modified_claim,
+        )
+        queue = sim.state.world.faction_beliefs.get(recipient_faction_id, {}).get("transmission_queue", [])
+        if isinstance(queue, list) and any(str(row.get("job_id")) == job["job_id"] for row in queue):
+            self._schedule_fanout_skipped(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                recipient_faction_id=recipient_faction_id,
+                reason="duplicate_job_id",
+            )
+            return
+        if len(queue) >= MAX_TRANSMISSION_QUEUE:
+            self._schedule_fanout_skipped(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                recipient_faction_id=recipient_faction_id,
+                reason="queue_full",
+            )
+            return
+
+        accepted = _enqueue_job(
+            faction_beliefs=sim.state.world.faction_beliefs,
+            faction_id=recipient_faction_id,
+            queue_key="transmission_queue",
+            queue_cap=MAX_TRANSMISSION_QUEUE,
+            job=job,
+        )
+        if not accepted:
+            self._schedule_fanout_skipped(
+                sim=sim,
+                tick=event.tick,
+                source_faction_id=source_faction_id,
+                recipient_faction_id=recipient_faction_id,
+                reason="queue_full",
+            )
+            return
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=BELIEF_FANOUT_EMITTED_EVENT_TYPE,
+            params={
+                "source_faction_id": source_faction_id,
+                "recipient_faction_id": recipient_faction_id,
+                "job_id": str(job["job_id"]),
+                "tick": event.tick,
+            },
+        )
+
+    def _schedule_fanout_skipped(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        source_faction_id: str,
+        recipient_faction_id: str,
+        reason: str,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=BELIEF_FANOUT_SKIPPED_EVENT_TYPE,
+            params={
+                "source_faction_id": source_faction_id,
+                "recipient_faction_id": recipient_faction_id,
+                "reason": reason,
+                "tick": tick,
+            },
+        )
+
+    def _fanout_emissions_used_this_tick(self, *, sim: Simulation, tick: int) -> int:
+        used = sum(1 for row in sim.state.event_trace if row.get("tick") == tick and row.get("event_type") == BELIEF_FANOUT_EMITTED_EVENT_TYPE)
+        pending_same_tick = sim._pending_events_by_tick.get(tick, [])
+        used += sum(1 for row in pending_same_tick if row.event_type == BELIEF_FANOUT_EMITTED_EVENT_TYPE)
+        return used
+
+    def _select_fanout_recipients(self, *, faction_beliefs: dict[str, dict[str, Any]], source_faction_id: str) -> list[str]:
+        return [
+            faction_id
+            for faction_id in sorted(faction_beliefs)
+            if faction_id != source_faction_id
+        ][:MAX_FANOUT_RECIPIENTS]
