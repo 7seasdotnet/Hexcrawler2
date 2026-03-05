@@ -15,10 +15,15 @@ FACTION_BEHAVIOR_REQUEST_EVENT_TYPE = "faction_behavior_request"
 FACTION_BEHAVIOR_REQUEST_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_request_budget_exhausted"
 FACTION_BEHAVIOR_ACTION_STUB_EVENT_TYPE = "faction_behavior_action_stub"
 FACTION_BEHAVIOR_ACTION_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_action_budget_exhausted"
+FACTION_BEHAVIOR_ACTION_EXECUTE_REQUEST_EVENT_TYPE = "faction_behavior_action_execute_request"
+FACTION_BEHAVIOR_ACTION_EXECUTE_IGNORED_EVENT_TYPE = "faction_behavior_action_execute_ignored"
+FACTION_BEHAVIOR_ACTION_EXECUTE_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_action_execute_budget_exhausted"
 
 MAX_FACTION_BEHAVIOR_REQUESTS_PER_TICK = 8
 MAX_FACTION_BEHAVIOR_ACTIONS_PER_TICK = 8
+MAX_FACTION_BEHAVIOR_EXECUTE_REQUESTS_PER_TICK = 8
 MAX_APPLIED_SOURCE_EVENT_IDS = 512
+MAX_APPLIED_ACTION_UIDS = 1024
 
 
 class FactionBehaviorReactionIntegrationModule(RuleModule):
@@ -421,5 +426,215 @@ class FactionBehaviorPlannerModule(RuleModule):
         return {
             "applied_request_event_ids": applied_request_event_ids,
             "pending_action_stubs": pending_action_stubs,
+            "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
+        }
+
+
+class FactionBehaviorExecutionSeamModule(RuleModule):
+    """Slice 4C deterministic behavior grammar->execution-request seam (campaign+local role-agnostic).
+
+    Single emission boundary: action execution requests are staged only in ``on_event_executed`` and emitted
+    only during ``on_tick_end`` flush for that tick, guaranteeing one deterministic emission path.
+    """
+
+    name = "faction_behavior_execution"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != FACTION_BEHAVIOR_ACTION_STUB_EVENT_TYPE:
+            return
+
+        tick = int(event.tick)
+        source_action_stub_event_id = str(event.event_id)
+        if not source_action_stub_event_id:
+            return
+
+        state = self._normalized_state(sim=sim)
+        pending = list(state["pending_execute_requests"])
+        pending_action_uids = {str(item.get("action_uid", "")) for item in pending}
+        applied_action_uids = set(state["applied_action_uids"])
+
+        faction_id = str(event.params.get("faction_id", "")).strip().lower()
+        actions = event.params.get("actions", [])
+        if not faction_id or not isinstance(actions, list):
+            sim.set_rules_state(self.name, state)
+            return
+
+        for index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                continue
+            action_uid = f"{source_action_stub_event_id}:{index}"
+            if action_uid in applied_action_uids or action_uid in pending_action_uids:
+                continue
+
+            action_type = str(action.get("action_type", "")).strip()
+            template_id = str(action.get("template_id", "")).strip()
+            params = action.get("params", {})
+            belief_id = ""
+            request_type = ""
+            reason = ""
+            priority = 1
+            if isinstance(params, dict):
+                belief_id = str(params.get("belief_id", event.params.get("belief_id", ""))).strip()
+                request_type = str(params.get("request_type", event.params.get("request_type", ""))).strip()
+                reason = str(params.get("reason", "")).strip()
+                raw_priority = params.get("priority", 1)
+                if isinstance(raw_priority, int) and not isinstance(raw_priority, bool):
+                    priority = raw_priority
+
+            pending.append(
+                {
+                    "tick": tick,
+                    "source_action_stub_event_id": source_action_stub_event_id,
+                    "action_uid": action_uid,
+                    "faction_id": faction_id,
+                    "action_type": action_type,
+                    "template_id": template_id,
+                    "belief_id": belief_id,
+                    "request_type": request_type,
+                    "reason": reason,
+                    "priority": priority,
+                }
+            )
+            pending_action_uids.add(action_uid)
+
+        state["pending_execute_requests"] = pending
+        sim.set_rules_state(self.name, state)
+
+    def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        state = self._normalized_state(sim=sim)
+        pending_for_tick = [item for item in state["pending_execute_requests"] if int(item.get("tick", -1)) == tick]
+        if not pending_for_tick:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending_for_tick = sorted(
+            pending_for_tick,
+            key=lambda item: (
+                str(item.get("faction_id", "")),
+                str(item.get("belief_id", "")),
+                str(item.get("action_type", "")),
+                str(item.get("action_uid", "")),
+            ),
+        )
+
+        remaining_pending = [item for item in state["pending_execute_requests"] if int(item.get("tick", -1)) != tick]
+        applied = list(state["applied_action_uids"])
+        applied_set = set(applied)
+        emitted = 0
+
+        for item in pending_for_tick:
+            action_uid = str(item.get("action_uid", ""))
+            if not action_uid or action_uid in applied_set:
+                continue
+
+            if emitted >= MAX_FACTION_BEHAVIOR_EXECUTE_REQUESTS_PER_TICK:
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=FACTION_BEHAVIOR_ACTION_EXECUTE_BUDGET_EXHAUSTED_EVENT_TYPE,
+                    params={
+                        "tick": tick,
+                        "max_execute_requests_per_tick": MAX_FACTION_BEHAVIOR_EXECUTE_REQUESTS_PER_TICK,
+                    },
+                )
+                break
+
+            request_payload = {
+                "tick": int(item["tick"]),
+                "source_action_stub_event_id": str(item["source_action_stub_event_id"]),
+                "action_uid": action_uid,
+                "faction_id": str(item["faction_id"]),
+                "action_type": str(item["action_type"]),
+                "template_id": str(item["template_id"]),
+                "belief_id": str(item["belief_id"]),
+                "request_type": str(item["request_type"]),
+                "reason": str(item["reason"]),
+                "priority": int(item["priority"]),
+            }
+
+            is_supported = (
+                request_payload["action_type"] == "investigate_belief"
+                and request_payload["template_id"] == "belief_investigation"
+            )
+            if not is_supported:
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=FACTION_BEHAVIOR_ACTION_EXECUTE_IGNORED_EVENT_TYPE,
+                    params={
+                        "tick": tick,
+                        "action_uid": action_uid,
+                        "faction_id": request_payload["faction_id"],
+                        "action_type": request_payload["action_type"],
+                        "template_id": request_payload["template_id"],
+                        "reason": "unsupported_action",
+                    },
+                )
+                applied.append(action_uid)
+                applied_set.add(action_uid)
+                continue
+
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=FACTION_BEHAVIOR_ACTION_EXECUTE_REQUEST_EVENT_TYPE,
+                params=request_payload,
+            )
+            emitted += 1
+            applied.append(action_uid)
+            applied_set.add(action_uid)
+
+        if len(applied) > MAX_APPLIED_ACTION_UIDS:
+            applied = applied[-MAX_APPLIED_ACTION_UIDS:]
+        state["applied_action_uids"] = applied
+        state["pending_execute_requests"] = remaining_pending
+        state["last_processed_tick"] = tick
+        sim.set_rules_state(self.name, state)
+
+    def _normalized_state(self, *, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+
+        applied_action_uids: list[str] = []
+        raw_applied = state.get("applied_action_uids", [])
+        if isinstance(raw_applied, list):
+            for value in raw_applied:
+                token = str(value)
+                if token and token not in applied_action_uids:
+                    applied_action_uids.append(token)
+        if len(applied_action_uids) > MAX_APPLIED_ACTION_UIDS:
+            applied_action_uids = applied_action_uids[-MAX_APPLIED_ACTION_UIDS:]
+
+        pending_execute_requests: list[dict[str, Any]] = []
+        raw_pending = state.get("pending_execute_requests", [])
+        if isinstance(raw_pending, list):
+            for item in raw_pending:
+                if not isinstance(item, dict):
+                    continue
+                tick = item.get("tick")
+                if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                    continue
+                action_uid = str(item.get("action_uid", "")).strip()
+                source_action_stub_event_id = str(item.get("source_action_stub_event_id", "")).strip()
+                faction_id = str(item.get("faction_id", "")).strip().lower()
+                if not action_uid or not source_action_stub_event_id or not faction_id:
+                    continue
+
+                raw_priority = item.get("priority", 1)
+                priority = raw_priority if isinstance(raw_priority, int) and not isinstance(raw_priority, bool) else 1
+                pending_execute_requests.append(
+                    {
+                        "tick": tick,
+                        "source_action_stub_event_id": source_action_stub_event_id,
+                        "action_uid": action_uid,
+                        "faction_id": faction_id,
+                        "action_type": str(item.get("action_type", "")).strip(),
+                        "template_id": str(item.get("template_id", "")).strip(),
+                        "belief_id": str(item.get("belief_id", "")).strip(),
+                        "request_type": str(item.get("request_type", "")).strip(),
+                        "reason": str(item.get("reason", "")).strip(),
+                        "priority": priority,
+                    }
+                )
+
+        return {
+            "applied_action_uids": applied_action_uids,
+            "pending_execute_requests": pending_execute_requests,
             "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
         }

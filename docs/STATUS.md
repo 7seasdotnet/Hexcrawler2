@@ -1,17 +1,16 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Diegetic Intelligence Slice 4B — behavior planning grammar stub (implemented).
-- **Next action:** Diegetic Intelligence Slice 4C — execution seam placeholder (no behavior execution yet).
+- **Current phase:** Diegetic Intelligence Slice 4C — behavior action execution seam (implemented).
+- **Next action:** Diegetic Intelligence Slice 4D — execution-request consumer / investigation job bridge (placeholder).
 - **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
 - Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
 
 
 ## What changed in this commit
-- Added `FactionBehaviorPlannerModule` (Slice 4B) that consumes only `faction_behavior_request` and emits deterministic descriptive `faction_behavior_action_stub` grammar events with fixed `investigate_belief` action payloads.
-- Added deterministic bounded per-tick action-stub emission with lexical ordering, idempotent `applied_request_event_ids` ledger persistence, FIFO ledger bounding, and single forensic `faction_behavior_action_budget_exhausted` on cap hit.
-- Added focused Slice 4B tests for payload shape, lexical ordering independence, budget exhaustion, idempotence, and save/load hash stability including pending-after-load deterministic flush behavior.
-- Added a final sanity regression for the single emission boundary: staged request processing crosses exactly one tick boundary and emits exactly once after save/load with matching `simulation_hash`.
+- Added `FactionBehaviorExecutionSeamModule` (Slice 4C) that consumes only `faction_behavior_action_stub` and emits deterministic `faction_behavior_action_execute_request` events for supported `investigate_belief` / `belief_investigation` actions.
+- Added deterministic bounded per-tick execution-request emission with lexical ordering `(faction_id, belief_id, action_type, action_uid)`, idempotent `applied_action_uids` ledger persistence, FIFO ledger bounding, and forensics for unsupported actions and budget exhaustion.
+- Added focused Slice 4C tests for canonical execute-request payloads, unsupported safety, ordering independence, budget enforcement, idempotence, single emission boundary, and save/load hash stability.
 
 
 ## What Exists (folders / entry points)
@@ -210,6 +209,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice3c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4a.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4b.py`
+- `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4c.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
