@@ -1241,11 +1241,14 @@ class WorldState:
     activated_factions: list[str] = field(default_factory=list)
     faction_beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
     belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
+    _faction_registry_authored: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.rumor_ttl_config = _normalize_rumor_ttl_config(self.rumor_ttl_config)
         self.faction_beliefs = normalize_world_faction_beliefs(self.faction_beliefs)
         self.faction_registry = normalize_faction_registry(self.faction_registry)
+        if self.faction_registry:
+            self._faction_registry_authored = True
         if not self.faction_registry and self.faction_beliefs:
             self.faction_registry = sorted(self.faction_beliefs)
         self.activated_factions = normalize_activated_factions(
@@ -1359,9 +1362,8 @@ class WorldState:
                 faction_id: dict(self.faction_beliefs[faction_id])
                 for faction_id in sorted(self.faction_beliefs)
             }
-        serialized_faction_registry = list(self.faction_registry) if self.faction_registry else sorted(self.faction_beliefs)
-        if serialized_faction_registry:
-            payload["faction_registry"] = serialized_faction_registry
+        if self._faction_registry_authored:
+            payload["faction_registry"] = list(self.faction_registry)
         if self.activated_factions:
             payload["activated_factions"] = list(self.activated_factions)
         if self.belief_enqueue_config:
@@ -1442,9 +1444,8 @@ class WorldState:
                 faction_id: dict(self.faction_beliefs[faction_id])
                 for faction_id in sorted(self.faction_beliefs)
             }
-        serialized_faction_registry = list(self.faction_registry) if self.faction_registry else sorted(self.faction_beliefs)
-        if serialized_faction_registry:
-            payload["faction_registry"] = serialized_faction_registry
+        if self._faction_registry_authored:
+            payload["faction_registry"] = list(self.faction_registry)
         if self.activated_factions:
             payload["activated_factions"] = list(self.activated_factions)
         if self.belief_enqueue_config:
@@ -1597,10 +1598,12 @@ class WorldState:
         world.faction_beliefs = normalize_world_faction_beliefs(data.get("faction_beliefs", {}))
         # Backward compatibility: old saves have no faction_registry. Derive from existing
         # faction_beliefs keys deterministically to preserve replay/save-load stability.
+        faction_registry_authored = "faction_registry" in data
         raw_faction_registry = data.get("faction_registry")
         if raw_faction_registry is None:
             raw_faction_registry = sorted(world.faction_beliefs)
         world.faction_registry = normalize_faction_registry(raw_faction_registry)
+        world._faction_registry_authored = faction_registry_authored
         world.activated_factions = normalize_activated_factions(
             data.get("activated_factions", []),
             faction_registry=world.faction_registry,

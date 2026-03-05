@@ -202,6 +202,7 @@ No synchronous cascading.
 - Propagation recipients are selected from activated factions only (excluding source), with deterministic lexical ordering and existing bounded caps.
 - Belief state remains lazy: registry membership does not pre-allocate belief graphs. Faction belief state is created only on first use (activation side effects may be forensic only).
 - Backward compatibility: saves lacking `faction_registry` derive it deterministically from existing `faction_beliefs` keys (sorted); if no beliefs exist, registry defaults to empty.
+- Canonical serialization discipline: a registry derived only for backward compatibility/runtime use is default-omitted on save. `faction_registry` is emitted only when it was explicitly authored in input/content.
 
 # 10. Carrier Model
 
