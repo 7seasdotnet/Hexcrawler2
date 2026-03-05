@@ -26,6 +26,7 @@ BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
 BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
 BELIEF_FANOUT_SKIPPED_EVENT_TYPE = "belief_fanout_skipped"
 BELIEF_FANOUT_GATED_EVENT_TYPE = "belief_fanout_gated"
+BELIEF_FANOUT_CONTACT_GATED_EVENT_TYPE = "belief_fanout_contact_gated"
 BELIEF_JOB_ENQUEUE_GATED_EVENT_TYPE = "belief_job_enqueue_gated"
 FACTION_ACTIVATED_EVENT_TYPE = "faction_activated"
 FACTION_DEACTIVATED_EVENT_TYPE = "faction_deactivated"
@@ -1134,6 +1135,9 @@ class BeliefJobQueueModule(RuleModule):
             recipient_ids = self._select_fanout_recipients(
                 activated_factions=sim.state.world.activated_factions,
                 source_faction_id=source_faction_id,
+                faction_contacts=sim.state.world.faction_contacts,
+                sim=sim,
+                tick=event.tick,
             )
         else:
             if not isinstance(raw_recipients, list):
@@ -1327,9 +1331,33 @@ class BeliefJobQueueModule(RuleModule):
         used += sum(1 for row in pending_same_tick if row.event_type == BELIEF_FANOUT_EMITTED_EVENT_TYPE)
         return used
 
-    def _select_fanout_recipients(self, *, activated_factions: list[str], source_faction_id: str) -> list[str]:
+    def _select_fanout_recipients(
+        self,
+        *,
+        activated_factions: list[str],
+        source_faction_id: str,
+        faction_contacts: dict[str, list[str]],
+        sim: Simulation,
+        tick: int,
+    ) -> list[str]:
+        recipient_universe = set(activated_factions)
+        universe_before = len(recipient_universe)
+        if source_faction_id in faction_contacts:
+            recipient_universe &= set(faction_contacts[source_faction_id])
+            universe_after = len(recipient_universe)
+            if universe_after < universe_before:
+                sim.schedule_event_at(
+                    tick=tick,
+                    event_type=BELIEF_FANOUT_CONTACT_GATED_EVENT_TYPE,
+                    params={
+                        "source_faction_id": source_faction_id,
+                        "universe_before": universe_before,
+                        "universe_after": universe_after,
+                        "tick": tick,
+                    },
+                )
         return [
             faction_id
-            for faction_id in sorted(activated_factions)
+            for faction_id in sorted(recipient_universe)
             if faction_id != source_faction_id
         ][:MAX_FANOUT_RECIPIENTS]
