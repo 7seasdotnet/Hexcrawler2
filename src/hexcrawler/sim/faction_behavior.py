@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from hexcrawler.sim.beliefs import (
+    BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
     BELIEF_REACTION_INVESTIGATE_CONTESTED_EVENT_TYPE,
     BELIEF_REACTION_INVESTIGATE_UNKNOWN_ACTOR_EVENT_TYPE,
+    INVESTIGATION_DEFAULT_CONFIDENCE,
 )
 from hexcrawler.sim.rules import RuleModule
 
@@ -18,10 +20,14 @@ FACTION_BEHAVIOR_ACTION_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_action_b
 FACTION_BEHAVIOR_ACTION_EXECUTE_REQUEST_EVENT_TYPE = "faction_behavior_action_execute_request"
 FACTION_BEHAVIOR_ACTION_EXECUTE_IGNORED_EVENT_TYPE = "faction_behavior_action_execute_ignored"
 FACTION_BEHAVIOR_ACTION_EXECUTE_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_action_execute_budget_exhausted"
+FACTION_BEHAVIOR_EXECUTION_BRIDGE_APPLIED_EVENT_TYPE = "faction_behavior_execution_bridge_applied"
+FACTION_BEHAVIOR_EXECUTION_BRIDGE_IGNORED_EVENT_TYPE = "faction_behavior_execution_bridge_ignored"
+FACTION_BEHAVIOR_EXECUTION_BRIDGE_BUDGET_EXHAUSTED_EVENT_TYPE = "faction_behavior_execution_bridge_budget_exhausted"
 
 MAX_FACTION_BEHAVIOR_REQUESTS_PER_TICK = 8
 MAX_FACTION_BEHAVIOR_ACTIONS_PER_TICK = 8
 MAX_FACTION_BEHAVIOR_EXECUTE_REQUESTS_PER_TICK = 8
+MAX_FACTION_BEHAVIOR_BRIDGES_PER_TICK = 8
 MAX_APPLIED_SOURCE_EVENT_IDS = 512
 MAX_APPLIED_ACTION_UIDS = 1024
 
@@ -636,5 +642,206 @@ class FactionBehaviorExecutionSeamModule(RuleModule):
         return {
             "applied_action_uids": applied_action_uids,
             "pending_execute_requests": pending_execute_requests,
+            "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
+        }
+
+
+class FactionBehaviorExecutionBridgeModule(RuleModule):
+    """Slice 4D deterministic execution-request->investigation enqueue bridge.
+
+    Single emission boundary: bridge requests are staged only in ``on_event_executed`` and emitted
+    only during ``on_tick_end`` flush for that tick, guaranteeing one deterministic emission path.
+    """
+
+    name = "faction_behavior_bridge"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != FACTION_BEHAVIOR_ACTION_EXECUTE_REQUEST_EVENT_TYPE:
+            return
+
+        tick = int(event.tick)
+        action_uid = str(event.params.get("action_uid", "")).strip()
+        faction_id = str(event.params.get("faction_id", "")).strip().lower()
+        if not action_uid or not faction_id:
+            return
+
+        state = self._normalized_state(sim=sim)
+        pending = list(state["pending_bridge_requests"])
+        pending_action_uids = {str(item.get("action_uid", "")) for item in pending}
+        applied_action_uids = set(state["applied_action_uids"])
+
+        if action_uid in applied_action_uids or action_uid in pending_action_uids:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending.append(
+            {
+                "tick": tick,
+                "action_uid": action_uid,
+                "faction_id": faction_id,
+                "action_type": str(event.params.get("action_type", "")).strip(),
+                "template_id": str(event.params.get("template_id", "")).strip(),
+                "belief_id": str(event.params.get("belief_id", "")).strip(),
+            }
+        )
+        state["pending_bridge_requests"] = pending
+        sim.set_rules_state(self.name, state)
+
+    def on_tick_end(self, sim: Simulation, tick: int) -> None:
+        state = self._normalized_state(sim=sim)
+        pending_for_tick = [item for item in state["pending_bridge_requests"] if int(item.get("tick", -1)) == tick]
+        if not pending_for_tick:
+            sim.set_rules_state(self.name, state)
+            return
+
+        pending_for_tick = sorted(
+            pending_for_tick,
+            key=lambda item: (
+                str(item.get("faction_id", "")),
+                str(item.get("belief_id", "")),
+                str(item.get("action_type", "")),
+                str(item.get("action_uid", "")),
+            ),
+        )
+        remaining_pending = [item for item in state["pending_bridge_requests"] if int(item.get("tick", -1)) != tick]
+        applied = list(state["applied_action_uids"])
+        applied_set = set(applied)
+        emitted = 0
+
+        for item in pending_for_tick:
+            action_uid = str(item.get("action_uid", ""))
+            if not action_uid or action_uid in applied_set:
+                continue
+
+            if emitted >= MAX_FACTION_BEHAVIOR_BRIDGES_PER_TICK:
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=FACTION_BEHAVIOR_EXECUTION_BRIDGE_BUDGET_EXHAUSTED_EVENT_TYPE,
+                    params={
+                        "tick": tick,
+                        "max_bridges_per_tick": MAX_FACTION_BEHAVIOR_BRIDGES_PER_TICK,
+                    },
+                )
+                break
+
+            faction_id = str(item.get("faction_id", ""))
+            belief_id = str(item.get("belief_id", ""))
+            action_type = str(item.get("action_type", ""))
+            template_id = str(item.get("template_id", ""))
+
+            is_supported = action_type == "investigate_belief" and template_id == "belief_investigation"
+            if not is_supported:
+                sim.schedule_event_at(
+                    tick=tick + 1,
+                    event_type=FACTION_BEHAVIOR_EXECUTION_BRIDGE_IGNORED_EVENT_TYPE,
+                    params={
+                        "tick": tick,
+                        "action_uid": action_uid,
+                        "faction_id": faction_id,
+                        "action_type": action_type,
+                        "template_id": template_id,
+                        "reason": "unsupported_action",
+                    },
+                )
+                applied.append(action_uid)
+                applied_set.add(action_uid)
+                continue
+
+            claim = self._resolve_claim_from_belief(
+                sim=sim,
+                faction_id=faction_id,
+                belief_id=belief_id,
+            )
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "subject": dict(claim["subject"]),
+                    "claim_key": str(claim["claim_key"]),
+                    "confidence": int(claim["confidence"]),
+                    "site_template_id": None,
+                    "region_id": None,
+                    "claim": dict(claim),
+                },
+            )
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=FACTION_BEHAVIOR_EXECUTION_BRIDGE_APPLIED_EVENT_TYPE,
+                params={
+                    "tick": tick,
+                    "action_uid": action_uid,
+                    "faction_id": faction_id,
+                    "action_type": action_type,
+                    "template_id": template_id,
+                    "bridged_event_type": BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
+                    "belief_id": belief_id,
+                },
+            )
+            emitted += 1
+            applied.append(action_uid)
+            applied_set.add(action_uid)
+
+        if len(applied) > MAX_APPLIED_ACTION_UIDS:
+            applied = applied[-MAX_APPLIED_ACTION_UIDS:]
+        state["applied_action_uids"] = applied
+        state["pending_bridge_requests"] = remaining_pending
+        state["last_processed_tick"] = tick
+        sim.set_rules_state(self.name, state)
+
+    def _resolve_claim_from_belief(self, *, sim: Simulation, faction_id: str, belief_id: str) -> dict[str, Any]:
+        belief = sim.state.world.faction_beliefs.get(faction_id, {}).get("belief_records", {}).get(belief_id, {})
+        if not isinstance(belief, dict):
+            belief = {}
+        subject = belief.get("subject") if isinstance(belief.get("subject"), dict) else {"kind": "unknown_actor"}
+        claim_key = str(belief.get("claim_key", belief_id)).strip() or belief_id or "unknown"
+        confidence_raw = belief.get("confidence", INVESTIGATION_DEFAULT_CONFIDENCE)
+        confidence = confidence_raw if isinstance(confidence_raw, int) and not isinstance(confidence_raw, bool) else INVESTIGATION_DEFAULT_CONFIDENCE
+        return {
+            "subject": dict(subject),
+            "claim_key": claim_key,
+            "confidence": confidence,
+        }
+
+    def _normalized_state(self, *, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+
+        applied_action_uids: list[str] = []
+        raw_applied = state.get("applied_action_uids", [])
+        if isinstance(raw_applied, list):
+            for value in raw_applied:
+                token = str(value)
+                if token and token not in applied_action_uids:
+                    applied_action_uids.append(token)
+        if len(applied_action_uids) > MAX_APPLIED_ACTION_UIDS:
+            applied_action_uids = applied_action_uids[-MAX_APPLIED_ACTION_UIDS:]
+
+        pending_bridge_requests: list[dict[str, Any]] = []
+        raw_pending = state.get("pending_bridge_requests", [])
+        if isinstance(raw_pending, list):
+            for item in raw_pending:
+                if not isinstance(item, dict):
+                    continue
+                tick = item.get("tick")
+                if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                    continue
+                action_uid = str(item.get("action_uid", "")).strip()
+                faction_id = str(item.get("faction_id", "")).strip().lower()
+                if not action_uid or not faction_id:
+                    continue
+                pending_bridge_requests.append(
+                    {
+                        "tick": tick,
+                        "action_uid": action_uid,
+                        "faction_id": faction_id,
+                        "action_type": str(item.get("action_type", "")).strip(),
+                        "template_id": str(item.get("template_id", "")).strip(),
+                        "belief_id": str(item.get("belief_id", "")).strip(),
+                    }
+                )
+
+        return {
+            "applied_action_uids": applied_action_uids,
+            "pending_bridge_requests": pending_bridge_requests,
             "last_processed_tick": int(state.get("last_processed_tick", -1)) if isinstance(state.get("last_processed_tick", -1), int) else -1,
         }
