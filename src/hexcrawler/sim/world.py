@@ -37,6 +37,15 @@ DEFAULT_CONTACT_TTL_CONFIG = {
     "contact_ttl_ticks": 0,
     "max_decay_per_tick": 16,
 }
+MAX_BELIEF_REACTIONS_PER_TICK = 64
+DEFAULT_BELIEF_REACTION_CONFIG = {
+    "enabled": False,
+    "max_reactions_per_tick": 8,
+    "contested_investigation_threshold": 60,
+    "contested_min_age_ticks": 50,
+    "unknown_actor_investigation_threshold": 60,
+    "max_investigation_jobs_enqueued_per_tick": 4,
+}
 RUMOR_KINDS = {"group_arrival", "claim_opportunity", "site_claim"}
 MAX_RUMOR_TTL_TICKS = 1_000_000
 DEFAULT_RUMOR_TTL_BY_KIND = {
@@ -384,6 +393,89 @@ def normalize_contact_ttl_config(value: Any) -> dict[str, Any]:
         "enabled": enabled,
         "contact_ttl_ticks": int(raw_ttl),
         "max_decay_per_tick": int(raw_decay),
+    }
+
+
+def normalize_belief_reaction_config(value: Any) -> dict[str, Any]:
+    if value is None:
+        return dict(DEFAULT_BELIEF_REACTION_CONFIG)
+    if not isinstance(value, dict):
+        raise ValueError("belief_reaction_config must be an object")
+
+    allowed = {
+        "enabled",
+        "max_reactions_per_tick",
+        "contested_investigation_threshold",
+        "contested_min_age_ticks",
+        "unknown_actor_investigation_threshold",
+        "max_investigation_jobs_enqueued_per_tick",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError("belief_reaction_config has unknown fields")
+
+    enabled = value.get("enabled", DEFAULT_BELIEF_REACTION_CONFIG["enabled"])
+    if not isinstance(enabled, bool):
+        raise ValueError("belief_reaction_config.enabled must be a boolean")
+
+    max_reactions = value.get(
+        "max_reactions_per_tick",
+        DEFAULT_BELIEF_REACTION_CONFIG["max_reactions_per_tick"],
+    )
+    if isinstance(max_reactions, bool) or not isinstance(max_reactions, int):
+        raise ValueError("belief_reaction_config.max_reactions_per_tick must be an integer")
+    if max_reactions < 0:
+        raise ValueError("belief_reaction_config.max_reactions_per_tick must be >= 0")
+    if max_reactions > MAX_BELIEF_REACTIONS_PER_TICK:
+        raise ValueError("belief_reaction_config.max_reactions_per_tick exceeds maximum")
+
+    contested_threshold = value.get(
+        "contested_investigation_threshold",
+        DEFAULT_BELIEF_REACTION_CONFIG["contested_investigation_threshold"],
+    )
+    if isinstance(contested_threshold, bool) or not isinstance(contested_threshold, int):
+        raise ValueError("belief_reaction_config.contested_investigation_threshold must be an integer")
+    if contested_threshold < 0 or contested_threshold > 100:
+        raise ValueError("belief_reaction_config.contested_investigation_threshold must be in [0,100]")
+
+    contested_min_age = value.get(
+        "contested_min_age_ticks",
+        DEFAULT_BELIEF_REACTION_CONFIG["contested_min_age_ticks"],
+    )
+    if isinstance(contested_min_age, bool) or not isinstance(contested_min_age, int):
+        raise ValueError("belief_reaction_config.contested_min_age_ticks must be an integer")
+    if contested_min_age < 0:
+        raise ValueError("belief_reaction_config.contested_min_age_ticks must be >= 0")
+    if contested_min_age > MAX_CONTACT_TTL_TICKS:
+        raise ValueError("belief_reaction_config.contested_min_age_ticks exceeds maximum")
+
+    unknown_threshold = value.get(
+        "unknown_actor_investigation_threshold",
+        DEFAULT_BELIEF_REACTION_CONFIG["unknown_actor_investigation_threshold"],
+    )
+    if isinstance(unknown_threshold, bool) or not isinstance(unknown_threshold, int):
+        raise ValueError("belief_reaction_config.unknown_actor_investigation_threshold must be an integer")
+    if unknown_threshold < 0 or unknown_threshold > 100:
+        raise ValueError("belief_reaction_config.unknown_actor_investigation_threshold must be in [0,100]")
+
+    max_jobs = value.get(
+        "max_investigation_jobs_enqueued_per_tick",
+        DEFAULT_BELIEF_REACTION_CONFIG["max_investigation_jobs_enqueued_per_tick"],
+    )
+    if isinstance(max_jobs, bool) or not isinstance(max_jobs, int):
+        raise ValueError("belief_reaction_config.max_investigation_jobs_enqueued_per_tick must be an integer")
+    if max_jobs < 0:
+        raise ValueError("belief_reaction_config.max_investigation_jobs_enqueued_per_tick must be >= 0")
+    if max_jobs > MAX_BELIEF_REACTIONS_PER_TICK:
+        raise ValueError("belief_reaction_config.max_investigation_jobs_enqueued_per_tick exceeds maximum")
+
+    return {
+        "enabled": enabled,
+        "max_reactions_per_tick": int(max_reactions),
+        "contested_investigation_threshold": int(contested_threshold),
+        "contested_min_age_ticks": int(contested_min_age),
+        "unknown_actor_investigation_threshold": int(unknown_threshold),
+        "max_investigation_jobs_enqueued_per_tick": int(max_jobs),
     }
 
 
@@ -1393,6 +1485,7 @@ class WorldState:
     faction_beliefs: dict[str, dict[str, Any]] = field(default_factory=dict)
     belief_enqueue_config: dict[str, dict[str, int]] = field(default_factory=dict)
     belief_geo_gating_config: dict[str, Any] = field(default_factory=dict)
+    belief_reaction_config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_BELIEF_REACTION_CONFIG))
     faction_contacts: dict[str, list[str]] = field(default_factory=dict)
     faction_contact_meta: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
     contact_ttl_config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CONTACT_TTL_CONFIG))
@@ -1412,6 +1505,7 @@ class WorldState:
         )
         self.belief_enqueue_config = normalize_belief_enqueue_config(self.belief_enqueue_config)
         self.belief_geo_gating_config = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
+        self.belief_reaction_config = normalize_belief_reaction_config(self.belief_reaction_config)
         self.faction_contacts = normalize_faction_contacts(
             self.faction_contacts,
             faction_registry=self.faction_registry,
@@ -1536,6 +1630,9 @@ class WorldState:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         if self.belief_geo_gating_config:
             payload["belief_geo_gating_config"] = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
+        normalized_belief_reaction_config = normalize_belief_reaction_config(self.belief_reaction_config)
+        if normalized_belief_reaction_config != DEFAULT_BELIEF_REACTION_CONFIG:
+            payload["belief_reaction_config"] = normalized_belief_reaction_config
         if self.faction_contacts:
             payload["faction_contacts"] = {
                 source_faction_id: list(self.faction_contacts[source_faction_id])
@@ -1636,6 +1733,9 @@ class WorldState:
             payload["belief_enqueue_config"] = normalize_belief_enqueue_config(self.belief_enqueue_config)
         if self.belief_geo_gating_config:
             payload["belief_geo_gating_config"] = normalize_belief_geo_gating_config(self.belief_geo_gating_config)
+        normalized_belief_reaction_config = normalize_belief_reaction_config(self.belief_reaction_config)
+        if normalized_belief_reaction_config != DEFAULT_BELIEF_REACTION_CONFIG:
+            payload["belief_reaction_config"] = normalized_belief_reaction_config
         if self.faction_contacts:
             payload["faction_contacts"] = {
                 source_faction_id: list(self.faction_contacts[source_faction_id])
@@ -1812,6 +1912,7 @@ class WorldState:
         )
         world.belief_enqueue_config = normalize_belief_enqueue_config(data.get("belief_enqueue_config", {}))
         world.belief_geo_gating_config = normalize_belief_geo_gating_config(data.get("belief_geo_gating_config", {}))
+        world.belief_reaction_config = normalize_belief_reaction_config(data.get("belief_reaction_config", None))
         world.faction_contacts = normalize_faction_contacts(
             data.get("faction_contacts", {}),
             faction_registry=world.faction_registry,

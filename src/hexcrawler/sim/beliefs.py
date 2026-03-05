@@ -24,6 +24,9 @@ BELIEF_JOB_COMPLETION_SKIPPED_DUPLICATE_EVENT_TYPE = "belief_job_completion_skip
 BELIEF_CONTRADICTION_DETECTED_EVENT_TYPE = "belief_contradiction_detected"
 BELIEF_CONTRADICTION_RESOLVED_EVENT_TYPE = "belief_contradiction_resolved"
 BELIEF_UNKNOWN_ACTOR_ATTRIBUTED_EVENT_TYPE = "belief_unknown_actor_attributed"
+BELIEF_REACTION_INVESTIGATE_CONTESTED_EVENT_TYPE = "belief_reaction_investigate_contested"
+BELIEF_REACTION_INVESTIGATE_UNKNOWN_ACTOR_EVENT_TYPE = "belief_reaction_investigate_unknown_actor"
+BELIEF_REACTION_BUDGET_EXHAUSTED_EVENT_TYPE = "belief_reaction_budget_exhausted"
 BELIEF_OUTBOUND_CLAIM_AVAILABLE_EVENT_TYPE = "belief_outbound_claim_available"
 BELIEF_FANOUT_EMISSION_ATTEMPTED_EVENT_TYPE = "belief_fanout_emission_attempted"
 BELIEF_FANOUT_EMITTED_EVENT_TYPE = "belief_fanout_emitted"
@@ -72,6 +75,7 @@ MAX_FANOUT_EMISSIONS_PER_TICK = 16
 # world->beliefs import cycle.
 MAX_CONTACTS_PER_FACTION = 64
 MAX_CONTACT_DECAY_PER_TICK = 128
+REACTION_COOLDOWN_TICKS = 50
 
 
 def _normalize_modifier_key(value: Any, *, field_name: str) -> str:
@@ -523,6 +527,8 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
         "opposed_belief_id",
         "contested_since_tick",
         "last_unknown_actor_attribution_tick",
+        "last_contested_investigation_reaction_tick",
+        "last_unknown_actor_investigation_reaction_tick",
         "confidence",
         "first_seen_tick",
         "last_updated_tick",
@@ -586,6 +592,30 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
     else:
         last_unknown_actor_attribution_tick = int(last_unknown_actor_attribution_tick_raw)
 
+    last_contested_investigation_reaction_tick_raw = value.get("last_contested_investigation_reaction_tick")
+    if last_contested_investigation_reaction_tick_raw is None:
+        last_contested_investigation_reaction_tick: int | None = None
+    elif (
+        isinstance(last_contested_investigation_reaction_tick_raw, bool)
+        or not isinstance(last_contested_investigation_reaction_tick_raw, int)
+        or last_contested_investigation_reaction_tick_raw < 0
+    ):
+        raise ValueError("belief record last_contested_investigation_reaction_tick must be integer >= 0")
+    else:
+        last_contested_investigation_reaction_tick = int(last_contested_investigation_reaction_tick_raw)
+
+    last_unknown_actor_investigation_reaction_tick_raw = value.get("last_unknown_actor_investigation_reaction_tick")
+    if last_unknown_actor_investigation_reaction_tick_raw is None:
+        last_unknown_actor_investigation_reaction_tick: int | None = None
+    elif (
+        isinstance(last_unknown_actor_investigation_reaction_tick_raw, bool)
+        or not isinstance(last_unknown_actor_investigation_reaction_tick_raw, int)
+        or last_unknown_actor_investigation_reaction_tick_raw < 0
+    ):
+        raise ValueError("belief record last_unknown_actor_investigation_reaction_tick must be integer >= 0")
+    else:
+        last_unknown_actor_investigation_reaction_tick = int(last_unknown_actor_investigation_reaction_tick_raw)
+
     first_seen_tick = value.get("first_seen_tick")
     if isinstance(first_seen_tick, bool) or not isinstance(first_seen_tick, int) or first_seen_tick < 0:
         raise ValueError("belief record first_seen_tick must be integer >= 0")
@@ -599,6 +629,16 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
         raise ValueError("belief record contested_since_tick must be <= last_updated_tick")
     if last_unknown_actor_attribution_tick is not None and last_unknown_actor_attribution_tick > last_updated_tick:
         raise ValueError("belief record last_unknown_actor_attribution_tick must be <= last_updated_tick")
+    if (
+        last_contested_investigation_reaction_tick is not None
+        and last_contested_investigation_reaction_tick > last_updated_tick
+    ):
+        raise ValueError("belief record last_contested_investigation_reaction_tick must be <= last_updated_tick")
+    if (
+        last_unknown_actor_investigation_reaction_tick is not None
+        and last_unknown_actor_investigation_reaction_tick > last_updated_tick
+    ):
+        raise ValueError("belief record last_unknown_actor_investigation_reaction_tick must be <= last_updated_tick")
 
     confidence = clamp_confidence(value.get("confidence"))
     evidence_count = clamp_evidence_count(value.get("evidence_count"))
@@ -621,6 +661,12 @@ def normalize_belief_record(value: Any) -> dict[str, Any]:
         )
     if last_unknown_actor_attribution_tick is not None:
         normalized_record["last_unknown_actor_attribution_tick"] = last_unknown_actor_attribution_tick
+    if last_contested_investigation_reaction_tick is not None:
+        normalized_record["last_contested_investigation_reaction_tick"] = last_contested_investigation_reaction_tick
+    if last_unknown_actor_investigation_reaction_tick is not None:
+        normalized_record["last_unknown_actor_investigation_reaction_tick"] = (
+            last_unknown_actor_investigation_reaction_tick
+        )
     return normalized_record
 
 
@@ -1413,7 +1459,254 @@ class BeliefJobQueueModule(RuleModule):
                 completion_event_type=BELIEF_INVESTIGATION_JOB_COMPLETED_EVENT_TYPE,
                 remaining_budget=MAX_JOBS_PER_TICK - completed,
             )
+        self._run_reaction_hooks(sim=sim, tick=tick)
         self._attribute_unknown_actor_beliefs(sim=sim, tick=tick)
+
+    def _run_reaction_hooks(self, *, sim: Simulation, tick: int) -> None:
+        config = sim.state.world.belief_reaction_config
+        if not bool(config.get("enabled", False)):
+            return
+
+        max_reactions_per_tick = int(config["max_reactions_per_tick"])
+        max_jobs_per_tick = int(config["max_investigation_jobs_enqueued_per_tick"])
+        contested_threshold = int(config["contested_investigation_threshold"])
+        contested_min_age_ticks = int(config["contested_min_age_ticks"])
+        unknown_actor_threshold = int(config["unknown_actor_investigation_threshold"])
+
+        reactions = 0
+        jobs_enqueued = 0
+        budget_exhausted = False
+
+        for faction_id in sorted(sim.state.world.faction_beliefs):
+            if reactions >= max_reactions_per_tick:
+                budget_exhausted = True
+                break
+
+            faction_state = sim.state.world.faction_beliefs.get(faction_id)
+            if not isinstance(faction_state, dict):
+                continue
+            belief_records = faction_state.get("belief_records", {})
+            if not isinstance(belief_records, dict) or not belief_records:
+                continue
+
+            for belief_id in sorted(belief_records):
+                if reactions >= max_reactions_per_tick:
+                    budget_exhausted = True
+                    break
+
+                belief = belief_records.get(belief_id)
+                if not isinstance(belief, dict):
+                    continue
+
+                reactions_delta, jobs_delta = self._emit_contested_reaction_if_eligible(
+                    sim=sim,
+                    tick=tick,
+                    faction_id=faction_id,
+                    belief_id=belief_id,
+                    belief=belief,
+                    belief_records=belief_records,
+                    threshold=contested_threshold,
+                    min_age_ticks=contested_min_age_ticks,
+                    can_enqueue=(jobs_enqueued < max_jobs_per_tick),
+                )
+                if reactions_delta > 0:
+                    reactions += reactions_delta
+                    jobs_enqueued += jobs_delta
+                    if reactions >= max_reactions_per_tick:
+                        budget_exhausted = True
+                        break
+                    continue
+
+                reactions_delta, jobs_delta = self._emit_unknown_actor_reaction_if_eligible(
+                    sim=sim,
+                    tick=tick,
+                    faction_id=faction_id,
+                    belief_id=belief_id,
+                    belief=belief,
+                    threshold=unknown_actor_threshold,
+                    can_enqueue=(jobs_enqueued < max_jobs_per_tick),
+                )
+                reactions += reactions_delta
+                jobs_enqueued += jobs_delta
+
+        if budget_exhausted:
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=BELIEF_REACTION_BUDGET_EXHAUSTED_EVENT_TYPE,
+                params={
+                    "tick": tick,
+                    "max_reactions_per_tick": max_reactions_per_tick,
+                    "max_investigation_jobs_enqueued_per_tick": max_jobs_per_tick,
+                    "reactions_emitted": reactions,
+                    "jobs_enqueued": jobs_enqueued,
+                },
+            )
+
+    def _reaction_cooldown_ready(self, *, record: dict[str, Any], marker_key: str, tick: int) -> bool:
+        raw_last_tick = record.get(marker_key)
+        if raw_last_tick is None:
+            return True
+        if isinstance(raw_last_tick, bool) or not isinstance(raw_last_tick, int):
+            return False
+        return tick - int(raw_last_tick) >= REACTION_COOLDOWN_TICKS
+
+    def _emit_contested_reaction_if_eligible(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        faction_id: str,
+        belief_id: str,
+        belief: dict[str, Any],
+        belief_records: dict[str, dict[str, Any]],
+        threshold: int,
+        min_age_ticks: int,
+        can_enqueue: bool,
+    ) -> tuple[int, int]:
+        opposed_belief_id = belief.get("opposed_belief_id")
+        if not isinstance(opposed_belief_id, str) or opposed_belief_id not in belief_records:
+            return (0, 0)
+        if belief_id >= opposed_belief_id:
+            return (0, 0)
+
+        opposing = belief_records[opposed_belief_id]
+        if str(opposing.get("opposed_belief_id", "")) != belief_id:
+            return (0, 0)
+        if not self._reaction_cooldown_ready(
+            record=belief,
+            marker_key="last_contested_investigation_reaction_tick",
+            tick=tick,
+        ):
+            return (0, 0)
+
+        confidence_a = int(belief.get("confidence", 0))
+        confidence_b = int(opposing.get("confidence", 0))
+        if max(confidence_a, confidence_b) < threshold:
+            return (0, 0)
+
+        contested_since_tick = int(
+            belief.get(
+                "contested_since_tick",
+                opposing.get("contested_since_tick", belief.get("last_updated_tick", tick)),
+            )
+        )
+        if tick - contested_since_tick < min_age_ticks:
+            return (0, 0)
+
+        belief_records[belief_id] = {**belief, "last_contested_investigation_reaction_tick": tick}
+        belief_records[opposed_belief_id] = {
+            **opposing,
+            "last_contested_investigation_reaction_tick": tick,
+        }
+        updated = belief_records[belief_id]
+
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=BELIEF_REACTION_INVESTIGATE_CONTESTED_EVENT_TYPE,
+            params={
+                "faction_id": faction_id,
+                "base_key": str(updated.get("base_key", "")),
+                "subject": dict(updated.get("subject", {})),
+                "tick": tick,
+                "belief_id": belief_id,
+                "opposed_belief_id": opposed_belief_id,
+            },
+        )
+
+        if confidence_b > confidence_a or (confidence_a == confidence_b and opposed_belief_id < belief_id):
+            target = opposing
+        else:
+            target = updated
+
+        jobs_enqueued = 0
+        if can_enqueue:
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "subject": dict(target.get("subject", {})),
+                    "claim_key": str(target.get("claim_key", "")),
+                    "confidence": int(target.get("confidence", INVESTIGATION_DEFAULT_CONFIDENCE)),
+                    "site_template_id": None,
+                    "region_id": None,
+                    "claim": {
+                        "subject": dict(target.get("subject", {})),
+                        "claim_key": str(target.get("claim_key", "")),
+                        "confidence": int(target.get("confidence", INVESTIGATION_DEFAULT_CONFIDENCE)),
+                    },
+                },
+            )
+            jobs_enqueued = 1
+
+        return (1, jobs_enqueued)
+
+    def _emit_unknown_actor_reaction_if_eligible(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        faction_id: str,
+        belief_id: str,
+        belief: dict[str, Any],
+        threshold: int,
+        can_enqueue: bool,
+    ) -> tuple[int, int]:
+        subject = belief.get("subject")
+        if not isinstance(subject, dict):
+            return (0, 0)
+        if subject.get("kind") != "unknown_actor":
+            return (0, 0)
+        if not self._reaction_cooldown_ready(
+            record=belief,
+            marker_key="last_unknown_actor_investigation_reaction_tick",
+            tick=tick,
+        ):
+            return (0, 0)
+
+        confidence = int(belief.get("confidence", 0))
+        if confidence < threshold:
+            return (0, 0)
+
+        belief_records = sim.state.world.faction_beliefs[faction_id]["belief_records"]
+        belief_records[belief_id] = {
+            **belief,
+            "last_unknown_actor_investigation_reaction_tick": tick,
+        }
+
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=BELIEF_REACTION_INVESTIGATE_UNKNOWN_ACTOR_EVENT_TYPE,
+            params={
+                "faction_id": faction_id,
+                "base_key": str(belief.get("base_key", "")),
+                "tick": tick,
+                "belief_id": belief_id,
+            },
+        )
+
+        jobs_enqueued = 0
+        if can_enqueue:
+            sim.schedule_event_at(
+                tick=tick + 1,
+                event_type=BELIEF_INVESTIGATION_JOB_ENQUEUED_EVENT_TYPE,
+                params={
+                    "faction_id": faction_id,
+                    "subject": dict(subject),
+                    "claim_key": str(belief.get("claim_key", "")),
+                    "confidence": confidence,
+                    "site_template_id": None,
+                    "region_id": None,
+                    "claim": {
+                        "subject": dict(subject),
+                        "claim_key": str(belief.get("claim_key", "")),
+                        "confidence": confidence,
+                    },
+                },
+            )
+            jobs_enqueued = 1
+
+        return (1, jobs_enqueued)
 
     def _attribute_unknown_actor_beliefs(self, *, sim: Simulation, tick: int) -> None:
         attributions = 0
