@@ -50,6 +50,7 @@ WINDOW_SIZE = (1440, 900)
 PANEL_WIDTH = 520
 VIEWPORT_MARGIN = 12
 PANEL_MARGIN = 12
+TOP_BAR_HEIGHT = 34
 SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
 
@@ -289,6 +290,63 @@ class SimulationController:
         self.sim.advance_ticks(1)
 
 
+@dataclass
+class ViewerRuntimeState:
+    sim: Simulation
+    map_path: str
+    with_encounters: bool
+    current_save_path: str
+    paused: bool = False
+    last_loaded_identity: str | None = None
+
+
+class ViewerRuntimeController:
+    """Runtime control surface adapter; uses canonical init/save/load/advance pathways."""
+
+    def __init__(self, state: ViewerRuntimeState, *, entity_id: str = PLAYER_ID) -> None:
+        self.state = state
+        self.entity_id = entity_id
+        self.controller = SimulationController(sim=state.sim, entity_id=entity_id)
+
+    @property
+    def sim(self) -> Simulation:
+        return self.state.sim
+
+    def replace_simulation(self, sim: Simulation, *, identity: str | None = None) -> None:
+        self.state.sim = sim
+        self.controller.sim = sim
+        if identity is not None:
+            self.state.last_loaded_identity = identity
+
+    def new_simulation(self, *, map_path: str | None = None, seed: int | None = None) -> Simulation:
+        next_map = map_path if map_path is not None else self.state.map_path
+        next_seed = self.state.sim.seed if seed is None else int(seed)
+        sim = _build_viewer_simulation(next_map, with_encounters=self.state.with_encounters, seed=next_seed)
+        self.state.map_path = next_map
+        self.replace_simulation(sim, identity=f"map:{Path(next_map).name}")
+        return sim
+
+    def load_simulation(self, path: str) -> Simulation:
+        sim = _load_viewer_simulation(path, with_encounters=self.state.with_encounters)
+        self.replace_simulation(sim, identity=f"save:{Path(path).name}")
+        self.state.current_save_path = path
+        return sim
+
+    def save_simulation(self, path: str | None = None) -> str:
+        target_path = path if path is not None else self.state.current_save_path
+        _save_viewer_simulation(self.state.sim, target_path)
+        self.state.current_save_path = target_path
+        self.state.last_loaded_identity = f"save:{Path(target_path).name}"
+        return target_path
+
+    def advance_ticks(self, tick_count: int) -> None:
+        self.state.sim.advance_ticks(int(tick_count))
+
+    def toggle_pause(self) -> bool:
+        self.state.paused = not self.state.paused
+        return self.state.paused
+
+
 @dataclass(frozen=True)
 class RenderEntitySnapshot:
     x: float
@@ -421,12 +479,14 @@ def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
 def _viewport_rect() -> pygame.Rect:
     panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
     width = panel_x - (VIEWPORT_MARGIN * 2)
-    return pygame.Rect(VIEWPORT_MARGIN, VIEWPORT_MARGIN, width, WINDOW_SIZE[1] - (VIEWPORT_MARGIN * 2))
+    top = VIEWPORT_MARGIN + TOP_BAR_HEIGHT
+    return pygame.Rect(VIEWPORT_MARGIN, top, width, WINDOW_SIZE[1] - top - VIEWPORT_MARGIN)
 
 
 def _panel_rect() -> pygame.Rect:
     panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
-    return pygame.Rect(panel_x, PANEL_MARGIN, PANEL_WIDTH, WINDOW_SIZE[1] - (PANEL_MARGIN * 2))
+    top = PANEL_MARGIN + TOP_BAR_HEIGHT
+    return pygame.Rect(panel_x, top, PANEL_WIDTH, WINDOW_SIZE[1] - top - PANEL_MARGIN)
 
 
 def _local_space_square_bounds(active_space: Any) -> tuple[float, float, float, float] | None:
@@ -930,12 +990,41 @@ def _draw_spawned_entity(
     screen.set_clip(old_clip)
 
 
+def _draw_top_control_bar(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    runtime_state: ViewerRuntimeState,
+) -> None:
+    bar_rect = pygame.Rect(0, 0, WINDOW_SIZE[0], TOP_BAR_HEIGHT)
+    pygame.draw.rect(screen, (28, 30, 40), bar_rect)
+    pygame.draw.rect(screen, (95, 98, 110), bar_rect, 1)
+
+    ticks_per_day = sim.get_ticks_per_day()
+    day_display = sim.get_day_index() + 1
+    tick_in_day = sim.get_tick_in_day()
+    hours = (tick_in_day * 24) // ticks_per_day
+    minutes = ((tick_in_day * 24 * 60) // ticks_per_day) % 60
+    hash_suffix = simulation_hash(sim)[-8:]
+    identity = runtime_state.last_loaded_identity or f"map:{Path(runtime_state.map_path).name}"
+    metadata_text = (
+        f"tick={sim.state.tick} day={day_display} {hours:02d}:{minutes:02d} "
+        f"seed={sim.seed} src={identity} hash={hash_suffix}"
+    )
+    sections_text = "Simulation | Save/Load | Time | View | Debug"
+    left_label = _truncate_text_to_pixel_width(sections_text, font, 460)
+    right_label = _truncate_text_to_pixel_width(metadata_text, font, WINDOW_SIZE[0] - 490)
+    screen.blit(font.render(left_label, True, (235, 235, 240)), (10, 8))
+    screen.blit(font.render(right_label, True, (220, 220, 225)), (480, 8))
+
+
 def _draw_hud(
     screen: pygame.Surface,
     sim: Simulation,
     font: pygame.font.Font,
     status_message: str | None,
     hover_message: str | None,
+    runtime_state: ViewerRuntimeState,
 ) -> None:
     entity = sim.state.entities[PLAYER_ID]
     active_space = sim.state.world.spaces.get(entity.space_id)
@@ -943,28 +1032,21 @@ def _draw_hud(
         coord_text = f"x={math.floor(entity.position_x)},y={math.floor(entity.position_y)}"
     else:
         coord_text = f"q={entity.hex_coord.q},r={entity.hex_coord.r}"
-    ticks_per_day = sim.get_ticks_per_day()
-    day_display = sim.get_day_index() + 1
-    tick_in_day = sim.get_tick_in_day()
-    hours = (tick_in_day * 24) // ticks_per_day
-    minutes = ((tick_in_day * 24 * 60) // ticks_per_day) % 60
-    context_line = (
-        f"space={entity.space_id} | {coord_text} | tick={sim.state.tick} | "
-        f"day={day_display} | time={hours:02d}:{minutes:02d}"
-    )
+    context_line = f"space={entity.space_id} | {coord_text}"
     lines = [
         context_line,
-        "WASD move | RMB menu | F3 arena overlay | F5 save | F9 load | ESC quit",
+        "WASD move | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
+        f"runtime={'paused' if runtime_state.paused else 'running'}",
     ]
     if status_message:
         lines.append(f"status: {status_message}")
     if hover_message:
         lines.append(hover_message)
-    y = 12
+    y = TOP_BAR_HEIGHT + 8
     for line in lines:
         surface = font.render(line, True, (240, 240, 240))
         screen.blit(surface, (12, y))
-        y += 24
+        y += 22
 
 
 def _active_local_arena_template_id(sim: Simulation, active_space_id: str, active_space: Any) -> str:
@@ -1656,9 +1738,9 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(GroupMovementModule())
 
 
-def _build_viewer_simulation(map_path: str, *, with_encounters: bool) -> Simulation:
+def _build_viewer_simulation(map_path: str, *, with_encounters: bool, seed: int = 7) -> Simulation:
     world = load_world_json(map_path)
-    sim = Simulation(world=world, seed=7)
+    sim = Simulation(world=world, seed=seed)
     if with_encounters:
         _register_encounter_modules(sim)
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
@@ -1742,7 +1824,15 @@ def run_pygame_viewer(
         pygame_module.quit()
         return 1
 
-    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    runtime_state = ViewerRuntimeState(
+        sim=sim,
+        map_path=map_path,
+        with_encounters=with_encounters,
+        current_save_path=load_save or save_path,
+        last_loaded_identity=f"save:{Path(load_save).name}" if load_save else f"map:{Path(map_path).name}",
+    )
+    runtime_controller = ViewerRuntimeController(runtime_state, entity_id=PLAYER_ID)
+    controller = runtime_controller.controller
 
     try:
         pygame_module.display.set_caption("Hexcrawler Phase 5G Viewer")
@@ -1760,7 +1850,7 @@ def run_pygame_viewer(
     print(f"[hexcrawler.viewer] display initialized: {driver_name}, window size={WINDOW_SIZE}")
 
     if headless:
-        controller.tick_once()
+        runtime_controller.advance_ticks(1)
         pygame_module.quit()
         return 0
 
@@ -1776,8 +1866,7 @@ def run_pygame_viewer(
     def load_simulation_from_path(path_value: str) -> bool:
         nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message
         try:
-            sim = _load_viewer_simulation(path_value, with_encounters=with_encounters)
-            controller.sim = sim
+            sim = runtime_controller.load_simulation(path_value)
             previous_snapshot = extract_render_snapshot(sim)
             current_snapshot = previous_snapshot
             last_tick_time = pygame_module.time.get_ticks() / 1000.0
@@ -1920,17 +2009,46 @@ def run_pygame_viewer(
                 running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_ESCAPE:
                 running = False
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F2:
+                paused = runtime_controller.toggle_pause()
+                status_message = f"simulation {'paused' if paused else 'running'}"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F4:
+                sim = runtime_controller.new_simulation(map_path=runtime_state.map_path, seed=runtime_state.sim.seed)
+                previous_snapshot = extract_render_snapshot(sim)
+                current_snapshot = previous_snapshot
+                last_tick_time = pygame_module.time.get_ticks() / 1000.0
+                status_message = f"new simulation map={runtime_state.map_path} seed={sim.seed}"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F5:
-                _save_viewer_simulation(sim, save_path)
-                push_recent_save(save_path)
-                status_message = f"saved {save_path}"
-            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F9:
-                load_target = load_save if load_save else save_path
+                saved_path = runtime_controller.save_simulation()
+                push_recent_save(saved_path)
+                status_message = f"saved {saved_path}"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F6:
+                save_as_path = str(Path(runtime_state.current_save_path).with_name(f"{Path(runtime_state.current_save_path).stem}_save_as.json"))
+                saved_path = runtime_controller.save_simulation(save_as_path)
+                push_recent_save(saved_path)
+                status_message = f"saved as {saved_path}"
+            elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_F8, pygame_module.K_F9):
+                load_target = runtime_state.current_save_path
                 if load_target and Path(load_target).exists():
                     load_simulation_from_path(load_target)
                 else:
                     status_message = f"load failed: file not found ({load_target})"
                     print(f"[hexcrawler.viewer] load skipped; file not found path={load_target}")
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_1:
+                runtime_controller.advance_ticks(10)
+                previous_snapshot = extract_render_snapshot(sim)
+                current_snapshot = previous_snapshot
+                status_message = "advanced 10 ticks"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_2:
+                runtime_controller.advance_ticks(100)
+                previous_snapshot = extract_render_snapshot(sim)
+                current_snapshot = previous_snapshot
+                status_message = "advanced 100 ticks"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_3:
+                runtime_controller.advance_ticks(1000)
+                previous_snapshot = extract_render_snapshot(sim)
+                current_snapshot = previous_snapshot
+                status_message = "advanced 1000 ticks"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F3:
                 show_local_arena_overlay = not show_local_arena_overlay
                 status_message = f"local arena overlay {'on' if show_local_arena_overlay else 'off'}"
@@ -2047,10 +2165,11 @@ def run_pygame_viewer(
         controller.set_move_vector(move_x, move_y)
 
         while accumulator >= SIM_TICK_SECONDS:
-            previous_snapshot = current_snapshot
-            controller.tick_once()
-            current_snapshot = extract_render_snapshot(sim)
-            last_tick_time = pygame_module.time.get_ticks() / 1000.0
+            if not runtime_state.paused:
+                previous_snapshot = current_snapshot
+                runtime_controller.advance_ticks(1)
+                current_snapshot = extract_render_snapshot(sim)
+                last_tick_time = pygame_module.time.get_ticks() / 1000.0
             accumulator -= SIM_TICK_SECONDS
 
         now_seconds = pygame_module.time.get_ticks() / 1000.0
@@ -2086,7 +2205,8 @@ def run_pygame_viewer(
                 _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
             else:
                 _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
-        _draw_hud(screen, sim, font, status_message, hover_message)
+        _draw_top_control_bar(screen, sim, font, runtime_state)
+        _draw_hud(screen, sim, font, status_message, hover_message, runtime_state)
         if show_local_arena_overlay:
             _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
