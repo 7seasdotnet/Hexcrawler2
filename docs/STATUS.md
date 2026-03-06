@@ -1,18 +1,19 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V1 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V2 (layout / panel organization foundation).
+- **Current phase:** Viewer Oversight Phase — Slice V2 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V3 (actor visibility + selection foundation).
 - **Phase status:** ✅ Viewer now supports in-session simulation operations (new simulation, load/save, pause/resume, deterministic tick stepping) via a persistent top control bar metadata surface and runtime control adapter.
 
 
 ## What changed in this commit
-- Added follow-up Viewer Oversight V1 hardening tests that explicitly verify full runtime simulation replacement updates command adapter references (no lingering old-simulation writes after New Simulation/Load replacement).
-- Added deterministic seed regression for in-viewer New Simulation: same map + same seed + same commands produces identical simulation hashes.
-- Retained canonical init/load/save/advance control pathways and operator metadata bar behavior from Slice V1.
+- Replaced the viewer’s single cramped debug slab with an explicit four-region operator layout: persistent control bar, bounded world-view region, right-side inspector foundation panel, and bottom debug/event foundation panel.
+- Added reusable layout/text safety helpers (dynamic geometry computation from window size, bounded wrapped-line rendering, panel frame helper, page-size-aware scroll clamping) and enabled resizable pygame window mode for adaptive region recomputation.
+- Reorganized debug/event content into the bottom panel while introducing an intentional inspector placeholder (“Nothing selected”) with independent scroll state, preserving canonical V1 controls (new/load/save/pause/advance) and simulation read-only UI behavior.
+
 
 ## What Exists (folders / entry points)
-- `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight top control bar and `ViewerRuntimeController` adapter for canonical new/load/save/advance/pause operations while keeping simulation mutation through command/advance/save-load contracts.
+- `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
@@ -75,8 +76,8 @@
   - Viewer controller input paths append `SimCommand`s at current simulation tick instead of mutating movement state directly.
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
-  - Uses split layout regions (left world viewport + right fixed-width Encounter Debug panel) so world rendering and the player marker remain visible in the viewport.
-  - Encounter Debug is read-only and supports section scrolling/pagination for signals/tracks/spawns/spawned-entities/rumors/outcomes with stable forensic identifiers and newest-first ordering.
+  - Uses a structured four-region viewer layout (top control bar, world viewport, right inspector foundation panel, bottom debug/event foundation panel) with dynamic geometry recomputation from current window size.
+  - Debug/Event panel remains read-only and supports section-based browsing with bounded, wrapped, scroll-safe content for signals/tracks/spawns/spawned-entities/rumors/outcomes.
   - Encounter panel rows now wrap by pixel width so long forensic lines stay inside panel bounds.
   - World viewport renders deterministic decluttered in-hex marker slots for signals/tracks/spawn descriptors/spawned entities while keeping UI rendering strictly read-only.
   - Supports deterministic canonical session persistence in-viewer (`F5` save / `F9` load) using `save_game_json`/`load_game_json` contracts.
@@ -189,6 +190,8 @@
 - Canonical launch: `python play.py`
 
 ## Current Verification Commands
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_layout.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_layout.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py`
 - `python -m pip install -r requirements.txt`
 - `python play.py [--seed N] [--load-save PATH] [--map-path PATH] [--headless]  # canonical launch`

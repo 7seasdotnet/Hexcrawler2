@@ -51,6 +51,10 @@ PANEL_WIDTH = 520
 VIEWPORT_MARGIN = 12
 PANEL_MARGIN = 12
 TOP_BAR_HEIGHT = 34
+DEBUG_PANEL_HEIGHT = 250
+MIN_WORLD_WIDTH = 360
+MIN_WORLD_HEIGHT = 220
+INSPECTOR_MIN_WIDTH = 320
 SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
 
@@ -139,6 +143,15 @@ class LocalCameraCache:
     topology_params_signature: str | None = None
     center: tuple[float, float] = (0.0, 0.0)
     zoom_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class ViewerLayout:
+    window: tuple[int, int]
+    control_bar: pygame.Rect
+    world_view: pygame.Rect
+    inspector_panel: pygame.Rect
+    debug_panel: pygame.Rect
 
 
 @dataclass
@@ -476,17 +489,51 @@ def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
     return points
 
 
-def _viewport_rect() -> pygame.Rect:
-    panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
-    width = panel_x - (VIEWPORT_MARGIN * 2)
-    top = VIEWPORT_MARGIN + TOP_BAR_HEIGHT
-    return pygame.Rect(VIEWPORT_MARGIN, top, width, WINDOW_SIZE[1] - top - VIEWPORT_MARGIN)
+def _compute_control_bar_rect(window_size: tuple[int, int]) -> pygame.Rect:
+    return pygame.Rect(0, 0, max(1, int(window_size[0])), TOP_BAR_HEIGHT)
 
 
-def _panel_rect() -> pygame.Rect:
-    panel_x = WINDOW_SIZE[0] - PANEL_WIDTH - PANEL_MARGIN
-    top = PANEL_MARGIN + TOP_BAR_HEIGHT
-    return pygame.Rect(panel_x, top, PANEL_WIDTH, WINDOW_SIZE[1] - top - PANEL_MARGIN)
+def _compute_viewer_layout(window_size: tuple[int, int]) -> ViewerLayout:
+    window_width = max(1, int(window_size[0]))
+    window_height = max(TOP_BAR_HEIGHT + 1, int(window_size[1]))
+    control_bar = _compute_control_bar_rect((window_width, window_height))
+
+    content_top = control_bar.bottom + PANEL_MARGIN
+    content_left = VIEWPORT_MARGIN
+    content_right = max(content_left + 1, window_width - VIEWPORT_MARGIN)
+    content_bottom = max(content_top + 1, window_height - VIEWPORT_MARGIN)
+    content_width = max(1, content_right - content_left)
+    content_height = max(1, content_bottom - content_top)
+
+    debug_height = max(120, min(DEBUG_PANEL_HEIGHT, max(120, content_height // 2)))
+    debug_top = max(content_top, content_bottom - debug_height)
+    debug_panel = pygame.Rect(content_left, debug_top, content_width, max(1, content_bottom - debug_top))
+
+    top_area_bottom = max(content_top + MIN_WORLD_HEIGHT, debug_panel.top - PANEL_MARGIN)
+    top_area_height = max(1, top_area_bottom - content_top)
+
+    inspector_width = min(PANEL_WIDTH, max(INSPECTOR_MIN_WIDTH, content_width // 4))
+    if content_width - inspector_width - PANEL_MARGIN < MIN_WORLD_WIDTH:
+        inspector_width = max(220, content_width - MIN_WORLD_WIDTH - PANEL_MARGIN)
+    inspector_width = max(220, min(inspector_width, max(220, content_width - 60)))
+
+    world_width = max(1, content_width - inspector_width - PANEL_MARGIN)
+    if world_width < MIN_WORLD_WIDTH:
+        shrink = MIN_WORLD_WIDTH - world_width
+        inspector_width = max(220, inspector_width - shrink)
+        world_width = max(1, content_width - inspector_width - PANEL_MARGIN)
+
+    world_view = pygame.Rect(content_left, content_top, world_width, top_area_height)
+    inspector_x = world_view.right + PANEL_MARGIN
+    inspector_panel = pygame.Rect(inspector_x, content_top, max(1, content_right - inspector_x), top_area_height)
+
+    return ViewerLayout(
+        window=(window_width, window_height),
+        control_bar=control_bar,
+        world_view=world_view,
+        inspector_panel=inspector_panel,
+        debug_panel=debug_panel,
+    )
 
 
 def _local_space_square_bounds(active_space: Any) -> tuple[float, float, float, float] | None:
@@ -615,6 +662,51 @@ def _hard_wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[s
     return rows
 
 
+def _render_panel_frame(
+    screen: pygame.Surface,
+    panel_rect: pygame.Rect,
+    title: str,
+    font: pygame.font.Font,
+    *,
+    bg_color: tuple[int, int, int] = (24, 26, 36),
+) -> pygame.Rect:
+    pygame.draw.rect(screen, bg_color, panel_rect)
+    pygame.draw.rect(screen, (95, 98, 110), panel_rect, 1)
+    header_rect = pygame.Rect(panel_rect.x + 8, panel_rect.y + 8, panel_rect.width - 16, 20)
+    header_text = _truncate_text_to_pixel_width(title, font, header_rect.width)
+    screen.blit(font.render(header_text, True, (242, 242, 248)), (header_rect.x, header_rect.y))
+    content_top = header_rect.bottom + 6
+    content_rect = pygame.Rect(panel_rect.x + 8, content_top, panel_rect.width - 16, max(1, panel_rect.bottom - content_top - 8))
+    return content_rect
+
+
+def _render_wrapped_lines(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    content_rect: pygame.Rect,
+    lines: list[str],
+    *,
+    scroll_offset: int = 0,
+    line_height: int = 16,
+    color: tuple[int, int, int] = (212, 212, 220),
+    pad_left: int = 2,
+) -> int:
+    old_clip = screen.get_clip()
+    screen.set_clip(content_rect)
+    wrapped: list[str] = []
+    for line in lines:
+        wrapped.extend(_wrap_text_to_pixel_width(line, font, max(1, content_rect.width - (pad_left * 2))))
+    start = max(0, int(scroll_offset))
+    visible_line_count = max(1, content_rect.height // line_height)
+    visible = wrapped[start : start + visible_line_count]
+    y = content_rect.y
+    for row in visible:
+        screen.blit(font.render(row, True, color), (content_rect.x + pad_left, y))
+        y += line_height
+    screen.set_clip(old_clip)
+    return len(wrapped)
+
+
 def _marker_cell_from_location(location: object, default_topology_type: str) -> MarkerCellRef | None:
     if not isinstance(location, dict):
         return None
@@ -671,6 +763,12 @@ def _short_stable_id(value: str, max_length: int = 10) -> str:
 def _clamp_scroll_offset(current: int, delta: int, total_count: int, page_size: int) -> int:
     max_offset = max(0, total_count - page_size)
     return max(0, min(max_offset, current + delta))
+
+
+def _scroll_page_size(rect: pygame.Rect | None, line_height: int = 16) -> int:
+    if rect is None:
+        return ENCOUNTER_DEBUG_SECTION_ROWS
+    return max(1, rect.height // line_height)
 
 
 def _section_entries(rows: list[str], *, entry_limit: int = PANEL_SECTION_ENTRY_LIMIT) -> list[str]:
@@ -995,8 +1093,8 @@ def _draw_top_control_bar(
     sim: Simulation,
     font: pygame.font.Font,
     runtime_state: ViewerRuntimeState,
+    bar_rect: pygame.Rect,
 ) -> None:
-    bar_rect = pygame.Rect(0, 0, WINDOW_SIZE[0], TOP_BAR_HEIGHT)
     pygame.draw.rect(screen, (28, 30, 40), bar_rect)
     pygame.draw.rect(screen, (95, 98, 110), bar_rect, 1)
 
@@ -1013,7 +1111,7 @@ def _draw_top_control_bar(
     )
     sections_text = "Simulation | Save/Load | Time | View | Debug"
     left_label = _truncate_text_to_pixel_width(sections_text, font, 460)
-    right_label = _truncate_text_to_pixel_width(metadata_text, font, WINDOW_SIZE[0] - 490)
+    right_label = _truncate_text_to_pixel_width(metadata_text, font, max(160, bar_rect.width - 490))
     screen.blit(font.render(left_label, True, (235, 235, 240)), (10, 8))
     screen.blit(font.render(right_label, True, (220, 220, 225)), (480, 8))
 
@@ -1025,6 +1123,7 @@ def _draw_hud(
     status_message: str | None,
     hover_message: str | None,
     runtime_state: ViewerRuntimeState,
+    world_rect: pygame.Rect,
 ) -> None:
     entity = sim.state.entities[PLAYER_ID]
     active_space = sim.state.world.spaces.get(entity.space_id)
@@ -1042,11 +1141,17 @@ def _draw_hud(
         lines.append(f"status: {status_message}")
     if hover_message:
         lines.append(hover_message)
-    y = TOP_BAR_HEIGHT + 8
+    old_clip = screen.get_clip()
+    screen.set_clip(world_rect)
+    y = world_rect.y + 8
     for line in lines:
-        surface = font.render(line, True, (240, 240, 240))
-        screen.blit(surface, (12, y))
-        y += 22
+        if y + 20 > world_rect.bottom:
+            break
+        label = _truncate_text_to_pixel_width(line, font, max(1, world_rect.width - 18))
+        surface = font.render(label, True, (240, 240, 240))
+        screen.blit(surface, (world_rect.x + 10, y))
+        y += 20
+    screen.set_clip(old_clip)
 
 
 def _active_local_arena_template_id(sim: Simulation, active_space_id: str, active_space: Any) -> str:
@@ -1152,10 +1257,16 @@ def _draw_local_arena_overlay(
             screen.blit(label, (int(obj_x) + 6, int(obj_y) - 10))
         screen.set_clip(old_clip)
 
-    y = 94
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
+    y = clip_rect.y + 72
     for line in lines:
-        screen.blit(font.render(line, True, (240, 240, 240)), (12, y))
+        if y + 18 > clip_rect.bottom:
+            break
+        text = _truncate_text_to_pixel_width(line, font, max(1, clip_rect.width - 12))
+        screen.blit(font.render(text, True, (240, 240, 240)), (clip_rect.x + 6, y))
         y += 18
+    screen.set_clip(old_clip)
 
 
 def _format_location(location: object) -> str:
@@ -1274,21 +1385,33 @@ def _rumor_rows_from_state(rumor_state: RumorPanelState) -> list[str]:
         ]
     )
 
-def _draw_encounter_debug_panel(
+def _draw_inspector_panel(
     screen: pygame.Surface,
     sim: Simulation,
     font: pygame.font.Font,
-    scroll_state: EncounterPanelScrollState,
-    active_section: str,
-    rumor_state: RumorPanelState,
-) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
-    panel_rect = _panel_rect()
-    pygame.draw.rect(screen, (24, 26, 36), panel_rect)
-    pygame.draw.rect(screen, (95, 98, 110), panel_rect, 1)
-
+    panel_rect: pygame.Rect,
+    scroll_offset: int,
+) -> tuple[pygame.Rect, int]:
+    content_rect = _render_panel_frame(screen, panel_rect, "Inspector", font)
     selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+    lines: list[str] = [
+        "Selection",
+        f"entity={selected_entity_id}" if selected_entity_id else "Nothing selected",
+        "",
+        "Role scope",
+        "campaign: travel/time/logistics/encounter triggering",
+        "local: tactical movement/combat resolution",
+        "",
+        "This panel is the Slice V2 foundation for future actor/site inspection.",
+    ]
+    wrapped_count = _render_wrapped_lines(screen, font, content_rect, lines, scroll_offset=scroll_offset)
+    return content_rect, wrapped_count
+
+
+def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState) -> dict[str, list[str]]:
     spawned_entities = [
-        entity for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id)
+        entity
+        for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id)
         if entity.entity_id != PLAYER_ID and entity.entity_id.startswith("spawn:")
     ]
     recent_signals = _section_entries([
@@ -1327,7 +1450,7 @@ def _draw_encounter_debug_panel(
         for entry in filtered_trace
         for params in [entry.get("params") if isinstance(entry.get("params"), dict) else {}]
     ])
-    rumor_rows = _rumor_rows_from_state(rumor_state)
+
     supply_outcomes = [entry for entry in sim.get_event_trace() if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE]
     supply_rows = _section_entries([
         (
@@ -1337,6 +1460,7 @@ def _draw_encounter_debug_panel(
         for entry in supply_outcomes
         for params in [entry.get("params") if isinstance(entry.get("params"), dict) else {}]
     ])
+
     site_rows: list[str] = []
     player = sim.state.entities.get(PLAYER_ID)
     if player is not None:
@@ -1345,7 +1469,7 @@ def _draw_encounter_debug_panel(
             coord = player.hex_coord.to_dict()
         for site in sim.state.world.get_sites_at_location({"space_id": player.space_id, "coord": coord}):
             site_rows.append(f"site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}")
-    site_rows = _section_entries(site_rows)
+
     entity_rows = _section_entries([
         (
             f"entity_id={entity.entity_id} template={entity.template_id if entity.template_id else '-'} "
@@ -1354,119 +1478,57 @@ def _draw_encounter_debug_panel(
         for entity in spawned_entities
     ])
 
-    rows_by_section = {
+    return {
         "encounters": encounter_rows,
         "outcomes": outcome_rows,
-        "rumors": rumor_rows,
+        "rumors": _rumor_rows_from_state(rumor_state),
         "supplies": supply_rows,
-        "sites": site_rows,
+        "sites": _section_entries(site_rows),
         "entities": entity_rows,
     }
 
+
+def _draw_encounter_debug_panel(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    scroll_state: EncounterPanelScrollState,
+    active_section: str,
+    rumor_state: RumorPanelState,
+    panel_rect: pygame.Rect,
+) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
+    content_rect = _render_panel_frame(screen, panel_rect, "Debug / Event", font, bg_color=(22, 24, 33))
     section_rects: dict[str, pygame.Rect] = {}
+
+    rows_by_section = _debug_rows_by_section(sim, rumor_state)
     section_counts = {section: len(rows) for section, rows in rows_by_section.items()}
 
-    y = panel_rect.y + 8
-    title = font.render("Encounter Debug | Site=S Spawn=E Desc=D Signal=G Track=T Door/Anchor/Int", True, (245, 245, 245))
-    screen.blit(title, (panel_rect.x + 10, y))
-    y += 18
-
-    tab_x = panel_rect.x + 10
-    for section in PANEL_SECTION_ORDER:
-        tab_label = PANEL_SECTION_TITLES[section]
-        color = (70, 100, 160) if section == active_section else (50, 54, 70)
-        tab_surface = font.render(tab_label, True, (235, 235, 240))
-        tab_rect = pygame.Rect(tab_x, y, tab_surface.get_width() + 12, 20)
+    tab_x = content_rect.x
+    tab_y = content_rect.y
+    for section_name in PANEL_SECTION_ORDER:
+        tab_surface = font.render(PANEL_SECTION_TITLES.get(section_name, section_name), True, (240, 240, 245))
+        tab_rect = pygame.Rect(tab_x, tab_y, tab_surface.get_width() + 12, 20)
+        color = (64, 70, 92) if section_name == active_section else (44, 48, 64)
         pygame.draw.rect(screen, color, tab_rect)
         pygame.draw.rect(screen, (110, 115, 135), tab_rect, 1)
         screen.blit(tab_surface, (tab_rect.x + 6, tab_rect.y + 2))
-        section_rects[section] = tab_rect
-        tab_x += tab_rect.width + 6
-    y += 26
+        section_rects[section_name] = tab_rect
+        tab_x = tab_rect.right + 6
 
-    section_rows = rows_by_section.get(active_section, [])
-    if active_section == "rumors":
-        mode_value = "Top" if rumor_state.mode == "top" else "All"
-        mode_surface = font.render(f"Mode: {mode_value}", True, (235, 235, 240))
-        mode_rect = pygame.Rect(panel_rect.x + 10, y, max(100, mode_surface.get_width() + 14), 20)
-        pygame.draw.rect(screen, (50, 54, 70), mode_rect)
-        pygame.draw.rect(screen, (110, 115, 135), mode_rect, 1)
-        screen.blit(mode_surface, (mode_rect.x + 6, mode_rect.y + 2))
-        section_rects["rumor_mode"] = mode_rect
-
-        kind_value = rumor_state.kind_filter if rumor_state.kind_filter is not None else "All"
-        kind_surface = font.render(f"Kind: {kind_value}", True, (235, 235, 240))
-        kind_rect = pygame.Rect(mode_rect.right + 8, y, max(100, kind_surface.get_width() + 14), 20)
-        pygame.draw.rect(screen, (50, 54, 70), kind_rect)
-        pygame.draw.rect(screen, (110, 115, 135), kind_rect, 1)
-        screen.blit(kind_surface, (kind_rect.x + 6, kind_rect.y + 2))
-        section_rects["rumor_kind"] = kind_rect
-
-        if rumor_state.mode == "top":
-            top_k_surface = font.render(f"Top K: {int(rumor_state.top_k)}", True, (235, 235, 240))
-            top_k_rect = pygame.Rect(kind_rect.right + 8, y, max(100, top_k_surface.get_width() + 14), 20)
-            pygame.draw.rect(screen, (50, 54, 70), top_k_rect)
-            pygame.draw.rect(screen, (110, 115, 135), top_k_rect, 1)
-            screen.blit(top_k_surface, (top_k_rect.x + 6, top_k_rect.y + 2))
-            section_rects["rumor_top_k"] = top_k_rect
-
-        prev_rect = pygame.Rect(kind_rect.right + 8, y, 56, 20)
-        if rumor_state.mode == "top" and section_rects.get("rumor_top_k") is not None:
-            prev_rect = pygame.Rect(section_rects["rumor_top_k"].right + 8, y, 56, 20)
-        next_rect = pygame.Rect(prev_rect.right + 6, y, 56, 20)
-        pygame.draw.rect(screen, (50, 54, 70), prev_rect)
-        pygame.draw.rect(screen, (110, 115, 135), prev_rect, 1)
-        pygame.draw.rect(screen, (50, 54, 70), next_rect)
-        pygame.draw.rect(screen, (110, 115, 135), next_rect, 1)
-        screen.blit(font.render("Prev", True, (235, 235, 240)), (prev_rect.x + 10, prev_rect.y + 2))
-        screen.blit(font.render("Next", True, (235, 235, 240)), (next_rect.x + 10, next_rect.y + 2))
-        section_rects["rumor_prev"] = prev_rect
-        section_rects["rumor_next"] = next_rect
-
-        y += 24
-        site_value = rumor_state.site_key_draft if rumor_state.editing_field == "site_key" else rumor_state.site_key_filter
-        group_value = rumor_state.group_id_draft if rumor_state.editing_field == "group_id" else rumor_state.group_id_filter
-        site_label = _truncate_text_to_pixel_width(f"Site: {site_value or '-'}", font, panel_rect.width - 24)
-        group_label = _truncate_text_to_pixel_width(f"Group: {group_value or '-'}", font, panel_rect.width - 24)
-        site_rect = pygame.Rect(panel_rect.x + 10, y, panel_rect.width - 20, 18)
-        group_rect = pygame.Rect(panel_rect.x + 10, y + 18, panel_rect.width - 20, 18)
-        pygame.draw.rect(screen, (44, 48, 64), site_rect)
-        pygame.draw.rect(screen, (44, 48, 64), group_rect)
-        pygame.draw.rect(screen, (110, 115, 135), site_rect, 1)
-        pygame.draw.rect(screen, (110, 115, 135), group_rect, 1)
-        screen.blit(font.render(site_label, True, (220, 220, 228)), (site_rect.x + 4, site_rect.y + 1))
-        screen.blit(font.render(group_label, True, (220, 220, 228)), (group_rect.x + 4, group_rect.y + 1))
-        section_rects["rumor_site"] = site_rect
-        section_rects["rumor_group"] = group_rect
-        y += 40
-
+    rows_rect = pygame.Rect(content_rect.x, tab_y + 26, content_rect.width, max(1, content_rect.bottom - (tab_y + 26)))
+    section_rects["rows"] = rows_rect
     offset = scroll_state.offset_for(active_section)
-    visible_rows = section_rows[offset : offset + ENCOUNTER_DEBUG_SECTION_ROWS]
-    header_line = font.render(
-        f"{PANEL_SECTION_TITLES.get(active_section, active_section)} ({len(section_rows)}) [{offset + 1 if section_rows else 0}-{min(len(section_rows), offset + ENCOUNTER_DEBUG_SECTION_ROWS)}]",
-        True,
-        (245, 245, 245),
-    )
-    screen.blit(header_line, (panel_rect.x + 10, y))
-    y += 18
-    row_area_top = y
-    row_area_bottom = panel_rect.bottom - 10
-    if not visible_rows:
-        screen.blit(font.render("  none", True, (205, 205, 210)), (panel_rect.x + 10, y))
-    for row in visible_rows:
-        wrapped = _wrap_text_to_pixel_width(f"  {row}", font, panel_rect.width - 24)
-        for wrapped_row in wrapped:
-            if y > row_area_bottom:
-                break
-            screen.blit(font.render(wrapped_row, True, (205, 205, 210)), (panel_rect.x + 10, y))
-            y += 16
-        if y > row_area_bottom:
-            break
-    section_rects["rows"] = pygame.Rect(panel_rect.x + 6, row_area_top, panel_rect.width - 12, max(1, row_area_bottom - row_area_top))
+    section_rows = rows_by_section.get(active_section, [])
+    if not section_rows:
+        section_rows = ["No rows yet for this section."]
+    total_rows = _render_wrapped_lines(screen, font, rows_rect, section_rows, scroll_offset=offset)
+    section_counts[active_section] = total_rows
 
-    if selected_entity_id is not None:
-        selected_surface = font.render(f"selected={selected_entity_id}", True, (185, 215, 185))
-        screen.blit(selected_surface, (panel_rect.x + 10, panel_rect.bottom - 24))
+    selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+    if selected_entity_id:
+        tag = _truncate_text_to_pixel_width(f"selected={selected_entity_id}", font, max(1, panel_rect.width - 22))
+        screen.blit(font.render(tag, True, (185, 215, 185)), (panel_rect.x + 10, panel_rect.y + 8))
+
     return section_rects, section_counts
 
 
@@ -1836,7 +1898,7 @@ def run_pygame_viewer(
 
     try:
         pygame_module.display.set_caption("Hexcrawler Phase 5G Viewer")
-        screen = pygame_module.display.set_mode(WINDOW_SIZE)
+        screen = pygame_module.display.set_mode(WINDOW_SIZE, pygame_module.RESIZABLE)
     except Exception as exc:
         print(
             "[hexcrawler.viewer] failed during pygame.display.set_mode(...): "
@@ -1889,6 +1951,8 @@ def run_pygame_viewer(
 
     def build_context_menu(event_pos: tuple[int, int]) -> ContextMenuState | None:
         items: list[ContextMenuItem] = []
+        layout = _compute_viewer_layout(screen.get_size())
+        viewport_rect = layout.world_view
         player = sim.state.entities.get(PLAYER_ID)
         active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
         if viewport_rect.collidepoint(event_pos):
@@ -1976,11 +2040,15 @@ def run_pygame_viewer(
     debug_font = pygame_module.font.SysFont("consolas", 16)
     marker_font = pygame_module.font.SysFont("consolas", 13)
 
-    viewport_rect = _viewport_rect()
+    layout = _compute_viewer_layout(screen.get_size())
+    viewport_rect = layout.world_view
     world_center = (float(viewport_rect.centerx), float(viewport_rect.centery))
     world_zoom_scale = 1.0
     local_camera_cache = LocalCameraCache(center=world_center, zoom_scale=world_zoom_scale)
     panel_scroll = EncounterPanelScrollState()
+    inspector_scroll = 0
+    inspector_content_rect: pygame.Rect | None = None
+    inspector_total_lines = 0
     panel_section_rects: dict[str, pygame.Rect] = {}
     panel_section_counts: dict[str, int] = {}
     active_panel_section = "encounters"
@@ -2007,6 +2075,11 @@ def run_pygame_viewer(
         for event in pygame_module.event.get():
             if event.type == pygame_module.QUIT:
                 running = False
+            elif event.type == pygame_module.VIDEORESIZE:
+                screen = pygame_module.display.set_mode((event.w, event.h), pygame_module.RESIZABLE)
+                layout = _compute_viewer_layout(screen.get_size())
+                viewport_rect = layout.world_view
+                local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_ESCAPE:
                 running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F2:
@@ -2058,17 +2131,17 @@ def run_pygame_viewer(
                     active_panel_section,
                     delta,
                     panel_section_counts.get(active_panel_section, 0),
-                    ENCOUNTER_DEBUG_SECTION_ROWS,
+                    _scroll_page_size(panel_section_rects.get("rows")),
                 )
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button in (4, 5):
-                if _panel_rect().collidepoint(event.pos):
+                if layout.debug_panel.collidepoint(event.pos):
                     delta = -1 if event.button == 4 else 1
                     if panel_section_rects.get("rows") is not None and panel_section_rects["rows"].collidepoint(event.pos):
                         panel_scroll.scroll(
                             active_panel_section,
                             delta,
                             panel_section_counts.get(active_panel_section, 0),
-                            ENCOUNTER_DEBUG_SECTION_ROWS,
+                            _scroll_page_size(panel_section_rects.get("rows")),
                         )
                     else:
                         for section_name in PANEL_SECTION_ORDER:
@@ -2076,7 +2149,14 @@ def run_pygame_viewer(
                             if section_rect is not None and section_rect.collidepoint(event.pos):
                                 active_panel_section = section_name
                                 break
-            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and _panel_rect().collidepoint(event.pos):
+                elif inspector_content_rect is not None and layout.inspector_panel.collidepoint(event.pos):
+                    inspector_scroll = _clamp_scroll_offset(
+                        inspector_scroll,
+                        delta,
+                        inspector_total_lines,
+                        max(1, inspector_content_rect.height // 16),
+                    )
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and layout.debug_panel.collidepoint(event.pos):
                 for section_name in PANEL_SECTION_ORDER:
                     section_rect = panel_section_rects.get(section_name)
                     if section_rect is not None and section_rect.collidepoint(event.pos):
@@ -2205,10 +2285,17 @@ def run_pygame_viewer(
                 _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
             else:
                 _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
-        _draw_top_control_bar(screen, sim, font, runtime_state)
-        _draw_hud(screen, sim, font, status_message, hover_message, runtime_state)
+        _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar)
+        _draw_hud(screen, sim, font, status_message, hover_message, runtime_state, layout.world_view)
         if show_local_arena_overlay:
             _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
+        inspector_content_rect, inspector_total_lines = _draw_inspector_panel(
+            screen,
+            sim,
+            debug_font,
+            layout.inspector_panel,
+            inspector_scroll,
+        )
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
             screen,
             sim,
@@ -2216,6 +2303,7 @@ def run_pygame_viewer(
             panel_scroll,
             active_panel_section,
             rumor_panel_state,
+            layout.debug_panel,
         )
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
