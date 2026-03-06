@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Hardening Slice H1/H2/H3 (implemented).
+- **Current phase:** Viewer / Runtime Stability Strike (implemented).
 - **Next action:** Viewer Oversight Phase — Slice V3 (actor visibility + selection foundation).
-- **Phase status:** ✅ Viewer now supports in-session simulation operations (new simulation, load/save, pause/resume, deterministic tick stepping) via a persistent top control bar metadata surface and runtime control adapter.
+- **Phase status:** ✅ Runtime stabilization fixes landed for campaign→local transition motion stop, local picking correctness, and viewer long-run/idle overhead reductions.
 
 
 ## What changed in this commit
-- Hardened LocalEncounter return restoration (campaign + local seam): local-entry return context now persists canonical continuous `origin_position` (`x`,`y`) and return flow restores exact campaign coordinates when present; deterministic derived-coordinate fallback remains explicit for legacy context only.
-- Hardened campaign presentation stability: viewer interpolation now uses a dedicated `compute_interpolation_alpha(...)` helper with bounded finite handling, and continuous-movement command spam was removed by emitting `set_move_vector` only when input vector changes.
-- Reduced viewer hot-path work: debug/event panel section rows are now built through a deterministic viewer-side cache keyed by simulation/runtime state signatures; paused mode now uses a lower frame cap to reduce idle CPU/power usage.
+- Stopped residual campaign motion on local encounter begin at the simulation seam by explicitly clearing actor movement state before local-space transition is applied.
+- Fixed local-map right-click “Move here” coverage by using local-role square-grid cell validation for pick targeting and snapping move targets to valid local cell centers.
+- Reduced long-run jitter/CPU overhead in the viewer loop by draining the simulation accumulator in deterministic batches and capping paused accumulator carry-over.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.

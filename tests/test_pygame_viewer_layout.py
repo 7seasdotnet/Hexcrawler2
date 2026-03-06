@@ -11,6 +11,8 @@ from hexcrawler.cli.pygame_viewer import (
     _scroll_page_size,
     _wrap_text_to_pixel_width,
     _build_viewer_simulation,
+    _drain_sim_accumulator,
+    _world_to_local_cell,
     _ensure_pygame_imported,
     build_debug_panel_render_cache,
     compute_interpolation_alpha,
@@ -117,3 +119,32 @@ def test_debug_panel_render_cache_reuses_rows_when_inputs_unchanged() -> None:
     sim.advance_ticks(1)
     rows_third = build_debug_panel_render_cache(sim, rumor_state, cache)
     assert rows_third is not rows_second
+
+
+def test_local_screen_pick_maps_to_cells_across_bounds() -> None:
+    from hexcrawler.sim.location import SQUARE_GRID_TOPOLOGY
+    from hexcrawler.sim.world import LOCAL_SPACE_ROLE, SpaceState
+
+    local_space = SpaceState(
+        space_id="local:test",
+        topology_type=SQUARE_GRID_TOPOLOGY,
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 10, "height": 10, "origin": {"x": 0, "y": 0}},
+    )
+
+    assert _world_to_local_cell(0.01, 0.02, active_space=local_space) == {"x": 0, "y": 0}
+    assert _world_to_local_cell(5.50, 5.50, active_space=local_space) == {"x": 5, "y": 5}
+    assert _world_to_local_cell(9.99, 9.01, active_space=local_space) == {"x": 9, "y": 9}
+    assert _world_to_local_cell(4.05, 1.05, active_space=local_space) == {"x": 4, "y": 1}
+    assert _world_to_local_cell(-0.01, 2.0, active_space=local_space) is None
+    assert _world_to_local_cell(2.0, 10.0, active_space=local_space) is None
+
+
+def test_drain_sim_accumulator_bounds_paused_and_running() -> None:
+    remaining, ticks = _drain_sim_accumulator(0.31, 0.1, paused=False)
+    assert ticks == 3
+    assert 0.009 <= remaining <= 0.011
+
+    paused_remaining, paused_ticks = _drain_sim_accumulator(5.0, 0.1, paused=True)
+    assert paused_ticks == 0
+    assert paused_remaining == 0.1
