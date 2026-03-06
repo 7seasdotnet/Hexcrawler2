@@ -1,16 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V2 (implemented).
+- **Current phase:** Viewer Oversight Phase — Hardening Slice H1/H2/H3 (implemented).
 - **Next action:** Viewer Oversight Phase — Slice V3 (actor visibility + selection foundation).
 - **Phase status:** ✅ Viewer now supports in-session simulation operations (new simulation, load/save, pause/resume, deterministic tick stepping) via a persistent top control bar metadata surface and runtime control adapter.
 
 
 ## What changed in this commit
-- Replaced the viewer’s single cramped debug slab with an explicit four-region operator layout: persistent control bar, bounded world-view region, right-side inspector foundation panel, and bottom debug/event foundation panel.
-- Added reusable layout/text safety helpers (dynamic geometry computation from window size, bounded wrapped-line rendering, panel frame helper, page-size-aware scroll clamping) and enabled resizable pygame window mode for adaptive region recomputation.
-- Reorganized debug/event content into the bottom panel while introducing an intentional inspector placeholder (“Nothing selected”) with independent scroll state, preserving canonical V1 controls (new/load/save/pause/advance) and simulation read-only UI behavior.
-
+- Hardened LocalEncounter return restoration (campaign + local seam): local-entry return context now persists canonical continuous `origin_position` (`x`,`y`) and return flow restores exact campaign coordinates when present; deterministic derived-coordinate fallback remains explicit for legacy context only.
+- Hardened campaign presentation stability: viewer interpolation now uses a dedicated `compute_interpolation_alpha(...)` helper with bounded finite handling, and continuous-movement command spam was removed by emitting `set_move_vector` only when input vector changes.
+- Reduced viewer hot-path work: debug/event panel section rows are now built through a deterministic viewer-side cache keyed by simulation/runtime state signatures; paused mode now uses a lower frame cap to reduce idle CPU/power usage.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -110,6 +109,12 @@
 - `PYTHONPATH=src pytest -q tests/test_supply_consumption.py`
 - `PYTHONPATH=src pytest -q tests/test_supplies_content.py`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
+
+## Verification Commands (current)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/sim/encounters.py`
+- `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_layout.py`
+- `PYTHONPATH=src pytest -q`
 
 ## Progress
 - ✅ Axial-coordinate hex world model implemented and keyed by `HexCoord`.

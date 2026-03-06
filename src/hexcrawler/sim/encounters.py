@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from typing import Any
 
 from hexcrawler.content.encounters import EncounterTable
@@ -591,10 +592,12 @@ class LocalEncounterInstanceModule(RuleModule):
         participant_remove_ids: list[str] = []
         participant_reason = "resolved"
         from_location_payload = event.params.get("from_location")
+        origin_position: dict[str, float] | None = None
         transition_plan: dict[str, Any] | None = None
         to_spawn_coord: dict[str, int] | None = None
         if entity_id is not None and resolved_spawn_coord is not None:
             entity = sim.state.entities[entity_id]
+            origin_position = {"x": float(entity.position_x), "y": float(entity.position_y)}
             from_location_payload = sim._entity_location_ref(entity).to_dict()
             spawn_entity_id = f"encounter_participant:{request_event_id}:0"
             participant_coord, participant_placement_rule = self._resolve_participant_placement(
@@ -853,6 +856,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_space_id": from_space_id,
                 "from_location": copy.deepcopy(from_location_payload),
                 "origin_location": copy.deepcopy(origin_location),
+                "origin_position": copy.deepcopy(origin_position),
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
                 "started_tick": int(event.tick),
                 "site_key": copy.deepcopy(normalized_site_key),
@@ -1048,6 +1052,7 @@ class LocalEncounterInstanceModule(RuleModule):
         reason = "resolved"
         to_space_id = None
         to_coord = None
+        restore_mode = "derived_coord_fallback"
         actor_space_id_before = None
         actor_space_id_after = None
         origin_space_id = str(event.params.get("origin_space_id", "")) if isinstance(event.params.get("origin_space_id"), str) else None
@@ -1085,9 +1090,27 @@ class LocalEncounterInstanceModule(RuleModule):
                     reason = "invalid_origin_location_for_space"
                 else:
                     entity = sim.state.entities[entity_id]
-                    entity.space_id = to_space_id
-                    entity.position_x = next_x
-                    entity.position_y = next_y
+                    exact_origin_position = self._normalize_origin_position_payload(
+                        origin_position_payload=context.get("origin_position"),
+                    )
+                    if (
+                        exact_origin_position is not None
+                        and sim._position_is_within_world(
+                            exact_origin_position["x"],
+                            exact_origin_position["y"],
+                            space_id=to_space_id,
+                        )
+                    ):
+                        entity.space_id = to_space_id
+                        entity.position_x = float(exact_origin_position["x"])
+                        entity.position_y = float(exact_origin_position["y"])
+                        restore_mode = "exact_position"
+                    else:
+                        entity.space_id = to_space_id
+                        entity.position_x = next_x
+                        entity.position_y = next_y
+                        restore_mode = "derived_coord_fallback"
+                    to_coord = copy.deepcopy(sim._entity_location_ref(entity).coord)
                     applied = True
                     actor_space_id_after = str(entity.space_id)
 
@@ -1140,6 +1163,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "actor_space_id_after": actor_space_id_after,
                 "from_location": copy.deepcopy(event.params.get("from_location")),
                 "to_coord": to_coord,
+                "restore_mode": restore_mode,
                 "applied": applied,
                 "reason": reason,
                 "space_persisted": True,
@@ -1192,6 +1216,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 origin_location_payload=context.get("origin_location", from_location),
                 legacy_coord=return_spawn_coord,
             )
+            origin_position = self._normalize_origin_position_payload(context.get("origin_position"))
             if not isinstance(from_location, dict) or not isinstance(return_spawn_coord, dict):
                 continue
             if not isinstance(origin_space_id, str) or not origin_space_id:
@@ -1209,6 +1234,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_space_id": origin_space_id,
                 "from_location": copy.deepcopy(from_location),
                 "origin_location": copy.deepcopy(origin_location),
+                "origin_position": copy.deepcopy(origin_position),
                 "return_spawn_coord": copy.deepcopy(return_spawn_coord),
                 "started_tick": int(context.get("started_tick", 0)),
                 "site_key": self._normalize_site_key_payload(context.get("site_key")),
@@ -2210,6 +2236,19 @@ class LocalEncounterInstanceModule(RuleModule):
         except (KeyError, TypeError, ValueError):
             return None
         return location.to_dict()
+
+    @staticmethod
+    def _normalize_origin_position_payload(origin_position_payload: Any) -> dict[str, float] | None:
+        if not isinstance(origin_position_payload, dict):
+            return None
+        try:
+            x = float(origin_position_payload["x"])
+            y = float(origin_position_payload["y"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        return {"x": x, "y": y}
 
     @staticmethod
     def _select_entity_id(sim: Simulation, *, from_space_id: str) -> str | None:

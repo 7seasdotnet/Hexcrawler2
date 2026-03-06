@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID,
+    DebugPanelRenderCache,
     EncounterPanelScrollState,
+    RumorPanelState,
     SimulationController,
     _clamp_scroll_offset,
     _compute_viewer_layout,
@@ -10,6 +12,8 @@ from hexcrawler.cli.pygame_viewer import (
     _wrap_text_to_pixel_width,
     _build_viewer_simulation,
     _ensure_pygame_imported,
+    build_debug_panel_render_cache,
+    compute_interpolation_alpha,
 )
 
 
@@ -92,3 +96,24 @@ def test_control_adapter_still_advances_tick_after_layout_refactor() -> None:
     controller.tick_once()
 
     assert sim.state.tick == tick_before + 1
+
+
+def test_compute_interpolation_alpha_is_clamped_and_stable() -> None:
+    assert compute_interpolation_alpha(elapsed_seconds=-1.0, tick_duration_seconds=0.1) == 0.0
+    assert compute_interpolation_alpha(elapsed_seconds=0.05, tick_duration_seconds=0.1) == 0.5
+    assert compute_interpolation_alpha(elapsed_seconds=0.2, tick_duration_seconds=0.1) == 1.0
+
+
+def test_debug_panel_render_cache_reuses_rows_when_inputs_unchanged() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    rumor_state = RumorPanelState()
+    cache = DebugPanelRenderCache()
+
+    rows_first = build_debug_panel_render_cache(sim, rumor_state, cache)
+    rows_second = build_debug_panel_render_cache(sim, rumor_state, cache)
+
+    assert rows_first is rows_second
+
+    sim.advance_ticks(1)
+    rows_third = build_debug_panel_render_cache(sim, rumor_state, cache)
+    assert rows_third is not rows_second
