@@ -41,8 +41,14 @@ from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE, Interact
 from hexcrawler.sim.signals import SignalPropagationModule
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
-from hexcrawler.sim.movement import axial_to_world_xy, normalized_vector, world_xy_to_axial
-from hexcrawler.sim.world import HexCoord
+from hexcrawler.sim.movement import (
+    axial_to_world_xy,
+    normalized_vector,
+    square_grid_cell_to_world_xy,
+    world_xy_to_axial,
+    world_xy_to_square_grid_cell,
+)
+from hexcrawler.sim.world import LOCAL_SPACE_ROLE, HexCoord
 
 HEX_SIZE = 28
 GRID_RADIUS = 8
@@ -486,6 +492,20 @@ def interpolate_entity_position(
     return (lerp(previous.x, current.x, alpha), lerp(previous.y, current.y, alpha))
 
 
+def _drain_sim_accumulator(accumulator: float, tick_seconds: float, *, paused: bool) -> tuple[float, int]:
+    if not math.isfinite(accumulator) or accumulator < 0.0:
+        accumulator = 0.0
+    if not math.isfinite(tick_seconds) or tick_seconds <= 0.0:
+        return 0.0, 0
+    if paused:
+        return min(accumulator, tick_seconds), 0
+    ticks = 0
+    while accumulator >= tick_seconds:
+        accumulator -= tick_seconds
+        ticks += 1
+    return accumulator, ticks
+
+
 def _grid_coords(radius: int) -> list[HexCoord]:
     coords: list[HexCoord] = []
     for q in range(-radius, radius + 1):
@@ -504,6 +524,22 @@ def _axial_to_pixel(coord: HexCoord, center: tuple[float, float]) -> tuple[float
 def _pixel_to_world(pixel_x: int, pixel_y: int, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
     size = HEX_SIZE * zoom_scale
     return ((pixel_x - center[0]) / size, (pixel_y - center[1]) / size)
+
+
+def _world_to_local_cell(
+    world_x: float,
+    world_y: float,
+    *,
+    active_space: Any,
+) -> dict[str, int] | None:
+    if str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
+        return None
+    if getattr(active_space, "topology_type", None) != SQUARE_GRID_TOPOLOGY:
+        return None
+    coord = world_xy_to_square_grid_cell(world_x, world_y)
+    if not active_space.is_valid_cell(coord):
+        return None
+    return coord
 
 
 def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
@@ -2053,22 +2089,33 @@ def run_pygame_viewer(
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
             else:
                 world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center, world_zoom_scale)
-                target_hex = world_xy_to_axial(world_x, world_y)
-                if sim.state.world.get_hex_record(target_hex) is not None:
-                    items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
-                    hex_sites = sim.state.world.get_sites_at_location({"space_id": "overworld", "coord": target_hex.to_dict()})
-                    if hex_sites:
-                        items.append(ContextMenuItem(label="Inspect Site...", action="noop"))
-                        for site in hex_sites:
-                            site_label = site.name if site.name else site.site_id
-                            items.append(ContextMenuItem(label=f"- {site.site_id} ({site.site_type})", action="noop"))
-                            if site.entrance is not None:
-                                items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
-                    items.append(ContextMenuItem(label="Explore...", action="noop"))
-                    items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
-                    items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
-                    items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
-                    items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+                if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
+                    local_cell = _world_to_local_cell(world_x, world_y, active_space=active_space)
+                    if local_cell is not None:
+                        local_world_x, local_world_y = square_grid_cell_to_world_xy(local_cell["x"], local_cell["y"])
+                        items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{local_world_x},{local_world_y}"))
+                        items.append(ContextMenuItem(label="Explore...", action="noop"))
+                        items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
+                        items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
+                        items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
+                        items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+                else:
+                    target_hex = world_xy_to_axial(world_x, world_y)
+                    if sim.state.world.get_hex_record(target_hex) is not None:
+                        items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
+                        hex_sites = sim.state.world.get_sites_at_location({"space_id": "overworld", "coord": target_hex.to_dict()})
+                        if hex_sites:
+                            items.append(ContextMenuItem(label="Inspect Site...", action="noop"))
+                            for site in hex_sites:
+                                site_label = site.name if site.name else site.site_id
+                                items.append(ContextMenuItem(label=f"- {site.site_id} ({site.site_type})", action="noop"))
+                                if site.entrance is not None:
+                                    items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+                        items.append(ContextMenuItem(label="Explore...", action="noop"))
+                        items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
+                        items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
+                        items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
+                        items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
         if active_space is not None and str(getattr(active_space, "role", "")) == "local":
             return_context = _get_return_context_for_space(sim, active_space.space_id)
             if return_context is None:
@@ -2311,13 +2358,16 @@ def run_pygame_viewer(
             controller.set_move_vector(move_x, move_y)
             last_sent_move_vector = (move_x, move_y)
 
-        while accumulator >= SIM_TICK_SECONDS:
-            if not runtime_state.paused:
-                previous_snapshot = current_snapshot
-                runtime_controller.advance_ticks(1)
-                current_snapshot = extract_render_snapshot(sim)
-                last_tick_time = pygame_module.time.get_ticks() / 1000.0
-            accumulator -= SIM_TICK_SECONDS
+        accumulator, ticks_advanced = _drain_sim_accumulator(
+            accumulator,
+            SIM_TICK_SECONDS,
+            paused=runtime_state.paused,
+        )
+        if ticks_advanced > 0:
+            previous_snapshot = current_snapshot
+            runtime_controller.advance_ticks(ticks_advanced)
+            current_snapshot = extract_render_snapshot(sim)
+            last_tick_time = pygame_module.time.get_ticks() / 1000.0
 
         now_seconds = pygame_module.time.get_ticks() / 1000.0
         _consume_rumor_outcome(sim, rumor_panel_state)

@@ -408,3 +408,35 @@ def test_local_encounter_return_restores_exact_campaign_position_after_save_load
 
     return_event = _trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
     assert return_event["params"]["restore_mode"] == "exact_position"
+
+
+def test_local_encounter_entry_stops_campaign_motion_and_survives_save_load() -> None:
+    sim = _build_sim(seed=211)
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            entity_id="scout",
+            command_type="set_move_vector",
+            params={"x": 1.0, "y": 0.25},
+        )
+    )
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    scout = sim.state.entities["scout"]
+    assert scout.space_id == local_space_id
+    assert scout.move_input_x == 0.0
+    assert scout.move_input_y == 0.0
+    assert scout.target_position is None
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded_scout = loaded.state.entities["scout"]
+    assert loaded_scout.space_id == local_space_id
+    assert loaded_scout.move_input_x == 0.0
+    assert loaded_scout.move_input_y == 0.0
+    assert loaded_scout.target_position is None

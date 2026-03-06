@@ -729,6 +729,7 @@ class LocalEncounterInstanceModule(RuleModule):
 
         if placement_reason == "resolved" and transition_plan is not None and entity_id is not None:
             entity = sim.state.entities[entity_id]
+            sim.stop_entity(entity_id)
             entity.space_id = transition_plan["actor_space_id"]
             entity.position_x = float(transition_plan["actor_position"]["x"])
             entity.position_y = float(transition_plan["actor_position"]["y"])
