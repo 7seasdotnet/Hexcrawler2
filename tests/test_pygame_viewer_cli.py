@@ -6,6 +6,8 @@ from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID,
     RumorPanelState,
     SimulationController,
+    ViewerRuntimeController,
+    ViewerRuntimeState,
     _consume_rumor_outcome,
     _refresh_rumor_query,
     _build_parser,
@@ -346,3 +348,140 @@ def test_find_world_marker_at_pixel_uses_same_positions_as_rendering_pipeline() 
 
     assert marker is not None
     assert marker.marker_id == "site:site-alpha"
+
+
+def test_viewer_runtime_controller_new_simulation_replaces_state_deterministically() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=42)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+
+    original_hash = simulation_hash(state.sim)
+    runtime.advance_ticks(17)
+    runtime.new_simulation(seed=42)
+
+    assert state.sim.state.tick == 0
+    assert state.sim.seed == 42
+    assert simulation_hash(state.sim) == original_hash
+
+
+def test_viewer_runtime_controller_load_replaces_state(tmp_path: Path) -> None:
+    baseline = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True, seed=13)
+    baseline.advance_ticks(12)
+    save_path = tmp_path / "runtime_load.json"
+    _save_viewer_simulation(baseline, str(save_path))
+
+    current = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=99)
+    state = ViewerRuntimeState(
+        sim=current,
+        map_path="content/examples/basic_map.json",
+        with_encounters=True,
+        current_save_path=str(save_path),
+    )
+    runtime = ViewerRuntimeController(state)
+
+    loaded = runtime.load_simulation(str(save_path))
+
+    assert state.sim is loaded
+    assert loaded.state.tick == 12
+    assert simulation_hash(loaded) == simulation_hash(baseline)
+
+
+def test_viewer_runtime_controller_save_uses_canonical_path(tmp_path: Path) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=5)
+    sim.advance_ticks(3)
+    save_path = tmp_path / "runtime_save.json"
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path=str(save_path),
+    )
+    runtime = ViewerRuntimeController(state)
+
+    written_path = runtime.save_simulation()
+    loaded = _load_viewer_simulation(written_path, with_encounters=False)
+
+    assert written_path == str(save_path)
+    assert loaded.state.tick == sim.state.tick
+    assert simulation_hash(loaded) == simulation_hash(sim)
+
+
+def test_viewer_runtime_controller_advance_controls_apply_expected_tick_deltas() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+
+    runtime.advance_ticks(10)
+    runtime.advance_ticks(100)
+    runtime.advance_ticks(1000)
+
+    assert state.sim.state.tick == 1110
+
+
+def test_viewer_runtime_controller_pause_resume_toggle() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+
+    assert state.paused is False
+    assert runtime.toggle_pause() is True
+    assert state.paused is True
+    assert runtime.toggle_pause() is False
+    assert state.paused is False
+
+
+def test_viewer_runtime_controller_replacement_updates_command_adapter_reference() -> None:
+    sim_a = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=7)
+    state = ViewerRuntimeState(
+        sim=sim_a,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+
+    sim_b = runtime.new_simulation(seed=11)
+    runtime.controller.set_move_vector(0.25, -0.75)
+
+    assert state.sim is sim_b
+    assert runtime.controller.sim is sim_b
+    assert sim_b.input_log[-1].params == {"x": 0.25, "y": -0.75}
+    assert sim_a.input_log == []
+
+
+def test_viewer_runtime_controller_new_simulation_same_seed_and_commands_is_deterministic() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=123)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+
+    runtime.new_simulation(seed=222)
+    runtime.controller.set_move_vector(1.0, 0.0)
+    runtime.advance_ticks(5)
+    first_hash = simulation_hash(runtime.sim)
+
+    runtime.new_simulation(seed=222)
+    runtime.controller.set_move_vector(1.0, 0.0)
+    runtime.advance_ticks(5)
+    second_hash = simulation_hash(runtime.sim)
+
+    assert first_hash == second_hash

@@ -1,18 +1,18 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Phase 5C — Political Actions (implemented).
-- **Next action:** Viewer Oversight Phase.
-- **Phase status:** ✅ Phase 6D-M2 deterministically spawns local encounter participants with anchor-first (`enemy_entry`) placement + deterministic fallback and explicit spawn forensics in `local_encounter_begin`.
-- Phase 6D hardening: added a canonical deterministic binding contract regression for campaign→local→campaign flow, anti-nesting rejection, and save/load stability.
+- **Current phase:** Viewer Oversight Phase — Slice V1 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V2 (layout / panel organization foundation).
+- **Phase status:** ✅ Viewer now supports in-session simulation operations (new simulation, load/save, pause/resume, deterministic tick stepping) via a persistent top control bar metadata surface and runtime control adapter.
 
 
 ## What changed in this commit
-- Added `FactionPoliticalActionModule` (Phase 5C) to deterministically consume `belief_updated_from_investigation` outcomes and translate qualifying belief states into intent-only political action events (`faction_warning_issued`, `faction_hostility_escalated`, `faction_raid_intent_declared`) plus bounded forensic emissions.
-- Added serialized/idempotent political action ledgering in `rules_state["faction_political_actions"]` (`emitted_action_keys` bounded FIFO), deterministic lexical processing (`faction_id`, `belief_id`, `base_key`), and per-tick budget enforcement (`MAX_FACTION_POLITICAL_ACTIONS_PER_TICK`) with `faction_political_action_budget_exhausted`.
-- Added Slice 5C regression coverage for warning/hostility/raid triggers, ordering independence, idempotence, budget-cap behavior, and save/load simulation-hash stability.
+- Added follow-up Viewer Oversight V1 hardening tests that explicitly verify full runtime simulation replacement updates command adapter references (no lingering old-simulation writes after New Simulation/Load replacement).
+- Added deterministic seed regression for in-viewer New Simulation: same map + same seed + same commands produces identical simulation hashes.
+- Retained canonical init/load/save/advance control pathways and operator metadata bar behavior from Slice V1.
 
 ## What Exists (folders / entry points)
+- `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight top control bar and `ViewerRuntimeController` adapter for canonical new/load/save/advance/pause operations while keeping simulation mutation through command/advance/save-load contracts.
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
@@ -189,6 +189,7 @@
 - Canonical launch: `python play.py`
 
 ## Current Verification Commands
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py`
 - `python -m pip install -r requirements.txt`
 - `python play.py [--seed N] [--load-save PATH] [--map-path PATH] [--headless]  # canonical launch`
 - `python play.py`
