@@ -364,3 +364,47 @@ def test_local_encounter_return_forensics_include_actor_space_before_after_with_
     assert return_event["params"]["origin_space_id"] == CAMPAIGN_SPACE_ID
     assert return_event["params"]["actor_space_id_before"] == local_space_id
     assert return_event["params"]["actor_space_id_after"] == CAMPAIGN_SPACE_ID
+
+
+def test_local_encounter_return_restores_exact_campaign_position() -> None:
+    sim = _build_sim(seed=101)
+    sim.state.entities["scout"].position_x = 12.37
+    sim.state.entities["scout"].position_y = 21.61
+
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    returned = sim.state.entities["scout"]
+    assert returned.space_id == CAMPAIGN_SPACE_ID
+    assert returned.position_x == 12.37
+    assert returned.position_y == 21.61
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["restore_mode"] == "exact_position"
+
+
+def test_local_encounter_return_restores_exact_campaign_position_after_save_load() -> None:
+    sim = _build_sim(seed=102)
+    sim.state.entities["scout"].position_x = 12.49
+    sim.state.entities["scout"].position_y = 21.13
+
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    _issue_end_intent(loaded)
+    loaded.advance_ticks(3)
+
+    returned = loaded.state.entities["scout"]
+    assert returned.space_id == CAMPAIGN_SPACE_ID
+    assert returned.position_x == 12.49
+    assert returned.position_y == 21.13
+
+    return_event = _trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["restore_mode"] == "exact_position"

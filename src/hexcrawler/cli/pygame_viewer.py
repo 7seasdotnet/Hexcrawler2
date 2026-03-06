@@ -402,6 +402,23 @@ class RumorPanelState:
         return params
 
 
+@dataclass(frozen=True)
+class DebugPanelCacheKey:
+    tick: int
+    event_trace_size: int
+    signal_count: int
+    track_count: int
+    spawn_count: int
+    entity_count: int
+    rumor_signature: str
+
+
+@dataclass
+class DebugPanelRenderCache:
+    key: DebugPanelCacheKey | None = None
+    rows_by_section: dict[str, list[str]] = field(default_factory=dict)
+
+
 RUMOR_KIND_FILTER_ORDER: tuple[str | None, ...] = (None, "group_arrival", "claim_opportunity", "site_claim")
 
 
@@ -431,6 +448,14 @@ class MarkerPlacement:
 
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+def compute_interpolation_alpha(*, elapsed_seconds: float, tick_duration_seconds: float) -> float:
+    if not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0.0:
+        return 0.0
+    if not math.isfinite(tick_duration_seconds) or tick_duration_seconds <= 0.0:
+        return 1.0
+    return clamp01(elapsed_seconds / tick_duration_seconds)
 
 
 def lerp(start: float, end: float, alpha: float) -> float:
@@ -1408,6 +1433,40 @@ def _draw_inspector_panel(
     return content_rect, wrapped_count
 
 
+def _debug_panel_cache_key(sim: Simulation, rumor_state: RumorPanelState) -> DebugPanelCacheKey:
+    rumor_signature = json.dumps({
+        "mode": rumor_state.mode,
+        "kind": rumor_state.kind_filter,
+        "site": rumor_state.site_key_filter,
+        "group": rumor_state.group_id_filter,
+        "cursor": rumor_state.cursor,
+        "rows": [str(row.get("rumor_id", "")) for row in rumor_state.rows if isinstance(row, dict)],
+        "outcome": rumor_state.outcome,
+    }, sort_keys=True)
+    return DebugPanelCacheKey(
+        tick=int(sim.state.tick),
+        event_trace_size=len(sim.state.event_trace),
+        signal_count=len(sim.state.world.signals),
+        track_count=len(sim.state.world.tracks),
+        spawn_count=len(sim.state.world.spawn_descriptors),
+        entity_count=len(sim.state.entities),
+        rumor_signature=rumor_signature,
+    )
+
+
+def build_debug_panel_render_cache(
+    sim: Simulation,
+    rumor_state: RumorPanelState,
+    cache: DebugPanelRenderCache,
+) -> dict[str, list[str]]:
+    next_key = _debug_panel_cache_key(sim, rumor_state)
+    if cache.key == next_key and cache.rows_by_section:
+        return cache.rows_by_section
+    cache.key = next_key
+    cache.rows_by_section = _debug_rows_by_section(sim, rumor_state)
+    return cache.rows_by_section
+
+
 def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState) -> dict[str, list[str]]:
     spawned_entities = [
         entity
@@ -1496,11 +1555,12 @@ def _draw_encounter_debug_panel(
     active_section: str,
     rumor_state: RumorPanelState,
     panel_rect: pygame.Rect,
+    cache: DebugPanelRenderCache,
 ) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
     content_rect = _render_panel_frame(screen, panel_rect, "Debug / Event", font, bg_color=(22, 24, 33))
     section_rects: dict[str, pygame.Rect] = {}
 
-    rows_by_section = _debug_rows_by_section(sim, rumor_state)
+    rows_by_section = build_debug_panel_render_cache(sim, rumor_state, cache)
     section_counts = {section: len(rows) for section, rows in rows_by_section.items()}
 
     tab_x = content_rect.x
@@ -1926,7 +1986,7 @@ def run_pygame_viewer(
         del recent_saves[RECENT_SAVES_LIMIT:]
 
     def load_simulation_from_path(path_value: str) -> bool:
-        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message
+        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, last_sent_move_vector
         try:
             sim = runtime_controller.load_simulation(path_value)
             previous_snapshot = extract_render_snapshot(sim)
@@ -1935,6 +1995,7 @@ def run_pygame_viewer(
             context_menu = None
             push_recent_save(path_value)
             status_message = f"loaded {path_value}"
+            last_sent_move_vector = (0.0, 0.0)
             return True
         except Exception as exc:
             status_message = f"load failed: {exc}"
@@ -2054,6 +2115,7 @@ def run_pygame_viewer(
     active_panel_section = "encounters"
     rumor_panel_state = RumorPanelState()
     show_local_arena_overlay = False
+    debug_panel_cache = DebugPanelRenderCache()
 
     accumulator = 0.0
     running = True
@@ -2067,9 +2129,11 @@ def run_pygame_viewer(
     push_recent_save(save_path)
     push_recent_save(load_save)
     status_message: str | None = None
+    last_sent_move_vector = (0.0, 0.0)
 
     while running:
-        dt = clock.tick(60) / 1000.0
+        target_fps = 30 if runtime_state.paused else 60
+        dt = clock.tick(target_fps) / 1000.0
         accumulator += dt
 
         for event in pygame_module.event.get():
@@ -2091,6 +2155,7 @@ def run_pygame_viewer(
                 current_snapshot = previous_snapshot
                 last_tick_time = pygame_module.time.get_ticks() / 1000.0
                 status_message = f"new simulation map={runtime_state.map_path} seed={sim.seed}"
+                last_sent_move_vector = (0.0, 0.0)
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F5:
                 saved_path = runtime_controller.save_simulation()
                 push_recent_save(saved_path)
@@ -2242,7 +2307,9 @@ def run_pygame_viewer(
         move_x, move_y = _current_input_vector()
         if not rumor_panel_state.request_pending:
             _refresh_rumor_query(controller, rumor_panel_state)
-        controller.set_move_vector(move_x, move_y)
+        if (move_x, move_y) != last_sent_move_vector:
+            controller.set_move_vector(move_x, move_y)
+            last_sent_move_vector = (move_x, move_y)
 
         while accumulator >= SIM_TICK_SECONDS:
             if not runtime_state.paused:
@@ -2254,7 +2321,10 @@ def run_pygame_viewer(
 
         now_seconds = pygame_module.time.get_ticks() / 1000.0
         _consume_rumor_outcome(sim, rumor_panel_state)
-        alpha = clamp01((now_seconds - last_tick_time) / tick_duration_seconds)
+        alpha = compute_interpolation_alpha(
+            elapsed_seconds=now_seconds - last_tick_time,
+            tick_duration_seconds=tick_duration_seconds,
+        )
 
         player = sim.state.entities.get(PLAYER_ID)
         current_space_id = _entity_space_id(player) if player is not None else "overworld"
@@ -2304,6 +2374,7 @@ def run_pygame_viewer(
             active_panel_section,
             rumor_panel_state,
             layout.debug_panel,
+            debug_panel_cache,
         )
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         pygame_module.display.flip()
