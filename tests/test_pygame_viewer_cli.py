@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import hexcrawler.cli.pygame_viewer as viewer_module
 import pytest
 
 from hexcrawler.cli.pygame_viewer import (
@@ -12,6 +13,7 @@ from hexcrawler.cli.pygame_viewer import (
     _refresh_rumor_query,
     _build_parser,
     _build_viewer_simulation,
+    MarkerPlacement,
     MarkerRecord,
     _find_entity_at_pixel,
     _find_world_marker_at_pixel,
@@ -20,6 +22,9 @@ from hexcrawler.cli.pygame_viewer import (
     _slot_markers_for_hex,
     _load_viewer_simulation,
     _save_viewer_simulation,
+    _queue_selection_command_for_click,
+    _selected_entity_for_click,
+    _selected_entity_lines,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.encounters import (
@@ -485,3 +490,107 @@ def test_viewer_runtime_controller_new_simulation_same_seed_and_commands_is_dete
     second_hash = simulation_hash(runtime.sim)
 
     assert first_hash == second_hash
+
+
+def test_selected_entity_for_click_returns_entity_marker_hit() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+
+    player = sim.state.entities[PLAYER_ID]
+    player.position_x = 0.0
+    player.position_y = 0.0
+
+    picked = _selected_entity_for_click(sim, (100, 100), (100.0, 100.0), zoom_scale=1.0, radius_px=40.0)
+
+    assert picked == PLAYER_ID
+
+
+def test_selected_entity_for_click_returns_none_when_no_hit() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+
+    picked = _selected_entity_for_click(sim, (5, 5), (300.0, 300.0), zoom_scale=1.0, radius_px=8.0)
+
+    assert picked is None
+
+
+def test_selected_entity_lines_include_minimal_observability_fields() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    investigator = EntityState(entity_id="investigator:test", position_x=1.0, position_y=2.0, space_id="overworld")
+    investigator.template_id = "faction_investigator"
+    investigator.stats = {
+        "faction_id": "red_fang",
+        "role": "investigator",
+        "source_belief_id": "belief:123",
+        "target_location": {"topology_type": "overworld_hex", "coord": {"q": 2, "r": 1}},
+    }
+    sim.add_entity(investigator)
+
+    lines = _selected_entity_lines(sim, investigator.entity_id)
+
+    assert any("entity_id=investigator:test" in line for line in lines)
+    assert any("faction_id=red_fang" in line for line in lines)
+    assert any("role=investigator" in line for line in lines)
+    assert any("source_belief_id=belief:123" in line for line in lines)
+    assert any("target_location=overworld_hex:2,1" in line for line in lines)
+
+
+def test_selection_commands_do_not_mutate_world_state_until_sim_step() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    world_before = world_hash(sim.state.world)
+    selected_before = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+    input_before = len(sim.input_log)
+    controller.set_selected_entity(PLAYER_ID)
+    controller.clear_selected_entity()
+
+    assert world_hash(sim.state.world) == world_before
+    assert sim.selected_entity_id(owner_entity_id=PLAYER_ID) == selected_before
+    assert len(sim.input_log) == input_before + 2
+
+
+def test_world_marker_candidate_sort_is_deterministic_with_equal_distance(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+
+    placements = [
+        MarkerPlacement(
+            marker=MarkerRecord(priority=1, marker_id="entity:zeta", marker_kind="entity", color=(1, 1, 1), radius=5, label="z"),
+            x=100,
+            y=100,
+        ),
+        MarkerPlacement(
+            marker=MarkerRecord(priority=1, marker_id="entity:alpha", marker_kind="entity", color=(1, 1, 1), radius=5, label="a"),
+            x=100,
+            y=100,
+        ),
+    ]
+
+    monkeypatch.setattr(viewer_module, "_world_marker_placements", lambda *_args, **_kwargs: placements)
+
+    candidates = viewer_module._find_world_marker_candidates_at_pixel(sim, (100, 100), (100.0, 100.0), zoom_scale=1.0, radius_px=12.0)
+
+    assert [candidate.marker_id for candidate in candidates] == ["entity:alpha", "entity:zeta"]
+
+
+def test_queue_selection_command_for_click_uses_command_seam_end_to_end() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    pending_before = len(sim.input_log)
+    selected_before = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+
+    status = _queue_selection_command_for_click(
+        sim,
+        controller,
+        (100, 100),
+        (100.0, 100.0),
+        zoom_scale=1.0,
+        radius_px=40.0,
+    )
+
+    assert status == f"selected {PLAYER_ID}"
+    assert len(sim.input_log) == pending_before + 1
+    assert sim.selected_entity_id(owner_entity_id=PLAYER_ID) == selected_before
+
+    sim.advance_ticks(1)
+
+    assert sim.selected_entity_id(owner_entity_id=PLAYER_ID) == PLAYER_ID

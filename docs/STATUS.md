@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer / Runtime Stability Strike (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V3 (actor visibility + selection foundation).
-- **Phase status:** ✅ Runtime stabilization fixes landed for campaign→local transition motion stop, local picking correctness, and viewer long-run/idle overhead reductions.
+- **Current phase:** Viewer Oversight Phase — Slice V3 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V4 (event/entity trace inspection expansion).
+- **Phase status:** ✅ Slice V3 landed with actor visibility markers, click-based deterministic selection commands, and inspector population for selected entities.
 
 
 ## What changed in this commit
-- Stopped residual campaign motion on local encounter begin at the simulation seam by explicitly clearing actor movement state before local-space transition is applied.
-- Fixed local-map right-click “Move here” coverage by using local-role square-grid cell validation for pick targeting and snapping move targets to valid local cell centers.
-- Reduced long-run jitter/CPU overhead in the viewer loop by draining the simulation accumulator in deterministic batches and capping paused accumulator carry-over.
+- Added deterministic viewer-side selection command queue helper for world-clicks so input consistently flows through `set_selected_entity` / `clear_selected_entity` command append paths only.
+- Added deterministic tie-break coverage for marker hit sorting (`distance`, then `marker_id`) to ensure stable nearest-entity click resolution.
+- Added end-to-end test coverage for click→command append→next-tick selection application while preserving viewer read-only discipline before simulation stepping.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -282,9 +282,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Documentation hardening pass: added explicit projection-agnostic local map architecture rules (top-down/isometric treated as view/editor projection only, never simulation topology/state).
-- Added explicit combat seam and future-constraints guardrails to prevent projection-coupled tactical semantics or camera-angle-dependent combat behavior.
-- No engine code changes were made in this commit (documentation-only update).
+- Viewer selection click handling now routes through a dedicated deterministic command-queue helper (`set_selected_entity`/`clear_selected_entity`) with no direct mutation path.
+- Added deterministic marker candidate tie-break validation (`distance`, then stable `marker_id`) to keep selection behavior replay-safe.
+- Added end-to-end test validation for click-driven selection application on the next simulation step, preserving read-only viewer behavior before stepping.
 
 
 ## Troubleshooting

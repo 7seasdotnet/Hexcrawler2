@@ -117,6 +117,13 @@ PANEL_SECTION_TITLES: dict[str, str] = {
     "entities": "Entities",
 }
 
+ENTITY_MARKER_COLORS: dict[str, tuple[int, int, int]] = {
+    "player": (110, 240, 140),
+    "investigator": (255, 186, 96),
+    "spawn": (140, 225, 255),
+    "default": (214, 214, 214),
+}
+
 @dataclass(frozen=True)
 class ContextMenuItem:
     label: str
@@ -906,12 +913,11 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
             )
 
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
-        if entity.entity_id == PLAYER_ID or not entity.entity_id.startswith("spawn:"):
-            continue
         entity_space_id = _entity_space_id(entity)
         if not _is_in_current_space(entity_space_id, active_space_id):
             continue
-        label = entity.template_id if entity.template_id else _short_stable_id(entity.entity_id)
+        label = _entity_marker_label(entity)
+        _, marker_color = _entity_marker_role_and_color(entity)
         if active_location_topology == SQUARE_GRID_TOPOLOGY:
             cell = MarkerCellRef(
                 space_id=entity_space_id or "overworld",
@@ -930,8 +936,8 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
                 priority=1,
                 marker_id=f"entity:{entity.entity_id}",
                 marker_kind="entity",
-                color=(140, 225, 255),
-                radius=5,
+                color=marker_color,
+                radius=6 if entity.entity_id == PLAYER_ID else 5,
                 label=_truncate_label(label),
             ),
         )
@@ -1455,16 +1461,20 @@ def _draw_inspector_panel(
 ) -> tuple[pygame.Rect, int]:
     content_rect = _render_panel_frame(screen, panel_rect, "Inspector", font)
     selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
-    lines: list[str] = [
-        "Selection",
-        f"entity={selected_entity_id}" if selected_entity_id else "Nothing selected",
-        "",
-        "Role scope",
-        "campaign: travel/time/logistics/encounter triggering",
-        "local: tactical movement/combat resolution",
-        "",
-        "This panel is the Slice V2 foundation for future actor/site inspection.",
-    ]
+    lines: list[str] = []
+    if selected_entity_id:
+        lines.extend(_selected_entity_lines(sim, selected_entity_id))
+    else:
+        lines.extend(["Selection", "Nothing selected"])
+    lines.extend(
+        [
+            "",
+            "Viewer discipline",
+            "Read-only operator console: no direct simulation mutation.",
+            "campaign role: travel/time/logistics/encounter triggering",
+            "local role: tactical movement/combat resolution",
+        ]
+    )
     wrapped_count = _render_wrapped_lines(screen, font, content_rect, lines, scroll_offset=scroll_offset)
     return content_rect, wrapped_count
 
@@ -1745,6 +1755,93 @@ def _find_world_marker_at_pixel(
     if not candidates:
         return None
     return candidates[0]
+
+
+def _entity_marker_role_and_color(entity: EntityState) -> tuple[str, tuple[int, int, int]]:
+    role_value = entity.stats.get("role") if isinstance(entity.stats, dict) else None
+    role = str(role_value).strip().lower() if isinstance(role_value, str) and role_value.strip() else ""
+    if entity.entity_id == PLAYER_ID:
+        return "player", ENTITY_MARKER_COLORS["player"]
+    if role == "investigator" or str(entity.template_id or "") == "faction_investigator":
+        return "investigator", ENTITY_MARKER_COLORS["investigator"]
+    if entity.entity_id.startswith("spawn:"):
+        return "spawn", ENTITY_MARKER_COLORS["spawn"]
+    return "default", ENTITY_MARKER_COLORS["default"]
+
+
+def _entity_marker_label(entity: EntityState) -> str:
+    marker_role, _ = _entity_marker_role_and_color(entity)
+    if marker_role == "player":
+        return "player"
+    if marker_role == "investigator":
+        faction_id = entity.stats.get("faction_id") if isinstance(entity.stats, dict) else None
+        if isinstance(faction_id, str) and faction_id:
+            return f"inv:{faction_id}"
+        return "investigator"
+    if entity.template_id:
+        return str(entity.template_id)
+    return _short_stable_id(entity.entity_id)
+
+
+def _selected_entity_for_click(
+    sim: Simulation,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    zoom_scale: float = 1.0,
+    *,
+    radius_px: float = 12.0,
+) -> str | None:
+    markers = _find_world_marker_candidates_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
+    for marker in markers:
+        if marker.marker_kind != "entity":
+            continue
+        parts = marker.marker_id.split(":", 1)
+        if len(parts) != 2:
+            continue
+        entity_id = parts[1]
+        if entity_id in sim.state.entities:
+            return entity_id
+    return None
+
+
+def _queue_selection_command_for_click(
+    sim: Simulation,
+    controller: SimulationController,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    zoom_scale: float = 1.0,
+    *,
+    radius_px: float = 12.0,
+) -> str:
+    selected_entity = _selected_entity_for_click(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
+    if selected_entity is not None:
+        controller.set_selected_entity(selected_entity)
+        return f"selected {selected_entity}"
+    controller.clear_selected_entity()
+    return "selection cleared"
+
+
+def _selected_entity_lines(sim: Simulation, selected_entity_id: str) -> list[str]:
+    entity = sim.state.entities.get(selected_entity_id)
+    if entity is None:
+        return ["Selection", f"entity_id={selected_entity_id}", "Entity not found in current simulation state."]
+
+    stats = entity.stats if isinstance(entity.stats, dict) else {}
+    faction_id = stats.get("faction_id") if isinstance(stats.get("faction_id"), str) else None
+    role_value = stats.get("role") if isinstance(stats.get("role"), str) else None
+    source_belief_id = stats.get("source_belief_id") if isinstance(stats.get("source_belief_id"), str) else None
+    target_location = stats.get("target_location") if isinstance(stats.get("target_location"), dict) else None
+    target_summary = _format_location(target_location) if target_location is not None else "-"
+
+    return [
+        "Selection",
+        f"entity_id={entity.entity_id}",
+        f"faction_id={faction_id if faction_id else '-'}",
+        f"role={role_value if role_value else (entity.template_id if entity.template_id else '-')}",
+        f"location={_entity_location_text(sim, entity)}",
+        f"target_location={target_summary}",
+        f"source_belief_id={source_belief_id if source_belief_id else '-'}",
+    ]
 
 
 def _hover_readout(sim: Simulation, pixel_pos: tuple[int, int], center: tuple[float, float], zoom_scale: float = 1.0) -> str | None:
@@ -2350,6 +2447,15 @@ def run_pygame_viewer(
                         elif item.action == "return_to_origin":
                             controller.end_local_encounter()
                 context_menu = None
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and viewport_rect.collidepoint(event.pos):
+                status_message = _queue_selection_command_for_click(
+                    sim,
+                    controller,
+                    event.pos,
+                    world_center,
+                    world_zoom_scale,
+                    radius_px=12.0,
+                )
 
         move_x, move_y = _current_input_vector()
         if not rumor_panel_state.request_pending:
