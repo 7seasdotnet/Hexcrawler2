@@ -34,7 +34,9 @@ from hexcrawler.cli.pygame_viewer import (
     _build_debug_filter_trace_rows,
     _cycle_debug_event_type_filter,
     _cycle_debug_filter_mode,
+    _debug_filter_label,
     _debug_rows_by_section,
+    _format_debug_trace_row,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.encounters import (
@@ -629,11 +631,11 @@ def test_selected_entity_lines_include_minimal_observability_fields() -> None:
 
     lines = _selected_entity_lines(sim, investigator.entity_id)
 
-    assert any("entity_id=investigator:test" in line for line in lines)
-    assert any("faction_id=red_fang" in line for line in lines)
-    assert any("role=investigator" in line for line in lines)
-    assert any("source_belief_id=belief:123" in line for line in lines)
-    assert any("target_location=overworld_hex:2,1" in line for line in lines)
+    assert any("Entity ID: investigator:test" in line for line in lines)
+    assert any("Faction: red_fang" in line for line in lines)
+    assert any("Role: investigator" in line for line in lines)
+    assert any("Source belief: belief:123" in line for line in lines)
+    assert any("Target location: overworld_hex:2,1" in line for line in lines)
 
 
 def test_selection_commands_do_not_mutate_world_state_until_sim_step() -> None:
@@ -722,8 +724,8 @@ def test_selected_entity_trace_filter_matches_known_fields_and_excludes_irreleva
 
     rows = _selected_entity_recent_trace_rows(sim, selected_entity_id)
 
-    assert any("type=viewer_trace_match" in row for row in rows)
-    assert any("type=viewer_trace_match_target" in row for row in rows)
+    assert any("event=viewer_trace_match" in row for row in rows)
+    assert any("event=viewer_trace_match_target" in row for row in rows)
     assert all("viewer_trace_irrelevant" not in row for row in rows)
 
 
@@ -741,7 +743,7 @@ def test_selected_entity_trace_rows_are_deterministic_most_recent_first() -> Non
 
     rows = _selected_entity_recent_trace_rows(sim, selected_entity_id)
 
-    assert ["type=viewer_trace_2" in rows[0], "type=viewer_trace_1" in rows[1], "type=viewer_trace_0" in rows[2]] == [True, True, True]
+    assert ["event=viewer_trace_2" in rows[0], "event=viewer_trace_1" in rows[1], "event=viewer_trace_0" in rows[2]] == [True, True, True]
 
 
 def test_selected_entity_lines_include_trace_section_and_source_action_uid() -> None:
@@ -759,10 +761,10 @@ def test_selected_entity_lines_include_trace_section_and_source_action_uid() -> 
 
     lines = _selected_entity_lines(sim, investigator.entity_id)
 
-    assert any("space_id=overworld" in line for line in lines)
-    assert any("source_action_uid=source-action-77" in line for line in lines)
-    assert any(line == "Recent relevant events" for line in lines)
-    assert any("type=viewer_trace_line" in line for line in lines)
+    assert any("Space ID: overworld" in line for line in lines)
+    assert any("Source action UID: source-action-77" in line for line in lines)
+    assert any(line == "RECENT EVENTS" for line in lines)
+    assert any("event=viewer_trace_line" in line for line in lines)
 
 
 def test_selected_entity_lines_include_follow_status_indicator() -> None:
@@ -772,7 +774,7 @@ def test_selected_entity_lines_include_follow_status_indicator() -> None:
 
     lines = _selected_entity_lines(sim, investigator.entity_id, follow_status="inactive")
 
-    assert any(line == "follow_selected=inactive" for line in lines)
+    assert any(line == "Follow status: inactive" for line in lines)
 
 
 def test_event_trace_entry_mentions_entity_checks_known_fields_only() -> None:
@@ -908,3 +910,29 @@ def test_debug_selected_context_filter_is_key_scoped_not_cross_field() -> None:
 
     assert any(entry.get("event_type") == "ctx_source_event" for entry in rows)
     assert all(entry.get("event_type") != "ctx_action_overlap" for entry in rows)
+
+
+def test_debug_filter_label_uses_readable_status_prefix() -> None:
+    label = _debug_filter_label(DebugFilterState(mode="selected_entity", event_type_filter="encounter_action_outcome"))
+
+    assert label == "debug filter: mode=selected_entity event_type=encounter_action_outcome"
+
+
+def test_format_debug_trace_row_uses_bounded_pipe_separators() -> None:
+    row = _format_debug_trace_row(
+        {
+            "tick": 7,
+            "event_type": "viewer_event",
+            "params": {
+                "action_uid": "a-1",
+                "source_action_uid": "a-0",
+                "source_event_id": "e-1",
+                "request_event_id": "e-0",
+            },
+        }
+    )
+
+    assert row == (
+        "tick=7 | event=viewer_event | action_uid=a-1 | source_action_uid=a-0 | "
+        "source_event_id=e-1 | request_event_id=e-0"
+    )
