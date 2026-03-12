@@ -398,6 +398,7 @@ class RumorPanelState:
     outcome: str = "idle"
     diagnostic: str = ""
     request_pending: bool = False
+    pending_action_uid: str | None = None
     refresh_needed: bool = True
     editing_field: str | None = None
     site_key_draft: str = ""
@@ -960,6 +961,38 @@ def _marker_cell_from_location(location: object, default_topology_type: str) -> 
     return MarkerCellRef(space_id=space_id, topology_type=topology_type, coord_key=coord_key)
 
 
+def _supported_viewer_topology(active_space: Any | None) -> str:
+    if active_space is None:
+        return OVERWORLD_HEX_TOPOLOGY
+    topology_type = str(getattr(active_space, "topology_type", OVERWORLD_HEX_TOPOLOGY))
+    if topology_type == "custom":
+        return OVERWORLD_HEX_TOPOLOGY
+    if topology_type in (OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY):
+        return topology_type
+    return "unsupported"
+
+
+def _viewer_topology_diagnostic(active_space: Any | None) -> str | None:
+    topology_type = _supported_viewer_topology(active_space)
+    if topology_type != "unsupported":
+        return None
+    raw_topology_type = str(getattr(active_space, "topology_type", "?"))
+    return f"unsupported_topology={raw_topology_type} (viewer projection disabled)"
+
+
+def _marker_payload_id(marker: MarkerRecord, *, expected_kind: str | None = None) -> str | None:
+    marker_id = marker.marker_id if isinstance(marker.marker_id, str) else ""
+    if ":" not in marker_id:
+        return None
+    marker_kind, payload = marker_id.split(":", 1)
+    if expected_kind is not None and marker_kind != expected_kind:
+        return None
+    payload = payload.strip()
+    if not payload:
+        return None
+    return payload
+
+
 def _is_in_current_space(obj_space_id: str | None, current_space_id: str) -> bool:
     if obj_space_id is None:
         return current_space_id == "overworld"
@@ -1266,11 +1299,14 @@ def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is None:
         return []
+    projection_topology = _supported_viewer_topology(active_space)
+    if projection_topology == "unsupported":
+        return []
     placements: list[MarkerPlacement] = []
     markers_by_cell = _collect_world_markers(
         sim,
         active_space.space_id,
-        SQUARE_GRID_TOPOLOGY if active_space.topology_type == SQUARE_GRID_TOPOLOGY else OVERWORLD_HEX_TOPOLOGY,
+        projection_topology,
     )
     for cell in sorted(markers_by_cell, key=lambda current: (current.space_id, current.topology_type, current.coord_key)):
         center_x, center_y = _marker_cell_center(cell, center, zoom_scale)
@@ -1307,6 +1343,7 @@ def _draw_world(
 ) -> None:
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    topology_diagnostic = _viewer_topology_diagnostic(active_space)
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
     if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
@@ -1320,6 +1357,12 @@ def _draw_world(
             pygame.draw.rect(screen, (58, 58, 64), rect)
             pygame.draw.rect(screen, (35, 35, 40), rect, 1)
         _draw_world_markers(screen, sim, center, marker_font, zoom_scale)
+        screen.set_clip(old_clip)
+        return
+
+    if topology_diagnostic is not None:
+        text = _truncate_text_to_pixel_width(topology_diagnostic, marker_font, max(1, clip_rect.width - 20))
+        screen.blit(marker_font.render(text, True, (250, 192, 128)), (clip_rect.x + 10, clip_rect.y + 10))
         screen.set_clip(old_clip)
         return
 
@@ -1435,6 +1478,9 @@ def _draw_hud(
         lines.append(f"status: {status_message}")
     if hover_message:
         lines.append(hover_message)
+    topology_diagnostic = _viewer_topology_diagnostic(active_space)
+    if topology_diagnostic is not None:
+        lines.append(f"viewer: {topology_diagnostic}")
     old_clip = screen.get_clip()
     screen.set_clip(world_rect)
     y = world_rect.y + 8
@@ -1606,26 +1652,40 @@ def _refresh_rumor_query(controller: SimulationController, rumor_state: RumorPan
             cursor=params.get("cursor"),
         )
     rumor_state.request_pending = True
+    command = controller.sim.input_log[-1] if controller.sim.input_log else None
+    if command is None:
+        rumor_state.pending_action_uid = None
+    else:
+        same_tick_index = sum(1 for current in controller.sim.input_log if int(current.tick) == int(command.tick)) - 1
+        rumor_state.pending_action_uid = f"{int(command.tick)}:{max(0, same_tick_index)}"
     rumor_state.refresh_needed = False
 
 
 def _consume_rumor_outcome(sim: Simulation, rumor_state: RumorPanelState) -> None:
     if not rumor_state.request_pending:
         return
-    latest: dict[str, Any] | None = None
+    matched_outcome: dict[str, Any] | None = None
     outcome_kind = SELECT_RUMORS_OUTCOME_KIND if rumor_state.mode == "top" else LIST_RUMORS_OUTCOME_KIND
     rows_key = "selection" if rumor_state.mode == "top" else "rumors"
     for entry in sim.get_command_outcomes():
-        if isinstance(entry, dict) and entry.get("kind") == outcome_kind:
-            latest = entry
-    if latest is None:
+        if not isinstance(entry, dict) or entry.get("kind") != outcome_kind:
+            continue
+        action_uid = entry.get("action_uid") if isinstance(entry.get("action_uid"), str) else None
+        if rumor_state.pending_action_uid is None:
+            matched_outcome = entry
+            continue
+        if action_uid == rumor_state.pending_action_uid:
+            matched_outcome = entry
+            break
+    if matched_outcome is None:
         return
-    rows = latest.get(rows_key)
+    rows = matched_outcome.get(rows_key)
     rumor_state.rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-    rumor_state.next_cursor = latest.get("next_cursor") if isinstance(latest.get("next_cursor"), str) else None
-    rumor_state.outcome = str(latest.get("outcome", "?"))
-    rumor_state.diagnostic = str(latest.get("diagnostic", ""))
+    rumor_state.next_cursor = matched_outcome.get("next_cursor") if isinstance(matched_outcome.get("next_cursor"), str) else None
+    rumor_state.outcome = str(matched_outcome.get("outcome", "?"))
+    rumor_state.diagnostic = str(matched_outcome.get("diagnostic", ""))
     rumor_state.request_pending = False
+    rumor_state.pending_action_uid = None
 
 
 def _cycle_rumor_kind_filter(rumor_state: RumorPanelState) -> None:
@@ -2066,10 +2126,9 @@ def _selected_entity_for_click(
     for marker in markers:
         if marker.marker_kind != "entity":
             continue
-        parts = marker.marker_id.split(":", 1)
-        if len(parts) != 2:
+        entity_id = _marker_payload_id(marker, expected_kind="entity")
+        if entity_id is None:
             continue
-        entity_id = parts[1]
         if entity_id in sim.state.entities:
             return entity_id
     return None
@@ -2493,33 +2552,49 @@ def run_pygame_viewer(
         viewport_rect = layout.world_view
         player = sim.state.entities.get(PLAYER_ID)
         active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+        topology_diagnostic = _viewer_topology_diagnostic(active_space)
         if viewport_rect.collidepoint(event_pos):
             markers = _find_world_marker_candidates_at_pixel(sim, event_pos, world_center, world_zoom_scale)
             if markers:
                 for marker in markers:
                     items.append(ContextMenuItem(label=f"Marker: {marker.marker_kind} {marker.label}", action="noop"))
                     if marker.marker_kind == "entity":
-                        entity_id = marker.marker_id.split(":", 1)[1]
+                        entity_id = _marker_payload_id(marker, expected_kind="entity")
+                        if entity_id is None:
+                            items.append(ContextMenuItem(label="marker_id malformed: entity", action="noop"))
+                            continue
                         items.append(ContextMenuItem(label=f"Select {marker.label}", action="select", payload=entity_id))
                         if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
                             items.append(ContextMenuItem(label=f"Deselect {marker.label}", action="clear_selection"))
                     elif marker.marker_kind == "site":
-                        site_id = marker.marker_id.split(":", 1)[1]
+                        site_id = _marker_payload_id(marker, expected_kind="site")
+                        if site_id is None:
+                            items.append(ContextMenuItem(label="marker_id malformed: site", action="noop"))
+                            continue
                         site = sim.state.world.sites.get(site_id)
                         if site is not None and site.entrance is not None:
                             site_label = site.name if site.name else site.site_id
                             items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
                     elif marker.marker_kind == "door":
-                        door_id = marker.marker_id.split(":", 1)[1]
+                        door_id = _marker_payload_id(marker, expected_kind="door")
+                        if door_id is None:
+                            items.append(ContextMenuItem(label="marker_id malformed: door", action="noop"))
+                            continue
                         items.append(ContextMenuItem(label="Door...", action="noop"))
                         items.append(ContextMenuItem(label="- Open (10 ticks)", action="interaction", payload=f"open:door:{door_id}:10"))
                         items.append(ContextMenuItem(label="- Close (10 ticks)", action="interaction", payload=f"close:door:{door_id}:10"))
                         items.append(ContextMenuItem(label="- Toggle (10 ticks)", action="interaction", payload=f"toggle:door:{door_id}:10"))
                     elif marker.marker_kind == "anchor":
-                        anchor_id = marker.marker_id.split(":", 1)[1]
+                        anchor_id = _marker_payload_id(marker, expected_kind="anchor")
+                        if anchor_id is None:
+                            items.append(ContextMenuItem(label="marker_id malformed: anchor", action="noop"))
+                            continue
                         items.append(ContextMenuItem(label="Exit (30 ticks)", action="interaction", payload=f"exit:anchor:{anchor_id}:30"))
                     elif marker.marker_kind == "interactable":
-                        interactable_id = marker.marker_id.split(":", 1)[1]
+                        interactable_id = _marker_payload_id(marker, expected_kind="interactable")
+                        if interactable_id is None:
+                            items.append(ContextMenuItem(label="marker_id malformed: interactable", action="noop"))
+                            continue
                         items.append(ContextMenuItem(label="Interactable...", action="noop"))
                         items.append(ContextMenuItem(label="- Inspect (10 ticks)", action="interaction", payload=f"inspect:interactable:{interactable_id}:10"))
                         items.append(ContextMenuItem(label="- Use (20 ticks)", action="interaction", payload=f"use:interactable:{interactable_id}:20"))
@@ -2530,7 +2605,9 @@ def run_pygame_viewer(
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
             else:
                 world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center, world_zoom_scale)
-                if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
+                if topology_diagnostic is not None:
+                    items.append(ContextMenuItem(label=topology_diagnostic, action="noop"))
+                elif active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
                     local_cell = _world_to_local_cell(world_x, world_y, active_space=active_space)
                     if local_cell is not None:
                         local_world_x, local_world_y = square_grid_cell_to_world_xy(local_cell["x"], local_cell["y"])

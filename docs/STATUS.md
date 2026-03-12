@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V6 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V7 (TBD; pause-on-event/event-jump ergonomics, still read-only).
-- **Phase status:** ✅ Slice V6 landed with deterministic viewer-local follow/focus tools for selected-entity inspection in the operator console.
+- **Current phase:** Viewer Oversight Phase — Slice V7 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V8 (TBD; pause-on-event/event-jump ergonomics, still read-only).
+- **Phase status:** ✅ Slice V7 landed as a bounded viewer trust/robustness pass (rumor outcome correlation, marker parsing hardening, explicit unsupported-topology behavior).
 
 
 ## What changed in this commit
-- Added selected-entity camera focus (`F7`) and viewer-local follow toggle (`F12`) in `pygame_viewer`, with deterministic active-space checks and soft-fail behavior (`inactive`) when selection is missing or outside the active space.
-- Added bounded follow/focus state indication in control-bar metadata, HUD help/status text, and inspector selection lines without introducing any simulation/world/entity mutation paths.
-- Added focused runtime/CLI regression tests for focus centering, follow tracking, non-mutation guarantees, active-space soft-fail handling, and follow state line output stability.
+- Hardened rumor panel request/outcome consumption by tracking a deterministic pending `action_uid` token per request and consuming only matching outcomes, preventing stale outcomes from satisfying newer pending requests.
+- Replaced brittle marker-id split/index assumptions with defensive marker payload parsing and deterministic soft-fail handling for malformed IDs in selection/context-menu paths.
+- Made unsupported topology handling explicit in viewer projection paths by disabling marker placement/render picking fallback assumptions and surfacing stable diagnostics in HUD/world/context-menu behavior.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
