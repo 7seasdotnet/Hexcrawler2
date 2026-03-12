@@ -425,6 +425,9 @@ class DebugPanelCacheKey:
     spawn_count: int
     entity_count: int
     rumor_signature: str
+    selected_entity_id: str | None
+    debug_filter_mode: str
+    debug_event_type_filter: str | None
 
 
 @dataclass
@@ -433,8 +436,153 @@ class DebugPanelRenderCache:
     rows_by_section: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass
+class DebugFilterState:
+    mode: str = "all"
+    event_type_filter: str | None = None
+
+
+DEBUG_FILTER_MODE_ORDER: tuple[str, ...] = ("all", "selected_entity", "selected_context", "outcomes_only")
+DEBUG_CONTEXT_FILTER_KEYS: tuple[str, ...] = ("action_uid", "source_action_uid", "source_event_id", "request_event_id")
+
+
 RUMOR_KIND_FILTER_ORDER: tuple[str | None, ...] = (None, "group_arrival", "claim_opportunity", "site_claim")
 
+
+
+
+def _debug_event_type(entry: dict[str, Any]) -> str:
+    return str(entry.get("event_type", "?"))
+
+
+def _debug_context_fields_from_entry(entry: dict[str, Any]) -> dict[str, str]:
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    fields: dict[str, str] = {}
+    for key in DEBUG_CONTEXT_FILTER_KEYS:
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            fields[key] = value
+    return fields
+
+
+def _derive_selected_context_filters(
+    sim: Simulation,
+    *,
+    selected_entity_id: str | None,
+    selected_entity: EntityState | None,
+) -> dict[str, frozenset[str]]:
+    filters: dict[str, set[str]] = {key: set() for key in DEBUG_CONTEXT_FILTER_KEYS}
+
+    if selected_entity is not None and isinstance(selected_entity.source_action_uid, str) and selected_entity.source_action_uid:
+        filters["action_uid"].add(selected_entity.source_action_uid)
+
+    preferred_action_uid: str | None = None
+    if selected_entity is not None and isinstance(selected_entity.source_action_uid, str) and selected_entity.source_action_uid:
+        preferred_action_uid = selected_entity.source_action_uid
+
+    if selected_entity_id is not None:
+        for entry in reversed(sim.get_event_trace()):
+            if not isinstance(entry, dict) or not _event_trace_entry_mentions_entity(entry, selected_entity_id):
+                continue
+            entry_fields = _debug_context_fields_from_entry(entry)
+            if preferred_action_uid is not None and entry_fields.get("action_uid") != preferred_action_uid:
+                continue
+            for key, value in entry_fields.items():
+                filters[key].add(value)
+            break
+
+    return {
+        key: frozenset(sorted(values))
+        for key, values in filters.items()
+        if values
+    }
+
+
+def _event_trace_entry_matches_event_type(entry: dict[str, Any], event_type_filter: str | None) -> bool:
+    if event_type_filter is None:
+        return True
+    return _debug_event_type(entry) == event_type_filter
+
+
+def _event_trace_entry_matches_context_filters(
+    entry: dict[str, Any],
+    context_filters: dict[str, frozenset[str]],
+) -> bool:
+    if not context_filters:
+        return False
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    for key, allowed_values in context_filters.items():
+        value = params.get(key)
+        if isinstance(value, str) and value in allowed_values:
+            return True
+    return False
+
+
+def _cycle_debug_filter_mode(debug_filter_state: DebugFilterState) -> None:
+    current_index = DEBUG_FILTER_MODE_ORDER.index(debug_filter_state.mode) if debug_filter_state.mode in DEBUG_FILTER_MODE_ORDER else 0
+    debug_filter_state.mode = DEBUG_FILTER_MODE_ORDER[(current_index + 1) % len(DEBUG_FILTER_MODE_ORDER)]
+
+
+def _cycle_debug_event_type_filter(sim: Simulation, debug_filter_state: DebugFilterState) -> None:
+    event_types = sorted({_debug_event_type(entry) for entry in sim.get_event_trace() if isinstance(entry, dict)})
+    order: list[str | None] = [None, *event_types]
+    current_index = order.index(debug_filter_state.event_type_filter) if debug_filter_state.event_type_filter in order else 0
+    debug_filter_state.event_type_filter = order[(current_index + 1) % len(order)]
+
+
+def _debug_filter_label(debug_filter_state: DebugFilterState) -> str:
+    event_type = debug_filter_state.event_type_filter if debug_filter_state.event_type_filter is not None else "all"
+    return f"mode={debug_filter_state.mode} type={event_type}"
+
+
+def _build_debug_filter_trace_rows(
+    sim: Simulation,
+    *,
+    selected_entity_id: str | None,
+    selected_context_filters: dict[str, frozenset[str]],
+    event_type_filter: str | None,
+    mode: str,
+) -> list[dict[str, Any]]:
+    include_outcome_types = {ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE, EXPLORATION_OUTCOME_EVENT_TYPE, INTERACTION_OUTCOME_EVENT_TYPE}
+    rows: list[dict[str, Any]] = []
+    for entry in sim.get_event_trace():
+        if not isinstance(entry, dict):
+            continue
+        if not _event_trace_entry_matches_event_type(entry, event_type_filter):
+            continue
+        if mode == "selected_entity" and selected_entity_id is not None:
+            if not _event_trace_entry_mentions_entity(entry, selected_entity_id):
+                continue
+        elif mode == "selected_context":
+            if not _event_trace_entry_matches_context_filters(entry, selected_context_filters):
+                continue
+        elif mode == "outcomes_only":
+            if _debug_event_type(entry) not in include_outcome_types:
+                continue
+        rows.append(entry)
+    return rows
+
+
+def _format_debug_trace_row(entry: dict[str, Any]) -> str:
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    event_type = _debug_event_type(entry)
+    tick = entry.get("tick", "?")
+    action_uid = params.get("action_uid", "-")
+    if not isinstance(action_uid, str) or not action_uid:
+        action_uid = "-"
+    source_action_uid = params.get("source_action_uid", "-")
+    if not isinstance(source_action_uid, str) or not source_action_uid:
+        source_action_uid = "-"
+    source_event_id = params.get("source_event_id", "-")
+    if not isinstance(source_event_id, str) or not source_event_id:
+        source_event_id = "-"
+    request_event_id = params.get("request_event_id", "-")
+    if not isinstance(request_event_id, str) or not request_event_id:
+        request_event_id = "-"
+    return (
+        f"tick={tick} type={event_type} action_uid={action_uid} source_action_uid={source_action_uid} "
+        f"source_event_id={source_event_id} request_event_id={request_event_id}"
+    )
 
 @dataclass(frozen=True)
 class MarkerRecord:
@@ -1480,7 +1628,7 @@ def _draw_inspector_panel(
     return content_rect, wrapped_count
 
 
-def _debug_panel_cache_key(sim: Simulation, rumor_state: RumorPanelState) -> DebugPanelCacheKey:
+def _debug_panel_cache_key(sim: Simulation, rumor_state: RumorPanelState, debug_filter_state: DebugFilterState) -> DebugPanelCacheKey:
     rumor_signature = json.dumps({
         "mode": rumor_state.mode,
         "kind": rumor_state.kind_filter,
@@ -1498,23 +1646,27 @@ def _debug_panel_cache_key(sim: Simulation, rumor_state: RumorPanelState) -> Deb
         spawn_count=len(sim.state.world.spawn_descriptors),
         entity_count=len(sim.state.entities),
         rumor_signature=rumor_signature,
+        selected_entity_id=sim.selected_entity_id(owner_entity_id=PLAYER_ID),
+        debug_filter_mode=debug_filter_state.mode,
+        debug_event_type_filter=debug_filter_state.event_type_filter,
     )
 
 
 def build_debug_panel_render_cache(
     sim: Simulation,
     rumor_state: RumorPanelState,
+    debug_filter_state: DebugFilterState,
     cache: DebugPanelRenderCache,
 ) -> dict[str, list[str]]:
-    next_key = _debug_panel_cache_key(sim, rumor_state)
+    next_key = _debug_panel_cache_key(sim, rumor_state, debug_filter_state)
     if cache.key == next_key and cache.rows_by_section:
         return cache.rows_by_section
     cache.key = next_key
-    cache.rows_by_section = _debug_rows_by_section(sim, rumor_state)
+    cache.rows_by_section = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
     return cache.rows_by_section
 
 
-def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState) -> dict[str, list[str]]:
+def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState, debug_filter_state: DebugFilterState) -> dict[str, list[str]]:
     spawned_entities = [
         entity
         for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id)
@@ -1541,23 +1693,39 @@ def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState) -> dic
         )
         for record in sim.state.world.spawn_descriptors
     ])
-    encounter_rows = recent_signals + recent_tracks + recent_spawns
+    selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+    selected_entity = sim.state.entities.get(selected_entity_id) if selected_entity_id is not None else None
+    selected_context_filters = _derive_selected_context_filters(
+        sim,
+        selected_entity_id=selected_entity_id,
+        selected_entity=selected_entity,
+    )
 
-    filtered_trace = [
+    filtered_trace = _build_debug_filter_trace_rows(
+        sim,
+        selected_entity_id=selected_entity_id,
+        selected_context_filters=selected_context_filters,
+        event_type_filter=debug_filter_state.event_type_filter,
+        mode=debug_filter_state.mode,
+    )
+    encounter_trace_rows = _section_entries([_format_debug_trace_row(entry) for entry in filtered_trace])
+    encounter_rows = _section_entries(recent_signals + recent_tracks + recent_spawns + encounter_trace_rows)
+
+    outcome_trace = [
         entry
-        for entry in sim.get_event_trace()
-        if entry.get("event_type") in {ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE, EXPLORATION_OUTCOME_EVENT_TYPE, INTERACTION_OUTCOME_EVENT_TYPE}
+        for entry in filtered_trace
+        if _debug_event_type(entry) in {ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE, EXPLORATION_OUTCOME_EVENT_TYPE, INTERACTION_OUTCOME_EVENT_TYPE}
     ]
     outcome_rows = _section_entries([
         (
             f"tick={entry.get('tick', '?')} action_uid={params.get('action_uid', '?')} action={params.get('action_type', params.get('action', '?'))} "
             f"outcome={params.get('outcome', '?')} template={params.get('template_id', '-') or '-'}"
         )
-        for entry in filtered_trace
+        for entry in outcome_trace
         for params in [entry.get("params") if isinstance(entry.get("params"), dict) else {}]
     ])
 
-    supply_outcomes = [entry for entry in sim.get_event_trace() if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE]
+    supply_outcomes = [entry for entry in filtered_trace if entry.get("event_type") == SUPPLY_OUTCOME_EVENT_TYPE]
     supply_rows = _section_entries([
         (
             f"tick={entry.get('tick', '?')} entity={params.get('entity_id', '?')} item={params.get('item_id', '?')} "
@@ -1601,13 +1769,14 @@ def _draw_encounter_debug_panel(
     scroll_state: EncounterPanelScrollState,
     active_section: str,
     rumor_state: RumorPanelState,
+    debug_filter_state: DebugFilterState,
     panel_rect: pygame.Rect,
     cache: DebugPanelRenderCache,
 ) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
     content_rect = _render_panel_frame(screen, panel_rect, "Debug / Event", font, bg_color=(22, 24, 33))
     section_rects: dict[str, pygame.Rect] = {}
 
-    rows_by_section = build_debug_panel_render_cache(sim, rumor_state, cache)
+    rows_by_section = build_debug_panel_render_cache(sim, rumor_state, debug_filter_state, cache)
     section_counts = {section: len(rows) for section, rows in rows_by_section.items()}
 
     tab_x = content_rect.x
@@ -1621,6 +1790,28 @@ def _draw_encounter_debug_panel(
         screen.blit(tab_surface, (tab_rect.x + 6, tab_rect.y + 2))
         section_rects[section_name] = tab_rect
         tab_x = tab_rect.right + 6
+
+    filter_mode_text = _truncate_text_to_pixel_width(f"filter:{debug_filter_state.mode}", font, max(60, content_rect.width // 3))
+    filter_mode_surface = font.render(filter_mode_text, True, (240, 240, 245))
+    filter_mode_rect = pygame.Rect(content_rect.right - filter_mode_surface.get_width() - 10, tab_y, filter_mode_surface.get_width() + 8, 20)
+    pygame.draw.rect(screen, (44, 48, 64), filter_mode_rect)
+    pygame.draw.rect(screen, (110, 115, 135), filter_mode_rect, 1)
+    screen.blit(filter_mode_surface, (filter_mode_rect.x + 4, filter_mode_rect.y + 2))
+    section_rects["debug_filter_mode"] = filter_mode_rect
+
+    type_label = debug_filter_state.event_type_filter if debug_filter_state.event_type_filter is not None else "all"
+    filter_type_text = _truncate_text_to_pixel_width(f"type:{type_label}", font, max(60, content_rect.width // 3))
+    filter_type_surface = font.render(filter_type_text, True, (240, 240, 245))
+    filter_type_rect = pygame.Rect(
+        max(content_rect.x, filter_mode_rect.x - filter_type_surface.get_width() - 20),
+        tab_y,
+        filter_type_surface.get_width() + 8,
+        20,
+    )
+    pygame.draw.rect(screen, (44, 48, 64), filter_type_rect)
+    pygame.draw.rect(screen, (110, 115, 135), filter_type_rect, 1)
+    screen.blit(filter_type_surface, (filter_type_rect.x + 4, filter_type_rect.y + 2))
+    section_rects["debug_filter_type"] = filter_type_rect
 
     rows_rect = pygame.Rect(content_rect.x, tab_y + 26, content_rect.width, max(1, content_rect.bottom - (tab_y + 26)))
     section_rects["rows"] = rows_rect
@@ -2326,6 +2517,7 @@ def run_pygame_viewer(
     panel_section_counts: dict[str, int] = {}
     active_panel_section = "encounters"
     rumor_panel_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
     show_local_arena_overlay = False
     debug_panel_cache = DebugPanelRenderCache()
 
@@ -2402,6 +2594,12 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F3:
                 show_local_arena_overlay = not show_local_arena_overlay
                 status_message = f"local arena overlay {'on' if show_local_arena_overlay else 'off'}"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F10:
+                _cycle_debug_filter_mode(debug_filter_state)
+                status_message = _debug_filter_label(debug_filter_state)
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F11:
+                _cycle_debug_event_type_filter(sim, debug_filter_state)
+                status_message = _debug_filter_label(debug_filter_state)
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -2439,7 +2637,13 @@ def run_pygame_viewer(
                     if section_rect is not None and section_rect.collidepoint(event.pos):
                         active_panel_section = section_name
                         break
-                if active_panel_section == "rumors":
+                if panel_section_rects.get("debug_filter_mode") is not None and panel_section_rects["debug_filter_mode"].collidepoint(event.pos):
+                    _cycle_debug_filter_mode(debug_filter_state)
+                    status_message = _debug_filter_label(debug_filter_state)
+                elif panel_section_rects.get("debug_filter_type") is not None and panel_section_rects["debug_filter_type"].collidepoint(event.pos):
+                    _cycle_debug_event_type_filter(sim, debug_filter_state)
+                    status_message = _debug_filter_label(debug_filter_state)
+                elif active_panel_section == "rumors":
                     if panel_section_rects.get("rumor_kind") is not None and panel_section_rects["rumor_kind"].collidepoint(event.pos):
                         _cycle_rumor_kind_filter(rumor_panel_state)
                         _refresh_rumor_query(controller, rumor_panel_state)
@@ -2597,6 +2801,7 @@ def run_pygame_viewer(
             panel_scroll,
             active_panel_section,
             rumor_panel_state,
+            debug_filter_state,
             layout.debug_panel,
             debug_panel_cache,
         )
