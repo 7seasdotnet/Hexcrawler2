@@ -669,6 +669,16 @@ def test_selected_entity_lines_include_trace_section_and_source_action_uid() -> 
     assert any("type=viewer_trace_line" in line for line in lines)
 
 
+def test_selected_entity_lines_include_follow_status_indicator() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    investigator = EntityState(entity_id="investigator:follow", position_x=1.0, position_y=1.0, space_id="overworld")
+    sim.add_entity(investigator)
+
+    lines = _selected_entity_lines(sim, investigator.entity_id, follow_status="inactive")
+
+    assert any(line == "follow_selected=inactive" for line in lines)
+
+
 def test_event_trace_entry_mentions_entity_checks_known_fields_only() -> None:
     entry = {
         "event_type": "viewer_known_fields",

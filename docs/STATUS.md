@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V5 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V6 (TBD; follow-on operator workflow ergonomics beyond filtering controls).
-- **Phase status:** ✅ Slice V5 landed with deterministic viewer-local debug filter controls (selected-entity mode, context mode, outcomes-only mode, and event-type cycling) integrated into existing debug/event layout.
+- **Current phase:** Viewer Oversight Phase — Slice V6 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V7 (TBD; pause-on-event/event-jump ergonomics, still read-only).
+- **Phase status:** ✅ Slice V6 landed with deterministic viewer-local follow/focus tools for selected-entity inspection in the operator console.
 
 
 ## What changed in this commit
-- Tightened selected-context filtering to key-scoped deterministic matching: context filters are derived from bounded explicit fields and matched only against the same identifier keys (`action_uid`, `source_action_uid`, `source_event_id`, `request_event_id`), preventing fuzzy cross-key overlap.
-- Selected-context derivation now deterministically prefers the selected entity’s `source_action_uid` when enriching from trace context, avoiding accidental widening to unrelated rows while staying read-only and viewer-local.
-- Added regression coverage for key-scoped context matching (no cross-field overlap), while retaining deterministic ordering and non-mutation guarantees in viewer filtering tests.
+- Added selected-entity camera focus (`F7`) and viewer-local follow toggle (`F12`) in `pygame_viewer`, with deterministic active-space checks and soft-fail behavior (`inactive`) when selection is missing or outside the active space.
+- Added bounded follow/focus state indication in control-bar metadata, HUD help/status text, and inspector selection lines without introducing any simulation/world/entity mutation paths.
+- Added focused runtime/CLI regression tests for focus centering, follow tracking, non-mutation guarantees, active-space soft-fail handling, and follow state line output stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -72,6 +72,7 @@
   - Legacy ASCII CLI viewer/controller (supports world-only templates via `load_world_json`) with controller actions routed through `SimCommand` append semantics (no direct simulation mutation).
 - `src/hexcrawler/cli/pygame_viewer.py`
   - Graphical viewer with vector WASD input, deterministic right-click context menus (entity/hex/background + site inspect/enter actions), world-site markers, and viewer-only render interpolation between committed simulation ticks.
+  - Viewer Oversight V6 adds read-only selected-entity focus/follow camera tools (`F7` jump focus, `F12` follow toggle) with active-space-safe soft-fail semantics and explicit `follow=off/on/inactive` indication.
   - Viewer controller input paths append `SimCommand`s at current simulation tick instead of mutating movement state directly.
   - Includes CLI parsing for viewer runtime/session controls (`--map-path`, `--with-encounters`, `--headless`, `--load-save`, `--save-path`).
   - Startup diagnostics print Python/pygame/platform details and key SDL env vars before SDL init; startup failures from `pygame.init()` or `pygame.display.set_mode(...)` emit actionable stderr hints and non-zero exits.
@@ -195,9 +196,9 @@
 - Canonical launch: `python play.py`
 
 ## Current Verification Commands
-- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_layout.py`
-- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_layout.py`
-- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py`
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
+- `PYTHONPATH=src pytest -q`
 - `python -m pip install -r requirements.txt`
 - `python play.py [--seed N] [--load-save PATH] [--map-path PATH] [--headless]  # canonical launch`
 - `python play.py`
