@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID,
+    DebugFilterState,
     DebugPanelRenderCache,
     EncounterPanelScrollState,
     RumorPanelState,
@@ -111,13 +112,14 @@ def test_debug_panel_render_cache_reuses_rows_when_inputs_unchanged() -> None:
     rumor_state = RumorPanelState()
     cache = DebugPanelRenderCache()
 
-    rows_first = build_debug_panel_render_cache(sim, rumor_state, cache)
-    rows_second = build_debug_panel_render_cache(sim, rumor_state, cache)
+    debug_filter_state = DebugFilterState()
+    rows_first = build_debug_panel_render_cache(sim, rumor_state, debug_filter_state, cache)
+    rows_second = build_debug_panel_render_cache(sim, rumor_state, debug_filter_state, cache)
 
     assert rows_first is rows_second
 
     sim.advance_ticks(1)
-    rows_third = build_debug_panel_render_cache(sim, rumor_state, cache)
+    rows_third = build_debug_panel_render_cache(sim, rumor_state, debug_filter_state, cache)
     assert rows_third is not rows_second
 
 

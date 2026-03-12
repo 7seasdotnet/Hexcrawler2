@@ -5,6 +5,7 @@ import pytest
 
 from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID,
+    DebugFilterState,
     RumorPanelState,
     SimulationController,
     ViewerRuntimeController,
@@ -27,6 +28,10 @@ from hexcrawler.cli.pygame_viewer import (
     _selected_entity_lines,
     _selected_entity_recent_trace_rows,
     _event_trace_entry_mentions_entity,
+    _build_debug_filter_trace_rows,
+    _cycle_debug_event_type_filter,
+    _cycle_debug_filter_mode,
+    _debug_rows_by_section,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.encounters import (
@@ -678,3 +683,122 @@ def test_event_trace_entry_mentions_entity_checks_known_fields_only() -> None:
     assert _event_trace_entry_mentions_entity(entry, "entity:a") is True
     assert _event_trace_entry_mentions_entity(entry, "entity:b") is True
     assert _event_trace_entry_mentions_entity(entry, "entity:c") is False
+
+
+def test_debug_filter_selected_entity_includes_relevant_rows_only() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    selected_entity_id = "investigator:test"
+    investigator = EntityState(entity_id=selected_entity_id, position_x=1.0, position_y=1.0, space_id="overworld")
+    sim.add_entity(investigator)
+
+    sim.schedule_event_at(sim.state.tick, "relevant", {"entity_id": selected_entity_id, "action_uid": "a-1"})
+    sim.schedule_event_at(sim.state.tick, "irrelevant", {"entity_id": "other:1", "action_uid": "a-2"})
+    sim.advance_ticks(1)
+
+    rows = _build_debug_filter_trace_rows(
+        sim,
+        selected_entity_id=selected_entity_id,
+        selected_context_filters={},
+        event_type_filter=None,
+        mode="selected_entity",
+    )
+
+    assert any(entry.get("event_type") == "relevant" for entry in rows)
+    assert all(entry.get("event_type") != "irrelevant" for entry in rows)
+
+
+def test_debug_filter_event_type_cycle_and_rows_are_deterministic() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.schedule_event_at(sim.state.tick, "bbb", {"action_uid": "a-1"})
+    sim.schedule_event_at(sim.state.tick, "aaa", {"action_uid": "a-2"})
+    sim.advance_ticks(1)
+
+    debug_filter_state = DebugFilterState()
+    _cycle_debug_event_type_filter(sim, debug_filter_state)
+    assert debug_filter_state.event_type_filter == "aaa"
+    _cycle_debug_event_type_filter(sim, debug_filter_state)
+    assert debug_filter_state.event_type_filter == "bbb"
+
+    rows = _build_debug_filter_trace_rows(
+        sim,
+        selected_entity_id=None,
+        selected_context_filters={},
+        event_type_filter=debug_filter_state.event_type_filter,
+        mode="all",
+    )
+    assert rows
+    assert all(entry.get("event_type") == "bbb" for entry in rows)
+
+
+def test_debug_filter_preserves_stable_ordering_under_filtering() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    selected_entity_id = "investigator:test"
+    investigator = EntityState(entity_id=selected_entity_id, position_x=0.0, position_y=0.0, space_id="overworld")
+    sim.add_entity(investigator)
+
+    for index in range(3):
+        sim.schedule_event_at(sim.state.tick, f"ev_{index}", {"entity_id": selected_entity_id, "action_uid": f"uid-{index}"})
+    sim.advance_ticks(1)
+
+    rows = _build_debug_filter_trace_rows(
+        sim,
+        selected_entity_id=selected_entity_id,
+        selected_context_filters={},
+        event_type_filter=None,
+        mode="selected_entity",
+    )
+
+    assert [entry.get("event_type") for entry in rows] == ["ev_0", "ev_1", "ev_2"]
+
+
+def test_debug_filter_state_does_not_mutate_world_or_sim_hash() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    world_before = world_hash(sim.state.world)
+    sim_hash_before = simulation_hash(sim)
+    debug_filter_state = DebugFilterState()
+
+    _cycle_debug_filter_mode(debug_filter_state)
+    _cycle_debug_event_type_filter(sim, debug_filter_state)
+
+    assert world_hash(sim.state.world) == world_before
+    assert simulation_hash(sim) == sim_hash_before
+
+
+def test_debug_filter_render_rows_are_bounded_and_stable() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    selected_entity_id = "investigator:test"
+    investigator = EntityState(entity_id=selected_entity_id, position_x=1.0, position_y=1.0, space_id="overworld")
+    investigator.source_action_uid = "ctx-7"
+    sim.add_entity(investigator)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    controller.set_selected_entity(selected_entity_id)
+    sim.schedule_event_at(sim.state.tick, "ctx_match", {"entity_id": selected_entity_id, "action_uid": "ctx-7"})
+    sim.schedule_event_at(sim.state.tick, "ctx_miss", {"entity_id": selected_entity_id, "action_uid": "ctx-8"})
+    sim.advance_ticks(1)
+
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState(mode="selected_context")
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert set(rows) == {"encounters", "outcomes", "rumors", "supplies", "sites", "entities"}
+    assert len(rows["encounters"]) <= 30
+    assert any("action_uid=ctx-7" in row for row in rows["encounters"])
+    assert all("action_uid=ctx-8" not in row for row in rows["encounters"])
+
+
+def test_debug_selected_context_filter_is_key_scoped_not_cross_field() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.schedule_event_at(sim.state.tick, "ctx_source_event", {"source_event_id": "ctx-22"})
+    sim.schedule_event_at(sim.state.tick, "ctx_action_overlap", {"action_uid": "ctx-22"})
+    sim.advance_ticks(1)
+
+    rows = _build_debug_filter_trace_rows(
+        sim,
+        selected_entity_id=None,
+        selected_context_filters={"source_event_id": frozenset({"ctx-22"})},
+        event_type_filter=None,
+        mode="selected_context",
+    )
+
+    assert any(entry.get("event_type") == "ctx_source_event" for entry in rows)
+    assert all(entry.get("event_type") != "ctx_action_overlap" for entry in rows)

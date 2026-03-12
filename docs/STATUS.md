@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V4 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V5 (TBD; follow-on oversight ergonomics).
-- **Phase status:** ✅ Slice V4 landed with selected-entity trace inspection expansion and deterministic relevant-event filtering from bounded event trace history.
+- **Current phase:** Viewer Oversight Phase — Slice V5 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V6 (TBD; follow-on operator workflow ergonomics beyond filtering controls).
+- **Phase status:** ✅ Slice V5 landed with deterministic viewer-local debug filter controls (selected-entity mode, context mode, outcomes-only mode, and event-type cycling) integrated into existing debug/event layout.
 
 
 ## What changed in this commit
-- Expanded selected-entity inspector observability lines (space/role context, source action UID, selected-state summary) while remaining strictly viewer read-only.
-- Added deterministic, bounded selected-entity event-trace filtering across explicit known fields (`entity_id`, `attacker_id`, `target_id`, `actor_id`, `source_entity_id`, and bounded `target.id`).
-- Added focused viewer tests for selected-entity trace filtering relevance/exclusion, ordering stability, and inspector trace section rendering.
+- Tightened selected-context filtering to key-scoped deterministic matching: context filters are derived from bounded explicit fields and matched only against the same identifier keys (`action_uid`, `source_action_uid`, `source_event_id`, `request_event_id`), preventing fuzzy cross-key overlap.
+- Selected-context derivation now deterministically prefers the selected entity’s `source_action_uid` when enriching from trace context, avoiding accidental widening to unrelated rows while staying read-only and viewer-local.
+- Added regression coverage for key-scoped context matching (no cross-field overlap), while retaining deterministic ordering and non-mutation guarantees in viewer filtering tests.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -282,9 +282,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Expanded selected-entity inspector output with trace-oriented observability fields already present in authoritative state (`space_id`, role context, location, target location, source belief/action IDs, selected-state summary).
-- Added deterministic selected-entity recent-event rows sourced from bounded event trace history using explicit known entity-reference fields only.
-- Added focused tests for entity-trace relevance filtering, stable ordering, and inspector trace section output while preserving viewer read-only command-only mutation discipline.
+- Tightened Viewer Oversight V5 selected-context filtering to strict key-scoped matching so identifiers only match within their explicit field keys (no cross-key correlation).
+- Made selected-context derivation deterministic and conservative by preferring the selected entity `source_action_uid` when lifting context from recent relevant trace rows.
+- Added regression tests that enforce no cross-field context overlap while preserving bounded, deterministic, read-only viewer behavior.
 
 
 ## Troubleshooting
