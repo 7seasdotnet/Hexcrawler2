@@ -20,6 +20,7 @@ from hexcrawler.cli.pygame_viewer import (
     _find_world_marker_at_pixel,
     _find_world_marker_candidates_at_pixel,
     _marker_cell_from_location,
+    _marker_payload_id,
     _slot_markers_for_hex,
     _load_viewer_simulation,
     _save_viewer_simulation,
@@ -27,6 +28,8 @@ from hexcrawler.cli.pygame_viewer import (
     _selected_entity_for_click,
     _selected_entity_lines,
     _selected_entity_recent_trace_rows,
+    _viewer_topology_diagnostic,
+    _world_marker_placements,
     _event_trace_entry_mentions_entity,
     _build_debug_filter_trace_rows,
     _cycle_debug_event_type_filter,
@@ -44,7 +47,8 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.world import HexCoord, RumorRecord, SiteRecord
+from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
+from hexcrawler.sim.world import HexCoord, LOCAL_SPACE_ROLE, RumorRecord, SiteRecord, SpaceState
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -215,6 +219,53 @@ def test_rumor_panel_mode_toggle_restores_all_mode_list_query() -> None:
     _refresh_rumor_query(controller, rumor_state)
     assert sim.input_log[-1].command_type == "list_rumors_intent"
 
+
+def test_rumor_panel_ignores_stale_outcome_when_newer_request_pending() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-02", kind="site_claim", created_tick=3, group_id="beta", consumed=False))
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-01", kind="group_arrival", created_tick=5, group_id="alpha", consumed=False))
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    rumor_state = RumorPanelState(limit=1)
+
+    _refresh_rumor_query(controller, rumor_state)
+    stale_command = sim.input_log[-1]
+    sim._execute_command(stale_command, command_index=0)
+
+    rumor_state.kind_filter = "site_claim"
+    rumor_state.refresh_needed = True
+    rumor_state.request_pending = False
+    _refresh_rumor_query(controller, rumor_state)
+
+    _consume_rumor_outcome(sim, rumor_state)
+
+    assert rumor_state.request_pending is True
+    assert rumor_state.pending_action_uid == "0:1"
+
+
+def test_rumor_panel_consumes_matching_pending_outcome_by_action_uid() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-02", kind="site_claim", created_tick=3, group_id="beta", consumed=False))
+    sim.state.world.append_rumor(RumorRecord(rumor_id="r-01", kind="group_arrival", created_tick=5, group_id="alpha", consumed=False))
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    rumor_state = RumorPanelState(limit=1)
+
+    _refresh_rumor_query(controller, rumor_state)
+    stale_command = sim.input_log[-1]
+    sim._execute_command(stale_command, command_index=0)
+
+    rumor_state.kind_filter = "site_claim"
+    rumor_state.refresh_needed = True
+    rumor_state.request_pending = False
+    _refresh_rumor_query(controller, rumor_state)
+    current_command = sim.input_log[-1]
+    sim._execute_command(current_command, command_index=1)
+
+    _consume_rumor_outcome(sim, rumor_state)
+
+    assert rumor_state.request_pending is False
+    assert rumor_state.pending_action_uid is None
+    assert [row.get("rumor_id") for row in rumor_state.rows] == ["r-02"]
+
 def test_main_help_prints_usage_without_starting_viewer(capsys: pytest.CaptureFixture[str]) -> None:
     from hexcrawler.cli.pygame_viewer import main
 
@@ -326,6 +377,51 @@ def test_slot_markers_for_hex_separates_markers_in_same_cell() -> None:
     assert len(placements) == len(markers)
     unique_points = {(placement.x, placement.y) for placement in placements}
     assert len(unique_points) == len(markers)
+
+
+def test_marker_payload_id_soft_fails_for_malformed_ids() -> None:
+    marker = MarkerRecord(priority=0, marker_id="entity", marker_kind="entity", color=(1, 1, 1), radius=4, label="bad")
+
+    assert _marker_payload_id(marker, expected_kind="entity") is None
+    assert _marker_payload_id(marker, expected_kind="site") is None
+
+
+def test_selected_entity_for_click_soft_fails_on_malformed_marker_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+
+    def _bad_candidates(*args: object, **kwargs: object) -> list[MarkerRecord]:
+        return [MarkerRecord(priority=0, marker_id="entity", marker_kind="entity", color=(1, 1, 1), radius=4, label="broken")]
+
+    monkeypatch.setattr(viewer_module, "_find_world_marker_candidates_at_pixel", _bad_candidates)
+
+    selected = _selected_entity_for_click(sim, (100, 100), (100.0, 100.0), radius_px=24.0)
+
+    assert selected is None
+
+
+def test_world_marker_placements_skip_unsupported_topology_with_diagnostic() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    unsupported_space = SpaceState(
+        space_id="local:unsupported",
+        topology_type="triangle_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 5, "height": 5},
+    )
+    sim.state.world.spaces[unsupported_space.space_id] = unsupported_space
+    sim.state.entities[PLAYER_ID].space_id = unsupported_space.space_id
+    sim.state.entities[PLAYER_ID].position_x = 1.0
+    sim.state.entities[PLAYER_ID].position_y = 1.0
+    sim.state.world.sites["unsupported-site"] = SiteRecord(
+        site_id="unsupported-site",
+        site_type="town",
+        location={"space_id": unsupported_space.space_id, "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 0, "r": 0}},
+    )
+
+    placements = _world_marker_placements(sim, (200.0, 200.0), zoom_scale=1.0)
+    diagnostic = _viewer_topology_diagnostic(unsupported_space)
+
+    assert placements == []
+    assert diagnostic == "unsupported_topology=triangle_grid (viewer projection disabled)"
 
 
 def test_world_marker_candidates_are_deterministically_ordered() -> None:
