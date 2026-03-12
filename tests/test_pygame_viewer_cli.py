@@ -25,6 +25,8 @@ from hexcrawler.cli.pygame_viewer import (
     _queue_selection_command_for_click,
     _selected_entity_for_click,
     _selected_entity_lines,
+    _selected_entity_recent_trace_rows,
+    _event_trace_entry_mentions_entity,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.encounters import (
@@ -594,3 +596,85 @@ def test_queue_selection_command_for_click_uses_command_seam_end_to_end() -> Non
     sim.advance_ticks(1)
 
     assert sim.selected_entity_id(owner_entity_id=PLAYER_ID) == PLAYER_ID
+
+
+def test_selected_entity_trace_filter_matches_known_fields_and_excludes_irrelevant() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    selected_entity_id = "investigator:test"
+
+    sim.schedule_event_at(
+        sim.state.tick,
+        "viewer_trace_match",
+        {"entity_id": selected_entity_id, "action_uid": "a-1"},
+    )
+    sim.schedule_event_at(
+        sim.state.tick,
+        "viewer_trace_match_target",
+        {"target": {"kind": "entity", "id": selected_entity_id}, "source_action_uid": "s-2"},
+    )
+    sim.schedule_event_at(
+        sim.state.tick,
+        "viewer_trace_irrelevant",
+        {"entity_id": "other:1", "action_uid": "a-3"},
+    )
+    sim.advance_ticks(1)
+
+    rows = _selected_entity_recent_trace_rows(sim, selected_entity_id)
+
+    assert any("type=viewer_trace_match" in row for row in rows)
+    assert any("type=viewer_trace_match_target" in row for row in rows)
+    assert all("viewer_trace_irrelevant" not in row for row in rows)
+
+
+def test_selected_entity_trace_rows_are_deterministic_most_recent_first() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    selected_entity_id = "investigator:test"
+
+    for index in range(3):
+        sim.schedule_event_at(
+            sim.state.tick,
+            f"viewer_trace_{index}",
+            {"entity_id": selected_entity_id, "action_uid": f"uid-{index}"},
+        )
+    sim.advance_ticks(1)
+
+    rows = _selected_entity_recent_trace_rows(sim, selected_entity_id)
+
+    assert ["type=viewer_trace_2" in rows[0], "type=viewer_trace_1" in rows[1], "type=viewer_trace_0" in rows[2]] == [True, True, True]
+
+
+def test_selected_entity_lines_include_trace_section_and_source_action_uid() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    investigator = EntityState(entity_id="investigator:test", position_x=1.0, position_y=2.0, space_id="overworld")
+    investigator.source_action_uid = "source-action-77"
+    sim.add_entity(investigator)
+
+    sim.schedule_event_at(
+        sim.state.tick,
+        "viewer_trace_line",
+        {"actor_id": investigator.entity_id, "action_uid": "trace-action-11"},
+    )
+    sim.advance_ticks(1)
+
+    lines = _selected_entity_lines(sim, investigator.entity_id)
+
+    assert any("space_id=overworld" in line for line in lines)
+    assert any("source_action_uid=source-action-77" in line for line in lines)
+    assert any(line == "Recent relevant events" for line in lines)
+    assert any("type=viewer_trace_line" in line for line in lines)
+
+
+def test_event_trace_entry_mentions_entity_checks_known_fields_only() -> None:
+    entry = {
+        "event_type": "viewer_known_fields",
+        "tick": 3,
+        "params": {
+            "source_entity_id": "entity:a",
+            "target": {"kind": "entity", "id": "entity:b"},
+            "nested": {"entity_id": "entity:c"},
+        },
+    }
+
+    assert _event_trace_entry_mentions_entity(entry, "entity:a") is True
+    assert _event_trace_entry_mentions_entity(entry, "entity:b") is True
+    assert _event_trace_entry_mentions_entity(entry, "entity:c") is False
