@@ -1,20 +1,21 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V8 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V9 (TBD; pause-on-event/event-jump ergonomics, still read-only), after confirming V7 topology-regression guardrails remain green.
-- **Phase status:** ✅ Slice V8 landed as a bounded presentation-only legibility pass (clearer inspector/debug labels and scan-friendly row wording; behavior unchanged).
+- **Current phase:** Substrate Hardening — Site World-State Substrate Slice A1 (implemented).
+- **Next action:** Substrate Hardening — Site World-State Substrate Slice A2 (ownership/condition substrate extensions only; still no gameplay behaviors).
+- **Phase status:** ✅ Slice A1 landed with deterministic, serialized site world-state containers and bounded pressure-record substrate APIs (no gameplay semantics added).
 
 
 ## What changed in this commit
-- Fixed a V7 regression in viewer topology gating so canonical campaign hex topologies (including legacy/custom campaign hex forms) route to normal overworld hex projection/rendering instead of being disabled.
-- Preserved deterministic safe-disable behavior and stable diagnostic text for truly unsupported/unknown viewer topologies.
-- Added focused viewer CLI regression coverage for campaign hex topology support while keeping unsupported-topology behavior locked.
+- Added deterministic `SiteWorldState` substrate on `SiteRecord` with JSON-safe defaults (`owner_faction_id`, bounded `pressure_records`, `condition_markers`) and deterministic legacy-load defaulting.
+- Added deterministic `WorldState.add_site_pressure(...)` append-only mutation helper with bounded FIFO eviction (`MAX_SITE_PRESSURE_RECORDS`) for future rule modules.
+- Added focused deterministic tests for site-state init, pressure append/eviction, save-load round-trip stability, and simulation-hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
+  - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records and append-only mutation helper (`WorldState.add_site_pressure`) for future campaign-role consequence systems.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Same-tick event execution now drains-until-empty for tick `T` (including events scheduled during `T`) with deterministic FIFO behavior and a hard deterministic guard for runaway self-rescheduling.
   - Deterministic bounded execution trace substrate (`SimulationState.event_trace`) for executed events only, serialized in canonical saves and included in `simulation_hash`.
@@ -254,6 +255,8 @@
 - `PYTHONPATH=src pytest -q tests/test_supply_consumption.py`
 - `PYTHONPATH=src pytest -q tests/test_supplies_content.py`
 - `sed -n '1,220p' docs/PROMPTLOG.md`
+
+- `PYTHONPATH=src pytest -q tests/test_site_world_state_substrate_a1.py`
 
 ## Initial Supported Action Set (provisional)
 - `signal_intent`
