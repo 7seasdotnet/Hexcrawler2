@@ -83,6 +83,7 @@ SUPPLY_DEBUG_OUTCOME_LIMIT = 20
 SITE_ENTER_DEBUG_OUTCOME_LIMIT = 20
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 PANEL_SECTION_ENTRY_LIMIT = 30
+SELECTED_ENTITY_TRACE_LIMIT = 12
 INVENTORY_DEBUG_LINES = 8
 RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
@@ -1832,16 +1833,83 @@ def _selected_entity_lines(sim: Simulation, selected_entity_id: str) -> list[str
     source_belief_id = stats.get("source_belief_id") if isinstance(stats.get("source_belief_id"), str) else None
     target_location = stats.get("target_location") if isinstance(stats.get("target_location"), dict) else None
     target_summary = _format_location(target_location) if target_location is not None else "-"
+    space = sim.state.world.spaces.get(entity.space_id)
+    space_role = space.role if space is not None and isinstance(space.role, str) else "campaign"
+    source_action_uid = entity.source_action_uid if isinstance(entity.source_action_uid, str) and entity.source_action_uid else "-"
 
-    return [
+    recent_relevant_events = _selected_entity_recent_trace_rows(sim, selected_entity_id)
+
+    lines = [
         "Selection",
         f"entity_id={entity.entity_id}",
+        f"space_id={entity.space_id}",
+        f"space_role={space_role}",
         f"faction_id={faction_id if faction_id else '-'}",
         f"role={role_value if role_value else (entity.template_id if entity.template_id else '-')}",
         f"location={_entity_location_text(sim, entity)}",
         f"target_location={target_summary}",
         f"source_belief_id={source_belief_id if source_belief_id else '-'}",
+        f"source_action_uid={source_action_uid}",
+        "selected_state=active",
+        "",
+        "Recent relevant events",
     ]
+    if recent_relevant_events:
+        lines.extend(recent_relevant_events)
+    else:
+        lines.append("No relevant event-trace rows for selected entity.")
+    return lines
+
+
+def _selected_entity_recent_trace_rows(sim: Simulation, selected_entity_id: str) -> list[str]:
+    rows: list[str] = []
+    for entry in sim.get_event_trace():
+        if not _event_trace_entry_mentions_entity(entry, selected_entity_id):
+            continue
+        rows.append(_selected_entity_trace_row(entry))
+    return _section_entries(rows, entry_limit=SELECTED_ENTITY_TRACE_LIMIT)
+
+
+def _event_trace_entry_mentions_entity(entry: dict[str, Any], selected_entity_id: str) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    for candidate_id in _collect_known_entity_ids_from_trace_entry(entry):
+        if candidate_id == selected_entity_id:
+            return True
+    return False
+
+
+def _collect_known_entity_ids_from_trace_entry(entry: dict[str, Any]) -> tuple[str, ...]:
+    known_fields = ("entity_id", "attacker_id", "target_id", "actor_id", "source_entity_id")
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    target = params.get("target") if isinstance(params.get("target"), dict) else None
+
+    values: list[str] = []
+    for field_name in known_fields:
+        value = entry.get(field_name)
+        if isinstance(value, str) and value:
+            values.append(value)
+        param_value = params.get(field_name)
+        if isinstance(param_value, str) and param_value:
+            values.append(param_value)
+    if target is not None:
+        target_id = target.get("id")
+        if isinstance(target_id, str) and target_id:
+            values.append(target_id)
+    return tuple(values)
+
+
+def _selected_entity_trace_row(entry: dict[str, Any]) -> str:
+    params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+    event_type = str(entry.get("event_type", "?"))
+    tick = entry.get("tick", "?")
+    action_uid = params.get("action_uid", "-")
+    if not isinstance(action_uid, str) or not action_uid:
+        action_uid = "-"
+    source_action_uid = params.get("source_action_uid", "-")
+    if not isinstance(source_action_uid, str) or not source_action_uid:
+        source_action_uid = "-"
+    return f"tick={tick} type={event_type} action_uid={action_uid} source_action_uid={source_action_uid}"
 
 
 def _hover_readout(sim: Simulation, pixel_pos: tuple[int, int], center: tuple[float, float], zoom_scale: float = 1.0) -> str | None:

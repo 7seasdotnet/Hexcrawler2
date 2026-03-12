@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V3 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V4 (event/entity trace inspection expansion).
-- **Phase status:** ✅ Slice V3 landed with actor visibility markers, click-based deterministic selection commands, and inspector population for selected entities.
+- **Current phase:** Viewer Oversight Phase — Slice V4 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V5 (TBD; follow-on oversight ergonomics).
+- **Phase status:** ✅ Slice V4 landed with selected-entity trace inspection expansion and deterministic relevant-event filtering from bounded event trace history.
 
 
 ## What changed in this commit
-- Added deterministic viewer-side selection command queue helper for world-clicks so input consistently flows through `set_selected_entity` / `clear_selected_entity` command append paths only.
-- Added deterministic tie-break coverage for marker hit sorting (`distance`, then `marker_id`) to ensure stable nearest-entity click resolution.
-- Added end-to-end test coverage for click→command append→next-tick selection application while preserving viewer read-only discipline before simulation stepping.
+- Expanded selected-entity inspector observability lines (space/role context, source action UID, selected-state summary) while remaining strictly viewer read-only.
+- Added deterministic, bounded selected-entity event-trace filtering across explicit known fields (`entity_id`, `attacker_id`, `target_id`, `actor_id`, `source_entity_id`, and bounded `target.id`).
+- Added focused viewer tests for selected-entity trace filtering relevance/exclusion, ordering stability, and inspector trace section rendering.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -282,9 +282,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Viewer selection click handling now routes through a dedicated deterministic command-queue helper (`set_selected_entity`/`clear_selected_entity`) with no direct mutation path.
-- Added deterministic marker candidate tie-break validation (`distance`, then stable `marker_id`) to keep selection behavior replay-safe.
-- Added end-to-end test validation for click-driven selection application on the next simulation step, preserving read-only viewer behavior before stepping.
+- Expanded selected-entity inspector output with trace-oriented observability fields already present in authoritative state (`space_id`, role context, location, target location, source belief/action IDs, selected-state summary).
+- Added deterministic selected-entity recent-event rows sourced from bounded event trace history using explicit known entity-reference fields only.
+- Added focused tests for entity-trace relevance filtering, stable ordering, and inspector trace section output while preserving viewer read-only command-only mutation discipline.
 
 
 ## Troubleshooting
