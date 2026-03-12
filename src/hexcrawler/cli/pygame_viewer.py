@@ -14,7 +14,7 @@ from typing import Any
 
 from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
-from hexcrawler.sim.core import EntityState, SimCommand, Simulation
+from hexcrawler.sim.core import HEX_TOPOLOGY_TYPES, EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     LIST_RUMORS_INTENT,
@@ -965,7 +965,7 @@ def _supported_viewer_topology(active_space: Any | None) -> str:
     if active_space is None:
         return OVERWORLD_HEX_TOPOLOGY
     topology_type = str(getattr(active_space, "topology_type", OVERWORLD_HEX_TOPOLOGY))
-    if topology_type == "custom":
+    if topology_type in HEX_TOPOLOGY_TYPES:
         return OVERWORLD_HEX_TOPOLOGY
     if topology_type in (OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY):
         return topology_type
