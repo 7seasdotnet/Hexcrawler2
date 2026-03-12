@@ -544,7 +544,7 @@ def _cycle_debug_event_type_filter(sim: Simulation, debug_filter_state: DebugFil
 
 def _debug_filter_label(debug_filter_state: DebugFilterState) -> str:
     event_type = debug_filter_state.event_type_filter if debug_filter_state.event_type_filter is not None else "all"
-    return f"mode={debug_filter_state.mode} type={event_type}"
+    return f"debug filter: mode={debug_filter_state.mode} event_type={event_type}"
 
 
 def _build_debug_filter_trace_rows(
@@ -592,8 +592,8 @@ def _format_debug_trace_row(entry: dict[str, Any]) -> str:
     if not isinstance(request_event_id, str) or not request_event_id:
         request_event_id = "-"
     return (
-        f"tick={tick} type={event_type} action_uid={action_uid} source_action_uid={source_action_uid} "
-        f"source_event_id={source_event_id} request_event_id={request_event_id}"
+        f"tick={tick} | event={event_type} | action_uid={action_uid} | source_action_uid={source_action_uid} | "
+        f"source_event_id={source_event_id} | request_event_id={request_event_id}"
     )
 
 @dataclass(frozen=True)
@@ -1443,7 +1443,7 @@ def _draw_top_control_bar(
         f"tick={sim.state.tick} day={day_display} {hours:02d}:{minutes:02d} "
         f"seed={sim.seed} src={identity} hash={hash_suffix} follow={follow_state.status}"
     )
-    sections_text = "Simulation | Save/Load | Time | View | Debug"
+    sections_text = "Controls: Simulation | Save/Load | Time | View | Debug"
     left_label = _truncate_text_to_pixel_width(sections_text, font, 460)
     right_label = _truncate_text_to_pixel_width(metadata_text, font, max(160, bar_rect.width - 490))
     screen.blit(font.render(left_label, True, (235, 235, 240)), (10, 8))
@@ -1470,9 +1470,9 @@ def _draw_hud(
     lines = [
         context_line,
         "WASD move | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
-        "F7 focus selected | F12 follow selected toggle",
+        "F7 focus selected entity | F12 toggle follow-selected",
         f"runtime={'paused' if runtime_state.paused else 'running'}",
-        f"follow_selected={follow_state.status}",
+        f"follow status={follow_state.status}",
     ]
     if status_message:
         lines.append(f"status: {status_message}")
@@ -1747,20 +1747,20 @@ def _draw_inspector_panel(
     scroll_offset: int,
     follow_state: FollowSelectionState,
 ) -> tuple[pygame.Rect, int]:
-    content_rect = _render_panel_frame(screen, panel_rect, "Inspector", font)
+    content_rect = _render_panel_frame(screen, panel_rect, "Selected Entity", font)
     selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
     lines: list[str] = []
     if selected_entity_id:
         lines.extend(_selected_entity_lines(sim, selected_entity_id, follow_status=follow_state.status))
     else:
-        lines.extend(["Selection", "Nothing selected", f"follow_selected={follow_state.status}"])
+        lines.extend(["SELECTED ENTITY", "No entity selected.", f"Follow status={follow_state.status}"])
     lines.extend(
         [
             "",
-            "Viewer discipline",
+            "VIEWER DISCIPLINE",
             "Read-only operator console: no direct simulation mutation.",
-            "campaign role: travel/time/logistics/encounter triggering",
-            "local role: tactical movement/combat resolution",
+            "Campaign role: travel/time/logistics/encounter triggering.",
+            "Local role: tactical movement/combat resolution.",
         ]
     )
     wrapped_count = _render_wrapped_lines(screen, font, content_rect, lines, scroll_offset=scroll_offset)
@@ -1912,7 +1912,7 @@ def _draw_encounter_debug_panel(
     panel_rect: pygame.Rect,
     cache: DebugPanelRenderCache,
 ) -> tuple[dict[str, pygame.Rect], dict[str, int]]:
-    content_rect = _render_panel_frame(screen, panel_rect, "Debug / Event", font, bg_color=(22, 24, 33))
+    content_rect = _render_panel_frame(screen, panel_rect, "Debug & Event Trace", font, bg_color=(22, 24, 33))
     section_rects: dict[str, pygame.Rect] = {}
 
     rows_by_section = build_debug_panel_render_cache(sim, rumor_state, debug_filter_state, cache)
@@ -1930,7 +1930,7 @@ def _draw_encounter_debug_panel(
         section_rects[section_name] = tab_rect
         tab_x = tab_rect.right + 6
 
-    filter_mode_text = _truncate_text_to_pixel_width(f"filter:{debug_filter_state.mode}", font, max(60, content_rect.width // 3))
+    filter_mode_text = _truncate_text_to_pixel_width(f"mode:{debug_filter_state.mode}", font, max(60, content_rect.width // 3))
     filter_mode_surface = font.render(filter_mode_text, True, (240, 240, 245))
     filter_mode_rect = pygame.Rect(content_rect.right - filter_mode_surface.get_width() - 10, tab_y, filter_mode_surface.get_width() + 8, 20)
     pygame.draw.rect(screen, (44, 48, 64), filter_mode_rect)
@@ -1939,7 +1939,7 @@ def _draw_encounter_debug_panel(
     section_rects["debug_filter_mode"] = filter_mode_rect
 
     type_label = debug_filter_state.event_type_filter if debug_filter_state.event_type_filter is not None else "all"
-    filter_type_text = _truncate_text_to_pixel_width(f"type:{type_label}", font, max(60, content_rect.width // 3))
+    filter_type_text = _truncate_text_to_pixel_width(f"event:{type_label}", font, max(60, content_rect.width // 3))
     filter_type_surface = font.render(filter_type_text, True, (240, 240, 245))
     filter_type_rect = pygame.Rect(
         max(content_rect.x, filter_mode_rect.x - filter_type_surface.get_width() - 20),
@@ -1963,7 +1963,7 @@ def _draw_encounter_debug_panel(
 
     selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
     if selected_entity_id:
-        tag = _truncate_text_to_pixel_width(f"selected={selected_entity_id}", font, max(1, panel_rect.width - 22))
+        tag = _truncate_text_to_pixel_width(f"selected entity: {selected_entity_id}", font, max(1, panel_rect.width - 22))
         screen.blit(font.render(tag, True, (185, 215, 185)), (panel_rect.x + 10, panel_rect.y + 8))
 
     return section_rects, section_counts
@@ -2159,7 +2159,7 @@ def _selected_entity_lines(
 ) -> list[str]:
     entity = sim.state.entities.get(selected_entity_id)
     if entity is None:
-        return ["Selection", f"entity_id={selected_entity_id}", "Entity not found in current simulation state."]
+        return ["SELECTED ENTITY", f"Entity ID: {selected_entity_id}", "Entity not found in current simulation state."]
 
     stats = entity.stats if isinstance(entity.stats, dict) else {}
     faction_id = stats.get("faction_id") if isinstance(stats.get("faction_id"), str) else None
@@ -2174,20 +2174,20 @@ def _selected_entity_lines(
     recent_relevant_events = _selected_entity_recent_trace_rows(sim, selected_entity_id)
 
     lines = [
-        "Selection",
-        f"entity_id={entity.entity_id}",
-        f"space_id={entity.space_id}",
-        f"space_role={space_role}",
-        f"faction_id={faction_id if faction_id else '-'}",
-        f"role={role_value if role_value else (entity.template_id if entity.template_id else '-')}",
-        f"location={_entity_location_text(sim, entity)}",
-        f"target_location={target_summary}",
-        f"source_belief_id={source_belief_id if source_belief_id else '-'}",
-        f"source_action_uid={source_action_uid}",
-        "selected_state=active",
-        f"follow_selected={follow_status}",
+        "SELECTED ENTITY",
+        f"Entity ID: {entity.entity_id}",
+        f"Space ID: {entity.space_id}",
+        f"Space role: {space_role}",
+        f"Faction: {faction_id if faction_id else '-'}",
+        f"Role: {role_value if role_value else (entity.template_id if entity.template_id else '-')}",
+        f"Location: {_entity_location_text(sim, entity)}",
+        f"Target location: {target_summary}",
+        f"Source belief: {source_belief_id if source_belief_id else '-'}",
+        f"Source action UID: {source_action_uid}",
+        "Selection state: active",
+        f"Follow status: {follow_status}",
         "",
-        "Recent relevant events",
+        "RECENT EVENTS",
     ]
     if recent_relevant_events:
         lines.extend(recent_relevant_events)
@@ -2244,7 +2244,7 @@ def _selected_entity_trace_row(entry: dict[str, Any]) -> str:
     source_action_uid = params.get("source_action_uid", "-")
     if not isinstance(source_action_uid, str) or not source_action_uid:
         source_action_uid = "-"
-    return f"tick={tick} type={event_type} action_uid={action_uid} source_action_uid={source_action_uid}"
+    return f"tick={tick} | event={event_type} | action_uid={action_uid} | source_action_uid={source_action_uid}"
 
 
 def _hover_readout(sim: Simulation, pixel_pos: tuple[int, int], center: tuple[float, float], zoom_scale: float = 1.0) -> str | None:

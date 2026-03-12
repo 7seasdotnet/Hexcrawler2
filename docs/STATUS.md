@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Viewer Oversight Phase — Slice V7 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V8 (TBD; pause-on-event/event-jump ergonomics, still read-only).
-- **Phase status:** ✅ Slice V7 landed as a bounded viewer trust/robustness pass (rumor outcome correlation, marker parsing hardening, explicit unsupported-topology behavior).
+- **Current phase:** Viewer Oversight Phase — Slice V8 (implemented).
+- **Next action:** Viewer Oversight Phase — Slice V9 (TBD; pause-on-event/event-jump ergonomics, still read-only).
+- **Phase status:** ✅ Slice V8 landed as a bounded presentation-only legibility pass (clearer inspector/debug labels and scan-friendly row wording; behavior unchanged).
 
 
 ## What changed in this commit
-- Hardened rumor panel request/outcome consumption by tracking a deterministic pending `action_uid` token per request and consuming only matching outcomes, preventing stale outcomes from satisfying newer pending requests.
-- Replaced brittle marker-id split/index assumptions with defensive marker payload parsing and deterministic soft-fail handling for malformed IDs in selection/context-menu paths.
-- Made unsupported topology handling explicit in viewer projection paths by disabling marker placement/render picking fallback assumptions and surfacing stable diagnostics in HUD/world/context-menu behavior.
+- Refined viewer presentation text in the inspector, HUD, and control bar for calmer human-readable labels without changing viewer runtime/control behavior.
+- Improved selected-entity and event-trace line formatting with consistent separators and explicit section headings to improve scanability.
+- Updated viewer CLI tests to lock new label/format wording and preserve deterministic, read-only filtering behavior.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -283,9 +283,9 @@
 - Repo root file `python` is a local stdout redirect artifact from ad-hoc shell runs; it is now ignored by design via a narrow root-only `.gitignore` entry (`/python`).
 
 ## What Changed in This Commit
-- Tightened Viewer Oversight V5 selected-context filtering to strict key-scoped matching so identifiers only match within their explicit field keys (no cross-key correlation).
-- Made selected-context derivation deterministic and conservative by preferring the selected entity `source_action_uid` when lifting context from recent relevant trace rows.
-- Added regression tests that enforce no cross-field context overlap while preserving bounded, deterministic, read-only viewer behavior.
+- Refined viewer presentation text in the inspector, HUD, and control bar for calmer human-readable labels without changing viewer runtime/control behavior.
+- Improved selected-entity and event-trace line formatting with consistent separators and explicit section headings to improve scanability.
+- Updated viewer CLI tests to lock new label/format wording and preserve deterministic, read-only filtering behavior.
 
 
 ## Troubleshooting
