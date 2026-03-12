@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Site World-State Substrate Slice A1 (implemented).
-- **Next action:** Substrate Hardening — Site World-State Substrate Slice A2 (ownership/condition substrate extensions only; still no gameplay behaviors).
-- **Phase status:** ✅ Slice A1 landed with deterministic, serialized site world-state containers and bounded pressure-record substrate APIs (no gameplay semantics added).
+- **Current phase:** Substrate Hardening — Site World-State Pressure Mutation Slice A2 (implemented).
+- **Next action:** Substrate Hardening — Site World-State Mutation Slice A3 (additional deterministic mutation seams only; still no gameplay behaviors).
+- **Phase status:** ✅ Slice A2 landed with deterministic event-driven site-pressure mutation + forensic outcomes through a dedicated campaign-role rule-module seam (no gameplay semantics added).
 
 
 ## What changed in this commit
-- Added deterministic `SiteWorldState` substrate on `SiteRecord` with JSON-safe defaults (`owner_faction_id`, bounded `pressure_records`, `condition_markers`) and deterministic legacy-load defaulting.
-- Added deterministic `WorldState.add_site_pressure(...)` append-only mutation helper with bounded FIFO eviction (`MAX_SITE_PRESSURE_RECORDS`) for future rule modules.
-- Added focused deterministic tests for site-state init, pressure append/eviction, save-load round-trip stability, and simulation-hash stability.
+- Added `SitePressureMutationModule` with deterministic event seam `site_pressure_apply` (campaign role) that validates payloads and mutates `SiteRecord.site_state.pressure_records` only via `WorldState.add_site_pressure(...)`.
+- Added deterministic forensic event emission `site_pressure_outcome` with bounded outcomes (`applied`, `unknown_site`, `invalid_strength`, `invalid_payload`) and zero-mutation rejection behavior.
+- Added focused A2 tests covering valid mutation, rejection paths, stable ordering/FIFO, and save-load/replay/hash stability for the new seam.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -187,6 +187,9 @@
 - `hexcrawler.sim.supplies.SUPPLY_OUTCOME_EVENT_TYPE`
 - `hexcrawler.sim.location.LocationRef`
 - `hexcrawler.sim.location.OVERWORLD_HEX_TOPOLOGY`
+- `hexcrawler.sim.site_pressure.SITE_PRESSURE_APPLY_EVENT_TYPE`
+- `hexcrawler.sim.site_pressure.SITE_PRESSURE_OUTCOME_EVENT_TYPE`
+- `hexcrawler.sim.site_pressure.SitePressureMutationModule`
 
 ## Out of Scope Kept
 - No towns/markets/prices/economy systems in this phase.
@@ -257,6 +260,7 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 - `PYTHONPATH=src pytest -q tests/test_site_world_state_substrate_a1.py`
+- `PYTHONPATH=src pytest -q tests/test_site_pressure_mutation_a2.py`
 
 ## Initial Supported Action Set (provisional)
 - `signal_intent`
