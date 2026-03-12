@@ -442,6 +442,17 @@ class DebugFilterState:
     event_type_filter: str | None = None
 
 
+@dataclass
+class FollowSelectionState:
+    enabled: bool = False
+    status: str = "off"
+
+
+FOLLOW_STATUS_OFF = "off"
+FOLLOW_STATUS_ON = "on"
+FOLLOW_STATUS_INACTIVE = "inactive"
+
+
 DEBUG_FILTER_MODE_ORDER: tuple[str, ...] = ("all", "selected_entity", "selected_context", "outcomes_only")
 DEBUG_CONTEXT_FILTER_KEYS: tuple[str, ...] = ("action_uid", "source_action_uid", "source_event_id", "request_event_id")
 
@@ -962,6 +973,69 @@ def _entity_space_id(entity: EntityState) -> str | None:
     return None
 
 
+def _selected_entity_in_active_space(sim: Simulation, selected_entity_id: str | None) -> EntityState | None:
+    if selected_entity_id is None:
+        return None
+    selected_entity = sim.state.entities.get(selected_entity_id)
+    if selected_entity is None:
+        return None
+    player = sim.state.entities.get(PLAYER_ID)
+    current_space_id = _entity_space_id(player) if player is not None else "overworld"
+    if current_space_id is None:
+        current_space_id = "overworld"
+    if not _is_in_current_space(_entity_space_id(selected_entity), current_space_id):
+        return None
+    return selected_entity
+
+
+def _camera_center_for_entity(
+    entity: EntityState,
+    viewport_rect: pygame.Rect,
+    *,
+    zoom_scale: float,
+) -> tuple[float, float]:
+    size = HEX_SIZE * zoom_scale
+    return (
+        float(viewport_rect.centerx) - (float(entity.position_x) * size),
+        float(viewport_rect.centery) - (float(entity.position_y) * size),
+    )
+
+
+def _focus_camera_on_selected(
+    sim: Simulation,
+    selected_entity_id: str | None,
+    viewport_rect: pygame.Rect,
+    *,
+    zoom_scale: float,
+) -> tuple[tuple[float, float] | None, str]:
+    selected_entity = _selected_entity_in_active_space(sim, selected_entity_id)
+    if selected_entity is None:
+        return None, "focus selected: inactive"
+    center = _camera_center_for_entity(selected_entity, viewport_rect, zoom_scale=zoom_scale)
+    return center, f"focus selected: {selected_entity.entity_id}"
+
+
+def _apply_follow_selected_camera(
+    sim: Simulation,
+    selected_entity_id: str | None,
+    viewport_rect: pygame.Rect,
+    *,
+    zoom_scale: float,
+    follow_state: FollowSelectionState,
+) -> tuple[tuple[float, float] | None, str | None]:
+    if not follow_state.enabled:
+        follow_state.status = FOLLOW_STATUS_OFF
+        return None, None
+    selected_entity = _selected_entity_in_active_space(sim, selected_entity_id)
+    if selected_entity is None:
+        follow_state.enabled = False
+        follow_state.status = FOLLOW_STATUS_INACTIVE
+        return None, "follow selected: inactive"
+    follow_state.status = FOLLOW_STATUS_ON
+    center = _camera_center_for_entity(selected_entity, viewport_rect, zoom_scale=zoom_scale)
+    return center, None
+
+
 def _truncate_label(text: str, max_length: int = 10) -> str:
     normalized = text.strip()
     if not normalized:
@@ -1310,6 +1384,7 @@ def _draw_top_control_bar(
     font: pygame.font.Font,
     runtime_state: ViewerRuntimeState,
     bar_rect: pygame.Rect,
+    follow_state: FollowSelectionState,
 ) -> None:
     pygame.draw.rect(screen, (28, 30, 40), bar_rect)
     pygame.draw.rect(screen, (95, 98, 110), bar_rect, 1)
@@ -1323,7 +1398,7 @@ def _draw_top_control_bar(
     identity = runtime_state.last_loaded_identity or f"map:{Path(runtime_state.map_path).name}"
     metadata_text = (
         f"tick={sim.state.tick} day={day_display} {hours:02d}:{minutes:02d} "
-        f"seed={sim.seed} src={identity} hash={hash_suffix}"
+        f"seed={sim.seed} src={identity} hash={hash_suffix} follow={follow_state.status}"
     )
     sections_text = "Simulation | Save/Load | Time | View | Debug"
     left_label = _truncate_text_to_pixel_width(sections_text, font, 460)
@@ -1340,6 +1415,7 @@ def _draw_hud(
     hover_message: str | None,
     runtime_state: ViewerRuntimeState,
     world_rect: pygame.Rect,
+    follow_state: FollowSelectionState,
 ) -> None:
     entity = sim.state.entities[PLAYER_ID]
     active_space = sim.state.world.spaces.get(entity.space_id)
@@ -1351,7 +1427,9 @@ def _draw_hud(
     lines = [
         context_line,
         "WASD move | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
+        "F7 focus selected | F12 follow selected toggle",
         f"runtime={'paused' if runtime_state.paused else 'running'}",
+        f"follow_selected={follow_state.status}",
     ]
     if status_message:
         lines.append(f"status: {status_message}")
@@ -1607,14 +1685,15 @@ def _draw_inspector_panel(
     font: pygame.font.Font,
     panel_rect: pygame.Rect,
     scroll_offset: int,
+    follow_state: FollowSelectionState,
 ) -> tuple[pygame.Rect, int]:
     content_rect = _render_panel_frame(screen, panel_rect, "Inspector", font)
     selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
     lines: list[str] = []
     if selected_entity_id:
-        lines.extend(_selected_entity_lines(sim, selected_entity_id))
+        lines.extend(_selected_entity_lines(sim, selected_entity_id, follow_status=follow_state.status))
     else:
-        lines.extend(["Selection", "Nothing selected"])
+        lines.extend(["Selection", "Nothing selected", f"follow_selected={follow_state.status}"])
     lines.extend(
         [
             "",
@@ -2013,7 +2092,12 @@ def _queue_selection_command_for_click(
     return "selection cleared"
 
 
-def _selected_entity_lines(sim: Simulation, selected_entity_id: str) -> list[str]:
+def _selected_entity_lines(
+    sim: Simulation,
+    selected_entity_id: str,
+    *,
+    follow_status: str = FOLLOW_STATUS_OFF,
+) -> list[str]:
     entity = sim.state.entities.get(selected_entity_id)
     if entity is None:
         return ["Selection", f"entity_id={selected_entity_id}", "Entity not found in current simulation state."]
@@ -2042,6 +2126,7 @@ def _selected_entity_lines(sim: Simulation, selected_entity_id: str) -> list[str
         f"source_belief_id={source_belief_id if source_belief_id else '-'}",
         f"source_action_uid={source_action_uid}",
         "selected_state=active",
+        f"follow_selected={follow_status}",
         "",
         "Recent relevant events",
     ]
@@ -2518,6 +2603,7 @@ def run_pygame_viewer(
     active_panel_section = "encounters"
     rumor_panel_state = RumorPanelState()
     debug_filter_state = DebugFilterState()
+    follow_state = FollowSelectionState()
     show_local_arena_overlay = False
     debug_panel_cache = DebugPanelRenderCache()
 
@@ -2600,6 +2686,35 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F11:
                 _cycle_debug_event_type_filter(sim, debug_filter_state)
                 status_message = _debug_filter_label(debug_filter_state)
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F12:
+                follow_state.enabled = not follow_state.enabled
+                if follow_state.enabled:
+                    selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+                    center, follow_message = _apply_follow_selected_camera(
+                        sim,
+                        selected_entity_id,
+                        viewport_rect,
+                        zoom_scale=world_zoom_scale,
+                        follow_state=follow_state,
+                    )
+                    if center is not None:
+                        world_center = center
+                    status_message = follow_message or "follow selected: on"
+                else:
+                    follow_state.status = FOLLOW_STATUS_OFF
+                    status_message = "follow selected: off"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F7:
+                selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+                center, focus_message = _focus_camera_on_selected(
+                    sim,
+                    selected_entity_id,
+                    viewport_rect,
+                    zoom_scale=world_zoom_scale,
+                )
+                if center is not None:
+                    world_center = center
+                    local_camera_cache.center = center
+                status_message = focus_message
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -2763,6 +2878,19 @@ def run_pygame_viewer(
             local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
             previous_snapshot = current_snapshot
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+        selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+        follow_center, follow_message = _apply_follow_selected_camera(
+            sim,
+            selected_entity_id,
+            viewport_rect,
+            zoom_scale=world_zoom_scale,
+            follow_state=follow_state,
+        )
+        if follow_center is not None:
+            world_center = follow_center
+            local_camera_cache.center = follow_center
+        if follow_message is not None:
+            status_message = follow_message
 
         hover_message: str | None = None
         mouse_pos = pygame_module.mouse.get_pos()
@@ -2783,8 +2911,8 @@ def run_pygame_viewer(
                 _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
             else:
                 _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
-        _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar)
-        _draw_hud(screen, sim, font, status_message, hover_message, runtime_state, layout.world_view)
+        _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
+        _draw_hud(screen, sim, font, status_message, hover_message, runtime_state, layout.world_view, follow_state)
         if show_local_arena_overlay:
             _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
         inspector_content_rect, inspector_total_lines = _draw_inspector_panel(
@@ -2793,6 +2921,7 @@ def run_pygame_viewer(
             debug_font,
             layout.inspector_panel,
             inspector_scroll,
+            follow_state,
         )
         panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
             screen,
