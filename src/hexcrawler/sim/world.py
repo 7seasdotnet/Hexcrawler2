@@ -32,6 +32,8 @@ MAX_ACTIVATED_FACTIONS = 128
 MAX_CONTACTS_PER_FACTION = 64
 MAX_CONTACT_TTL_TICKS = 1_000_000
 MAX_CONTACT_DECAY_PER_TICK = 128
+MAX_SITE_PRESSURE_RECORDS = 32
+MAX_SITE_CONDITION_MARKERS = 32
 DEFAULT_CONTACT_TTL_CONFIG = {
     "enabled": False,
     "contact_ttl_ticks": 0,
@@ -1269,6 +1271,7 @@ class SiteRecord:
     description: str | None = None
     tags: list[str] = field(default_factory=list)
     entrance: dict[str, Any] | None = None
+    site_state: "SiteWorldState" = field(default_factory=lambda: SiteWorldState())
 
     def __post_init__(self) -> None:
         if not isinstance(self.site_id, str) or not self.site_id:
@@ -1299,6 +1302,11 @@ class SiteRecord:
             spawn = self.entrance.get("spawn")
             if spawn is not None and not isinstance(spawn, dict):
                 raise ValueError("entrance.spawn must be an object when present")
+        if not isinstance(self.site_state, SiteWorldState):
+            if isinstance(self.site_state, dict):
+                self.site_state = SiteWorldState.from_dict(self.site_state)
+            else:
+                raise ValueError("site_state must be a SiteWorldState or object payload")
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -1316,6 +1324,8 @@ class SiteRecord:
                 "target_space_id": self.entrance["target_space_id"],
                 "spawn": dict(self.entrance["spawn"]) if isinstance(self.entrance.get("spawn"), dict) else None,
             }
+        if not self.site_state.is_default():
+            payload["site_state"] = self.site_state.to_dict()
         return payload
 
     @classmethod
@@ -1341,6 +1351,112 @@ class SiteRecord:
             description=(str(data["description"]) if data.get("description") is not None else None),
             tags=[str(tag) for tag in data.get("tags", [])],
             entrance=entrance,
+            site_state=SiteWorldState.from_dict(dict(data.get("site_state", {}))),
+        )
+
+
+@dataclass
+class SitePressureRecord:
+    faction_id: str
+    pressure_type: str
+    strength: int
+    source_event_id: str | None = None
+    tick: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.faction_id, str) or not self.faction_id:
+            raise ValueError("faction_id must be a non-empty string")
+        if not isinstance(self.pressure_type, str) or not self.pressure_type:
+            raise ValueError("pressure_type must be a non-empty string")
+        if isinstance(self.strength, bool) or not isinstance(self.strength, int):
+            raise ValueError("strength must be an integer")
+        if self.source_event_id is not None and (not isinstance(self.source_event_id, str) or not self.source_event_id):
+            raise ValueError("source_event_id must be a non-empty string when present")
+        if isinstance(self.tick, bool) or not isinstance(self.tick, int):
+            raise ValueError("tick must be an integer")
+        if self.tick < 0:
+            raise ValueError("tick must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "faction_id": self.faction_id,
+            "pressure_type": self.pressure_type,
+            "strength": self.strength,
+            "tick": self.tick,
+        }
+        if self.source_event_id is not None:
+            payload["source_event_id"] = self.source_event_id
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SitePressureRecord":
+        return cls(
+            faction_id=str(data["faction_id"]),
+            pressure_type=str(data["pressure_type"]),
+            strength=int(data["strength"]),
+            source_event_id=(str(data["source_event_id"]) if data.get("source_event_id") is not None else None),
+            tick=int(data.get("tick", 0)),
+        )
+
+
+@dataclass
+class SiteWorldState:
+    owner_faction_id: str | None = None
+    pressure_records: list[SitePressureRecord] = field(default_factory=list)
+    condition_markers: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.owner_faction_id is not None and (
+            not isinstance(self.owner_faction_id, str) or not self.owner_faction_id
+        ):
+            raise ValueError("owner_faction_id must be a non-empty string when present")
+
+        normalized_pressure_records: list[SitePressureRecord] = []
+        for record in self.pressure_records:
+            normalized = record if isinstance(record, SitePressureRecord) else SitePressureRecord.from_dict(dict(record))
+            normalized_pressure_records.append(normalized)
+        if len(normalized_pressure_records) > MAX_SITE_PRESSURE_RECORDS:
+            normalized_pressure_records = normalized_pressure_records[-MAX_SITE_PRESSURE_RECORDS:]
+        self.pressure_records = normalized_pressure_records
+
+        if not isinstance(self.condition_markers, list):
+            raise ValueError("condition_markers must be a list")
+        normalized_markers: list[str] = []
+        for marker in self.condition_markers:
+            marker_id = str(marker).strip()
+            if not marker_id:
+                raise ValueError("condition_markers values must be non-empty strings")
+            normalized_markers.append(marker_id)
+        if len(normalized_markers) > MAX_SITE_CONDITION_MARKERS:
+            normalized_markers = normalized_markers[-MAX_SITE_CONDITION_MARKERS:]
+        self.condition_markers = normalized_markers
+
+
+    def is_default(self) -> bool:
+        return (
+            self.owner_faction_id is None
+            and not self.pressure_records
+            and not self.condition_markers
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "pressure_records": [record.to_dict() for record in self.pressure_records],
+            "condition_markers": list(self.condition_markers),
+        }
+        if self.owner_faction_id is not None:
+            payload["owner_faction_id"] = self.owner_faction_id
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SiteWorldState":
+        return cls(
+            owner_faction_id=(str(data["owner_faction_id"]) if data.get("owner_faction_id") is not None else None),
+            pressure_records=[
+                SitePressureRecord.from_dict(dict(row))
+                for row in list(data.get("pressure_records", []))
+            ],
+            condition_markers=[str(marker) for marker in list(data.get("condition_markers", []))],
         )
 
 
@@ -1969,6 +2085,32 @@ class WorldState:
             if site.location.get("space_id") == space_id and site.location.get("coord") == coord
         ]
         return sorted(matches, key=lambda site: site.site_id)
+
+    def add_site_pressure(
+        self,
+        site_id: str,
+        faction_id: str,
+        pressure_type: str,
+        strength: int,
+        source_event_id: str | None = None,
+        *,
+        tick: int = 0,
+    ) -> SitePressureRecord:
+        if site_id not in self.sites:
+            raise ValueError(f"unknown site_id '{site_id}'")
+        record = SitePressureRecord(
+            faction_id=faction_id,
+            pressure_type=pressure_type,
+            strength=strength,
+            source_event_id=source_event_id,
+            tick=tick,
+        )
+        site_state = self.sites[site_id].site_state
+        site_state.pressure_records.append(record)
+        if len(site_state.pressure_records) > MAX_SITE_PRESSURE_RECORDS:
+            overflow = len(site_state.pressure_records) - MAX_SITE_PRESSURE_RECORDS
+            del site_state.pressure_records[:overflow]
+        return record
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:
         signal_uid = str(record["signal_uid"])
