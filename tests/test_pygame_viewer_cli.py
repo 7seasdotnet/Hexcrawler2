@@ -28,6 +28,7 @@ from hexcrawler.cli.pygame_viewer import (
     _selected_entity_for_click,
     _selected_entity_lines,
     _selected_entity_recent_trace_rows,
+    _supported_viewer_topology,
     _viewer_topology_diagnostic,
     _world_marker_placements,
     _event_trace_entry_mentions_entity,
@@ -400,6 +401,31 @@ def test_selected_entity_for_click_soft_fails_on_malformed_marker_id(monkeypatch
 
     assert selected is None
 
+
+
+
+def test_campaign_hex_topologies_route_to_overworld_projection() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    hex_space = SpaceState(
+        space_id="campaign:hex_disk",
+        topology_type="hex_disk",
+        role="campaign",
+        topology_params={"radius": 2},
+    )
+    sim.state.world.spaces[hex_space.space_id] = hex_space
+    sim.state.entities[PLAYER_ID].space_id = hex_space.space_id
+    sim.state.world.sites["hex-site"] = SiteRecord(
+        site_id="hex-site",
+        site_type="town",
+        location={"space_id": hex_space.space_id, "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 0, "r": 0}},
+    )
+
+    supported = _supported_viewer_topology(hex_space)
+    placements = _world_marker_placements(sim, (200.0, 200.0), zoom_scale=1.0)
+
+    assert supported == OVERWORLD_HEX_TOPOLOGY
+    assert _viewer_topology_diagnostic(hex_space) is None
+    assert any(placement.marker.marker_id == "site:hex-site" for placement in placements)
 
 def test_world_marker_placements_skip_unsupported_topology_with_diagnostic() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)

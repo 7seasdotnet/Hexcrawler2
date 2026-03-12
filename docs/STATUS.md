@@ -2,14 +2,14 @@
 
 ## Phase
 - **Current phase:** Viewer Oversight Phase — Slice V8 (implemented).
-- **Next action:** Viewer Oversight Phase — Slice V9 (TBD; pause-on-event/event-jump ergonomics, still read-only).
+- **Next action:** Viewer Oversight Phase — Slice V9 (TBD; pause-on-event/event-jump ergonomics, still read-only), after confirming V7 topology-regression guardrails remain green.
 - **Phase status:** ✅ Slice V8 landed as a bounded presentation-only legibility pass (clearer inspector/debug labels and scan-friendly row wording; behavior unchanged).
 
 
 ## What changed in this commit
-- Refined viewer presentation text in the inspector, HUD, and control bar for calmer human-readable labels without changing viewer runtime/control behavior.
-- Improved selected-entity and event-trace line formatting with consistent separators and explicit section headings to improve scanability.
-- Updated viewer CLI tests to lock new label/format wording and preserve deterministic, read-only filtering behavior.
+- Fixed a V7 regression in viewer topology gating so canonical campaign hex topologies (including legacy/custom campaign hex forms) route to normal overworld hex projection/rendering instead of being disabled.
+- Preserved deterministic safe-disable behavior and stable diagnostic text for truly unsupported/unknown viewer topologies.
+- Added focused viewer CLI regression coverage for campaign hex topology support while keeping unsupported-topology behavior locked.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
