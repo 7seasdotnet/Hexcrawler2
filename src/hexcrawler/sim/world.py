@@ -1399,6 +1399,46 @@ class SitePressureRecord:
         )
 
 
+@dataclass(frozen=True)
+class SitePressureSummary:
+    total_pressure: int
+    by_faction: dict[str, int]
+    by_pressure_type: dict[str, int]
+    dominant_faction_id: str | None
+    dominant_strength: int
+    record_count: int
+
+    @classmethod
+    def from_records(cls, records: list[SitePressureRecord]) -> "SitePressureSummary":
+        faction_totals: dict[str, int] = {}
+        pressure_type_totals: dict[str, int] = {}
+        total_pressure = 0
+        for record in records:
+            total_pressure += record.strength
+            faction_totals[record.faction_id] = faction_totals.get(record.faction_id, 0) + record.strength
+            pressure_type_totals[record.pressure_type] = pressure_type_totals.get(record.pressure_type, 0) + record.strength
+
+        by_faction = {faction_id: faction_totals[faction_id] for faction_id in sorted(faction_totals)}
+        by_pressure_type = {
+            pressure_type: pressure_type_totals[pressure_type] for pressure_type in sorted(pressure_type_totals)
+        }
+
+        dominant_faction_id: str | None = None
+        dominant_strength = 0
+        if by_faction:
+            dominant_faction_id = min(by_faction, key=lambda faction_id: (-by_faction[faction_id], faction_id))
+            dominant_strength = by_faction[dominant_faction_id]
+
+        return cls(
+            total_pressure=total_pressure,
+            by_faction=by_faction,
+            by_pressure_type=by_pressure_type,
+            dominant_faction_id=dominant_faction_id,
+            dominant_strength=dominant_strength,
+            record_count=len(records),
+        )
+
+
 @dataclass
 class SiteWorldState:
     owner_faction_id: str | None = None
@@ -1430,6 +1470,9 @@ class SiteWorldState:
         if len(normalized_markers) > MAX_SITE_CONDITION_MARKERS:
             normalized_markers = normalized_markers[-MAX_SITE_CONDITION_MARKERS:]
         self.condition_markers = normalized_markers
+
+    def get_pressure_summary(self) -> "SitePressureSummary":
+        return SitePressureSummary.from_records(self.pressure_records)
 
 
     def is_default(self) -> bool:
@@ -2111,6 +2154,11 @@ class WorldState:
             overflow = len(site_state.pressure_records) - MAX_SITE_PRESSURE_RECORDS
             del site_state.pressure_records[:overflow]
         return record
+
+    def get_site_pressure_summary(self, site_id: str) -> "SitePressureSummary":
+        if site_id not in self.sites:
+            raise ValueError(f"unknown site_id '{site_id}'")
+        return self.sites[site_id].site_state.get_pressure_summary()
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:
         signal_uid = str(record["signal_uid"])
