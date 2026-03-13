@@ -945,12 +945,54 @@ def test_debug_sites_rows_include_site_pressure_expression() -> None:
     rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
 
     assert any("site_id=pressure-site" in row for row in rows["sites"])
+    assert any("pressure_summary total=4 dominant=faction:ash dominant_strength=4 records=1" in row for row in rows["sites"])
     assert any("pressure_records=1 showing_recent=1" in row for row in rows["sites"])
     assert any(
         "pressure faction=faction:ash type=raid strength=4 tick=12 source=evt-12" in row
         for row in rows["sites"]
     )
 
+
+
+
+def test_debug_sites_pressure_summary_row_is_stable_for_empty_sites() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["empty-pressure-site"] = SiteRecord(
+        site_id="empty-pressure-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert any("site_id=empty-pressure-site" in row for row in rows["sites"])
+    assert any("pressure_summary total=0 dominant=none dominant_strength=0 records=0" in row for row in rows["sites"])
+
+
+def test_debug_sites_pressure_summary_row_uses_deterministic_dominance_tie_break() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["pressure-summary-site"] = SiteRecord(
+        site_id="pressure-summary-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            pressure_records=[
+                SitePressureRecord(faction_id="faction:zeta", pressure_type="claim", strength=3, tick=1),
+                SitePressureRecord(faction_id="faction:alpha", pressure_type="claim", strength=3, tick=2),
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert any("pressure_summary total=6 dominant=faction:alpha dominant_strength=3 records=2" in row for row in rows["sites"])
 
 def test_debug_sites_pressure_rows_use_deterministic_recent_tail_order() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
