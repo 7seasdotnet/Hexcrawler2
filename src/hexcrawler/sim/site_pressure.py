@@ -2,11 +2,126 @@ from __future__ import annotations
 
 from typing import Any
 
+from hexcrawler.sim.encounters import CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE
 from hexcrawler.sim.core import SimEvent, Simulation
 from hexcrawler.sim.rules import RuleModule
 
 SITE_PRESSURE_APPLY_EVENT_TYPE = "site_pressure_apply"
 SITE_PRESSURE_OUTCOME_EVENT_TYPE = "site_pressure_outcome"
+SITE_PRESSURE_BRIDGE_OUTCOME_EVENT_TYPE = "site_pressure_bridge_outcome"
+
+MAX_SITE_PRESSURE_BRIDGE_LEDGER = 512
+
+
+class SitePressureBridgeModule(RuleModule):
+    """Minimal deterministic bridge from explicit site claim events into site pressure."""
+
+    name = "site_pressure_bridge"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE:
+            return
+
+        state = self._rules_state(sim)
+        processed = set(state["processed_source_event_ids"])
+        if event.event_id in processed:
+            self._schedule_bridge_outcome(
+                sim,
+                tick=event.tick,
+                source_event_id=event.event_id,
+                outcome="skipped_duplicate",
+                details={},
+            )
+            return
+
+        site_id = self._site_id_from_site_key(event.params.get("site_key"))
+        group_id = self._optional_non_empty_string(event.params.get("group_id"))
+        if site_id is None or group_id is None:
+            self._schedule_bridge_outcome(
+                sim,
+                tick=event.tick,
+                source_event_id=event.event_id,
+                outcome="skipped_invalid_context",
+                details={
+                    "site_id": site_id,
+                    "group_id": group_id,
+                },
+            )
+            return
+
+        processed.add(event.event_id)
+        ordered = sorted(processed)
+        if len(ordered) > MAX_SITE_PRESSURE_BRIDGE_LEDGER:
+            ordered = ordered[-MAX_SITE_PRESSURE_BRIDGE_LEDGER:]
+        sim.set_rules_state(self.name, {"processed_source_event_ids": ordered})
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=SITE_PRESSURE_APPLY_EVENT_TYPE,
+            params={
+                "site_id": site_id,
+                "faction_id": f"group:{group_id}",
+                "pressure_type": "claim_activity",
+                "strength": 1,
+                "source_event_id": event.event_id,
+                "tick": event.tick,
+            },
+        )
+        self._schedule_bridge_outcome(
+            sim,
+            tick=event.tick,
+            source_event_id=event.event_id,
+            outcome="emitted",
+            details={"site_id": site_id, "faction_id": f"group:{group_id}"},
+        )
+
+    def _rules_state(self, sim: Simulation) -> dict[str, Any]:
+        state = sim.get_rules_state(self.name)
+        raw = state.get("processed_source_event_ids", [])
+        if not isinstance(raw, list):
+            raise ValueError("site_pressure_bridge.processed_source_event_ids must be a list")
+        normalized = sorted({str(item) for item in raw if isinstance(item, str) and item})
+        if len(normalized) > MAX_SITE_PRESSURE_BRIDGE_LEDGER:
+            normalized = normalized[-MAX_SITE_PRESSURE_BRIDGE_LEDGER:]
+        state["processed_source_event_ids"] = normalized
+        sim.set_rules_state(self.name, state)
+        return state
+
+    def _schedule_bridge_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        source_event_id: str,
+        outcome: str,
+        details: dict[str, Any],
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=SITE_PRESSURE_BRIDGE_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "source_event_id": source_event_id,
+                "outcome": outcome,
+                "details": dict(details),
+            },
+        )
+
+    @staticmethod
+    def _optional_non_empty_string(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        return stripped if stripped else None
+
+    def _site_id_from_site_key(self, value: Any) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        template_id = self._optional_non_empty_string(value.get("template_id"))
+        if template_id is None or not template_id.startswith("site:"):
+            return None
+        site_id = template_id[len("site:") :]
+        return site_id if site_id else None
 
 
 class SitePressureMutationModule(RuleModule):
