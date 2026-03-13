@@ -1905,6 +1905,15 @@ def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState, debug_
 def _site_debug_rows(site: Any) -> list[str]:
     rows = [f"site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}"]
     pressure_records = list(site.site_state.pressure_records)
+    pressure_summary = site.site_state.get_pressure_summary()
+    dominant_faction_id = pressure_summary.dominant_faction_id if pressure_summary.dominant_faction_id is not None else "none"
+    rows.append(
+        "pressure_summary "
+        f"total={pressure_summary.total_pressure} "
+        f"dominant={dominant_faction_id} "
+        f"dominant_strength={pressure_summary.dominant_strength} "
+        f"records={pressure_summary.record_count}"
+    )
     pressure_count = len(pressure_records)
     if pressure_count <= 0:
         return rows
