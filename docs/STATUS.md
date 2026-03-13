@@ -1,18 +1,19 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Site World-State Pressure Mutation Slice A2 (implemented).
-- **Next action:** Substrate Hardening — Site World-State Mutation Slice A3 (additional deterministic mutation seams only; still no gameplay behaviors).
-- **Phase status:** ✅ Slice A2 landed with deterministic event-driven site-pressure mutation + forensic outcomes through a dedicated campaign-role rule-module seam (no gameplay semantics added).
+- **Current phase:** Substrate Hardening — Site World-State Expression Slice A3 (implemented, read-only observability only).
+- **Next action:** Substrate Hardening — Site World-State Expression Slice A4 (extend observability surfaces while remaining mutation-free and policy-free).
+- **Phase status:** ✅ Slice A3 landed with deterministic, bounded, read-only viewer/debug expression of existing site pressure records (no new mutation rules or gameplay semantics).
 
 
 ## What changed in this commit
-- Added `SitePressureMutationModule` with deterministic event seam `site_pressure_apply` (campaign role) that validates payloads and mutates `SiteRecord.site_state.pressure_records` only via `WorldState.add_site_pressure(...)`.
-- Added deterministic forensic event emission `site_pressure_outcome` with bounded outcomes (`applied`, `unknown_site`, `invalid_strength`, `invalid_payload`) and zero-mutation rejection behavior.
-- Added focused A2 tests covering valid mutation, rejection paths, stable ordering/FIFO, and save-load/replay/hash stability for the new seam.
+- Added a minimal read-only site-pressure expression path in the viewer debug `sites` section: per-site `pressure_records` count plus compact recent pressure rows (`faction_id`, `pressure_type`, `strength`, `tick`, `source_event_id`).
+- Kept output deterministic and bounded via a fixed recent-tail cap for displayed pressure rows; no mutation path or policy logic was introduced.
+- Added focused viewer tests for pressure row presence, deterministic bounded ordering/truncation, and hash-stable non-mutation behavior from inspection calls.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
+  - The debug `sites` section now also exposes read-only site pressure summaries for operator inspection with deterministic bounded recent rows.
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records and append-only mutation helper (`WorldState.add_site_pressure`) for future campaign-role consequence systems.

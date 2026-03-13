@@ -81,6 +81,7 @@ ENCOUNTER_DEBUG_ENTITY_LIMIT = 20
 ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 SUPPLY_DEBUG_OUTCOME_LIMIT = 20
 SITE_ENTER_DEBUG_OUTCOME_LIMIT = 20
+SITE_PRESSURE_DEBUG_ROW_LIMIT = 5
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 PANEL_SECTION_ENTRY_LIMIT = 30
 SELECTED_ENTITY_TRACE_LIMIT = 12
@@ -1881,7 +1882,7 @@ def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState, debug_
         if sim.state.world.spaces.get(player.space_id) is None or sim.state.world.spaces[player.space_id].topology_type == OVERWORLD_HEX_TOPOLOGY:
             coord = player.hex_coord.to_dict()
         for site in sim.state.world.get_sites_at_location({"space_id": player.space_id, "coord": coord}):
-            site_rows.append(f"site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}")
+            site_rows.extend(_site_debug_rows(site))
 
     entity_rows = _section_entries([
         (
@@ -1899,6 +1900,23 @@ def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState, debug_
         "sites": _section_entries(site_rows),
         "entities": entity_rows,
     }
+
+
+def _site_debug_rows(site: Any) -> list[str]:
+    rows = [f"site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}"]
+    pressure_records = list(site.site_state.pressure_records)
+    pressure_count = len(pressure_records)
+    if pressure_count <= 0:
+        return rows
+    recent_records = pressure_records[-SITE_PRESSURE_DEBUG_ROW_LIMIT:]
+    rows.append(f"pressure_records={pressure_count} showing_recent={len(recent_records)}")
+    for record in recent_records:
+        source_event_id = record.source_event_id if record.source_event_id is not None else "-"
+        rows.append(
+            f"pressure faction={record.faction_id} type={record.pressure_type} "
+            f"strength={record.strength} tick={record.tick} source={source_event_id}"
+        )
+    return rows
 
 
 def _draw_encounter_debug_panel(
