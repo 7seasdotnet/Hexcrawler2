@@ -51,7 +51,7 @@ from hexcrawler.sim.encounters import (
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
-from hexcrawler.sim.world import HexCoord, LOCAL_SPACE_ROLE, RumorRecord, SiteRecord, SpaceState
+from hexcrawler.sim.world import HexCoord, LOCAL_SPACE_ROLE, RumorRecord, SitePressureRecord, SiteRecord, SiteWorldState, SpaceState
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -918,6 +918,92 @@ def test_debug_filter_render_rows_are_bounded_and_stable() -> None:
     assert len(rows["encounters"]) <= 30
     assert any("action_uid=ctx-7" in row for row in rows["encounters"])
     assert all("action_uid=ctx-8" not in row for row in rows["encounters"])
+
+
+def test_debug_sites_rows_include_site_pressure_expression() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["pressure-site"] = SiteRecord(
+        site_id="pressure-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            pressure_records=[
+                SitePressureRecord(
+                    faction_id="faction:ash",
+                    pressure_type="raid",
+                    strength=4,
+                    tick=12,
+                    source_event_id="evt-12",
+                )
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert any("site_id=pressure-site" in row for row in rows["sites"])
+    assert any("pressure_records=1 showing_recent=1" in row for row in rows["sites"])
+    assert any(
+        "pressure faction=faction:ash type=raid strength=4 tick=12 source=evt-12" in row
+        for row in rows["sites"]
+    )
+
+
+def test_debug_sites_pressure_rows_use_deterministic_recent_tail_order() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["pressure-order-site"] = SiteRecord(
+        site_id="pressure-order-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            pressure_records=[
+                SitePressureRecord(faction_id=f"faction:{i}", pressure_type="claim", strength=i, tick=i)
+                for i in range(7)
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+    pressure_rows = [row for row in rows["sites"] if "pressure faction=" in row]
+
+    assert any("pressure_records=7 showing_recent=5" in row for row in rows["sites"])
+    assert pressure_rows == [
+        "pressure faction=faction:6 type=claim strength=6 tick=6 source=-",
+        "pressure faction=faction:5 type=claim strength=5 tick=5 source=-",
+        "pressure faction=faction:4 type=claim strength=4 tick=4 source=-",
+        "pressure faction=faction:3 type=claim strength=3 tick=3 source=-",
+        "pressure faction=faction:2 type=claim strength=2 tick=2 source=-",
+    ]
+
+
+def test_debug_sites_pressure_expression_does_not_mutate_simulation() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["pressure-safe-site"] = SiteRecord(
+        site_id="pressure-safe-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            pressure_records=[
+                SitePressureRecord(faction_id="faction:red", pressure_type="threat", strength=2, tick=8)
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+    sim_hash_before = simulation_hash(sim)
+    world_hash_before = world_hash(sim.state.world)
+
+    _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert simulation_hash(sim) == sim_hash_before
+    assert world_hash(sim.state.world) == world_hash_before
 
 
 def test_debug_selected_context_filter_is_key_scoped_not_cross_field() -> None:
