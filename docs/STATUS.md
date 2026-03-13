@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Site World-State Expression Slice A3 (implemented, read-only observability only).
-- **Next action:** Substrate Hardening — Site World-State Expression Slice A4 (extend observability surfaces while remaining mutation-free and policy-free).
-- **Phase status:** ✅ Slice A3 landed with deterministic, bounded, read-only viewer/debug expression of existing site pressure records (no new mutation rules or gameplay semantics).
+- **Current phase:** Substrate Hardening — Site World-State Pressure Producers Slice A4 (implemented, minimal deterministic event bridge).
+- **Next action:** Substrate Hardening — Site World-State Pressure Producers Slice A5 (add one additional explicit event bridge only if it remains phase-safe and minimal).
+- **Phase status:** ✅ Slice A4 landed with a deterministic bridge from explicit serialized claim-consumption events into existing `site_pressure_apply` mutation seam; no strategic AI/policy expansion.
 
 
 ## What changed in this commit
-- Added a minimal read-only site-pressure expression path in the viewer debug `sites` section: per-site `pressure_records` count plus compact recent pressure rows (`faction_id`, `pressure_type`, `strength`, `tick`, `source_event_id`).
-- Kept output deterministic and bounded via a fixed recent-tail cap for displayed pressure rows; no mutation path or policy logic was introduced.
-- Added focused viewer tests for pressure row presence, deterministic bounded ordering/truncation, and hash-stable non-mutation behavior from inspection calls.
+- Added `SitePressureBridgeModule`, a narrow deterministic bridge that consumes existing `claim_opportunity_consumed` events and emits `site_pressure_apply` with a fixed mapping (`pressure_type="claim_activity"`, `strength=1`, `faction_id="group:<group_id>"`).
+- Added serialized, bounded idempotence ledger state for bridge source event IDs to prevent duplicate bridge emission across replay/restart boundaries without hidden module memory.
+- Added focused A4 tests for emission, invalid-context skip atomicity, idempotence ledger behavior, same-tick ordering stability, and save/load hash stability.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -117,6 +117,7 @@
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/sim/encounters.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_layout.py`
+- `PYTHONPATH=src pytest -q tests/test_site_pressure_bridge_a4.py`
 - `PYTHONPATH=src pytest -q`
 
 ## Progress
@@ -203,6 +204,7 @@
 ## Current Verification Commands
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
+- `PYTHONPATH=src pytest -q tests/test_site_pressure_bridge_a4.py`
 - `PYTHONPATH=src pytest -q`
 - `python -m pip install -r requirements.txt`
 - `python play.py [--seed N] [--load-save PATH] [--map-path PATH] [--headless]  # canonical launch`
@@ -231,6 +233,7 @@
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice5b.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice5c.py`
 - `PYTHONPATH=src pytest -q tests/test_diegetic_intelligence_slice4d.py`
+- `PYTHONPATH=src pytest -q tests/test_site_pressure_bridge_a4.py`
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_group_movement_m13.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
