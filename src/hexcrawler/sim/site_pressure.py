@@ -9,6 +9,10 @@ from hexcrawler.sim.rules import RuleModule
 SITE_PRESSURE_APPLY_EVENT_TYPE = "site_pressure_apply"
 SITE_PRESSURE_OUTCOME_EVENT_TYPE = "site_pressure_outcome"
 SITE_PRESSURE_BRIDGE_OUTCOME_EVENT_TYPE = "site_pressure_bridge_outcome"
+SITE_PRESSURE_SUMMARY_CHECK_EVENT_TYPE = "site_pressure_summary_check"
+SITE_PRESSURE_SUMMARY_OUTCOME_EVENT_TYPE = "site_pressure_summary_outcome"
+
+SITE_PRESSURE_SUMMARY_THRESHOLD = 5
 
 MAX_SITE_PRESSURE_BRIDGE_LEDGER = 512
 
@@ -234,3 +238,72 @@ class SitePressureMutationModule(RuleModule):
             return payload, "invalid_tick"
 
         return payload, None
+
+
+class SitePressureSummaryConsumerModule(RuleModule):
+    """Deterministic downstream seam that evaluates a single-site pressure summary on explicit checks."""
+
+    name = "site_pressure_summary_consumer"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != SITE_PRESSURE_SUMMARY_CHECK_EVENT_TYPE:
+            return
+
+        site_id = event.params.get("site_id")
+        if not isinstance(site_id, str) or not site_id:
+            self._schedule_outcome(
+                sim,
+                tick=event.tick,
+                source_event_id=event.event_id,
+                status="invalid_site_id",
+                summary={},
+            )
+            return
+
+        if site_id not in sim.state.world.sites:
+            self._schedule_outcome(
+                sim,
+                tick=event.tick,
+                source_event_id=event.event_id,
+                status="unknown_site",
+                summary={"site_id": site_id},
+            )
+            return
+
+        summary = sim.state.world.get_site_pressure_summary(site_id)
+        status = "threshold_met" if summary.total_pressure >= SITE_PRESSURE_SUMMARY_THRESHOLD else "below_threshold"
+
+        self._schedule_outcome(
+            sim,
+            tick=event.tick,
+            source_event_id=event.event_id,
+            status=status,
+            summary={
+                "site_id": site_id,
+                "threshold": SITE_PRESSURE_SUMMARY_THRESHOLD,
+                "total_pressure": summary.total_pressure,
+                "dominant_faction_id": summary.dominant_faction_id,
+                "dominant_strength": summary.dominant_strength,
+                "record_count": summary.record_count,
+            },
+        )
+
+    def _schedule_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        source_event_id: str,
+        status: str,
+        summary: dict[str, Any],
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=SITE_PRESSURE_SUMMARY_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "source_event_id": source_event_id,
+                "status": status,
+                "summary": dict(summary),
+            },
+        )

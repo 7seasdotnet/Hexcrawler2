@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Site Pressure Interpretation / Aggregation Slice A6 (implemented, deterministic read-only summary expression seam).
-- **Next action:** Substrate Hardening — Site Pressure follow-on slice (TBD), still no ownership/strategy policy.
-- **Phase status:** ✅ Slice A6 landed with deterministic, read-only site pressure summary expression in the existing debug site inspector; no ownership, diplomacy, claim resolution, pressure decay, or autonomous strategy behavior added.
+- **Current phase:** Substrate Hardening — Site Pressure Summary Consumer Slice A7 (implemented, deterministic explicit-trigger downstream forensic seam).
+- **Next action:** Substrate Hardening — Site Pressure follow-on slice (TBD), still no ownership/strategy policy and no autonomous strategic behaviors.
+- **Phase status:** ✅ Slice A7 landed with an explicit, deterministic `site_pressure_summary_check` consumer that emits bounded `site_pressure_summary_outcome` forensic events; no ownership, diplomacy, claim resolution, pressure decay, or autonomous strategy behavior added.
 
 
 ## What changed in this commit
-- Extended existing debug-site pressure rows to include a compact deterministic summary line (`total`, `dominant`, `dominant_strength`, `records`) derived from the existing `SiteWorldState.get_pressure_summary()` API.
-- Added focused viewer CLI tests that verify summary-row rendering for non-empty and empty/default site pressure states, plus deterministic dominant-faction tie-break expression.
-- Preserved read-only behavior: summary expression remains non-mutating and hash-stable while keeping prior bounded recent-record rows unchanged.
+- Added a tiny explicit-trigger downstream consumer seam (`SitePressureSummaryConsumerModule`) that handles `site_pressure_summary_check` and emits deterministic bounded `site_pressure_summary_outcome` events only.
+- Added focused A7 tests for threshold-met / below-threshold outcomes, deterministic dominant-faction tie-break passthrough, invalid-context forensic handling, and save/load + replay/hash stability.
+- Kept scope narrow and forensic-only: no ownership mutation, no strategic behaviors, no global site scanning, and no pressure decay policy.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -194,6 +194,10 @@
 - `hexcrawler.sim.site_pressure.SITE_PRESSURE_APPLY_EVENT_TYPE`
 - `hexcrawler.sim.site_pressure.SITE_PRESSURE_OUTCOME_EVENT_TYPE`
 - `hexcrawler.sim.site_pressure.SitePressureMutationModule`
+- `hexcrawler.sim.site_pressure.SITE_PRESSURE_SUMMARY_CHECK_EVENT_TYPE`
+- `hexcrawler.sim.site_pressure.SITE_PRESSURE_SUMMARY_OUTCOME_EVENT_TYPE`
+- `hexcrawler.sim.site_pressure.SITE_PRESSURE_SUMMARY_THRESHOLD`
+- `hexcrawler.sim.site_pressure.SitePressureSummaryConsumerModule`
 
 ## Out of Scope Kept
 - No towns/markets/prices/economy systems in this phase.
