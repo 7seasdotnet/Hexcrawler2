@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Site World-State Pressure Producers Slice A4 (implemented, minimal deterministic event bridge).
-- **Next action:** Substrate Hardening — Site World-State Pressure Producers Slice A5 (add one additional explicit event bridge only if it remains phase-safe and minimal).
-- **Phase status:** ✅ Slice A4 landed with a deterministic bridge from explicit serialized claim-consumption events into existing `site_pressure_apply` mutation seam; no strategic AI/policy expansion.
+- **Current phase:** Substrate Hardening — Site Pressure Interpretation / Aggregation Slice A5 (implemented, deterministic read-only interpretation seam).
+- **Next action:** Substrate Hardening — Site Pressure Interpretation / Aggregation Slice A6 (TBD follow-on seam, still no ownership/strategy policy).
+- **Phase status:** ✅ Slice A5 landed with deterministic, read-only pressure aggregation over existing bounded site pressure history; no ownership, diplomacy, claim resolution, or autonomous strategy behavior added.
 
 
 ## What changed in this commit
-- Added `SitePressureBridgeModule`, a narrow deterministic bridge that consumes existing `claim_opportunity_consumed` events and emits `site_pressure_apply` with a fixed mapping (`pressure_type="claim_activity"`, `strength=1`, `faction_id="group:<group_id>"`).
-- Added serialized, bounded idempotence ledger state for bridge source event IDs to prevent duplicate bridge emission across replay/restart boundaries without hidden module memory.
-- Added focused A4 tests for emission, invalid-context skip atomicity, idempotence ledger behavior, same-tick ordering stability, and save/load hash stability.
+- Added a deterministic read-only pressure interpretation seam via `SiteWorldState.get_pressure_summary()` and `WorldState.get_site_pressure_summary(site_id)`.
+- Added `SitePressureSummary` aggregation with stable grouped output (`by_faction`, `by_pressure_type`), total/record counts, and an explicit deterministic dominant-faction tie-break (highest strength, lexical `faction_id` tie-break).
+- Added focused A5 tests for empty defaults, aggregation correctness, deterministic tie-breaks, save/load summary stability, and non-mutation/hash safety.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -17,6 +17,7 @@
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records and append-only mutation helper (`WorldState.add_site_pressure`) for future campaign-role consequence systems.
+  - Deterministic read-only site pressure interpretation seam (`SitePressureSummary`, `SiteWorldState.get_pressure_summary`, `WorldState.get_site_pressure_summary`) that aggregates existing pressure history without introducing ownership or policy.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Same-tick event execution now drains-until-empty for tick `T` (including events scheduled during `T`) with deterministic FIFO behavior and a hard deterministic guard for runaway self-rescheduling.
   - Deterministic bounded execution trace substrate (`SimulationState.event_trace`) for executed events only, serialized in canonical saves and included in `simulation_hash`.
@@ -117,6 +118,7 @@
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/sim/encounters.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_layout.py`
+- `PYTHONPATH=src pytest -q tests/test_site_pressure_interpretation_a5.py`
 - `PYTHONPATH=src pytest -q tests/test_site_pressure_bridge_a4.py`
 - `PYTHONPATH=src pytest -q`
 
@@ -204,6 +206,7 @@
 ## Current Verification Commands
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
+- `PYTHONPATH=src pytest -q tests/test_site_pressure_interpretation_a5.py`
 - `PYTHONPATH=src pytest -q tests/test_site_pressure_bridge_a4.py`
 - `PYTHONPATH=src pytest -q`
 - `python -m pip install -r requirements.txt`
