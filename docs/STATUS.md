@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Interpretation Slice B5 (deterministic read-only aggregation over existing site evidence history).
-- **Next action:** Substrate Hardening — additional narrow evidence bridge slices and future read-only consumers of evidence summaries (still substrate-only; no rumor/investigation/faction policy semantics).
-- **Phase status:** ✅ Slice B5 landed with deterministic read-only `SiteEvidenceSummary` aggregation (`total_strength`, grouped totals, dominant type tie-break, record count) derived strictly from serialized `evidence_records`.
+- **Current phase:** Substrate Hardening — Observability Doctrine Documentation Slice (documentation-only guardrail formalization; no simulation logic mutation).
+- **Next action:** Resume substrate hardening with narrow deterministic seams while enforcing Observability Doctrine merge-gate checks for new systems.
+- **Phase status:** ✅ Observability Doctrine formalized as a core architecture guardrail across architecture and contributor instructions.
 
 
 ## What changed in this commit
-- Added deterministic read-only site evidence interpretation seam (`SiteEvidenceSummary`, `SiteWorldState.get_evidence_summary`, `WorldState.get_site_evidence_summary`) over existing bounded `evidence_records`.
-- Added focused Slice B5 tests for empty defaults, by-type and by-faction aggregation, dominant evidence-type lexical tie-break, save/load stability, and hash/non-mutation guarantees.
-- Updated STATUS phase/verification details for Slice B5.
+- Formalized a new `Observability Doctrine` in `docs/ARCHITECTURE.md` as a core architectural guardrail with explicit principles for mutation transparency, inspectability, bounded inspection, and AI-assisted auditability.
+- Added an `Observability Implementation Checklist` to require serialized/bounded state, explicit seams, read-only inspection, legible deterministic outputs, and deterministic test verification before merge.
+- Updated `AGENTS.md` and `docs/STATUS.md` so observability is treated as a merge gate for all new systems.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.

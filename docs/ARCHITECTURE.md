@@ -75,6 +75,71 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Simulation stores an ordered input log (`tick`, `entity_id`, `command_type`, `params`), applies every command scheduled for tick `T` before entity updates on tick `T`, and preserves insertion order for commands with the same tick.
 - **Contract:** Replay runs consume the same command log through the same simulation path (no alternate gameplay logic path for replay).
 
+## 4A) Observability Doctrine
+Observability is a core architectural requirement, not optional polish. The deterministic simulation substrate must remain inspectable, testable, and auditable as systems evolve, including AI-assisted implementation work.
+
+### A) Mutation Transparency
+- All meaningful state mutation must occur through explicit seams (events, commands, or deterministic mutation helpers).
+- Canonical mutation flow:
+
+  `event -> deterministic validation -> bounded mutation -> optional forensic outcome`
+
+- Hidden mutation paths are forbidden.
+
+### B) Persistent Inspectability
+- Persistent world state must be inspectable through structured inspection surfaces (viewer debug rows, replay tools, deterministic summaries).
+- Persistent state must be:
+  - serialized,
+  - bounded,
+  - deterministically ordered.
+
+### C) Read-Only Inspection Surfaces
+- Inspection tools must never mutate simulation state.
+- The viewer/debug/replay contract is:
+
+  `inspection must be read-only`
+
+### D) Legible Inspection Output
+- Inspection output must prioritize human comprehension.
+- Inspection surfaces should favor:
+  - stable field ordering,
+  - clear labels,
+  - compact summaries,
+  - deterministic formatting.
+
+### E) Bounded Observability
+- Inspection must remain bounded in scope and cost.
+- Required rules:
+  - no unbounded logs,
+  - no unbounded history rendering,
+  - deterministic truncation of long histories,
+  - bounded record containers.
+
+### F) Low Observability Cost
+- Inspection must not degrade simulation performance.
+- Avoid:
+  - scanning entire world state every frame,
+  - expensive viewer-side aggregation,
+  - recomputation of large data sets for display.
+
+### G) AI-Assisted Development Safeguard
+- Because this project uses AI-assisted coding workflows, new systems must remain inspectable so human developers can verify behavior.
+- AI-generated systems must:
+  - expose deterministic state,
+  - provide inspection surfaces,
+  - emit forensic outcomes where appropriate.
+- If a system cannot be inspected deterministically, it should not be merged.
+
+### Observability Implementation Checklist
+Before landing a new system, confirm:
+- persistent state is serialized and bounded,
+- mutation seams are explicit,
+- deterministic outcomes exist where appropriate,
+- a read-only inspection surface exists,
+- inspection output is legible,
+- inspection cost is bounded,
+- deterministic tests verify behavior.
+
 
 ## 5) Event Queue Substrate Contract
 - **Contract:** Simulation owns a deterministic event queue substrate with serialized `SimEvent` records (`tick`, `event_id`, `event_type`, `params`, `unknown_fields`).
