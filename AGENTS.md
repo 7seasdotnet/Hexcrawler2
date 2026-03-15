@@ -4,7 +4,7 @@
 Build a lightweight, deterministic, modular Hexcrawl Simulation Engine with an integrated in-game editor, designed for OSR lethality, persistence, and systemic emergence. The engine must support “Hotline OSR syncretism” (real-time brutality + OSR consequences) where **information > reflexes**, enforced by tick-based **accounting** under the hood.
 
 ## Product Pillars (non-negotiable)
-1) **Hexcrawl-first**: the hex grid is a native data structure and the world state is keyed to hex coordinates.
+1) **Hexcrawl-first**: hexes are first-class for authoring, editor usability, map organization/indexing, content placement, and player-facing campaign presentation. Campaign-role simulation location is continuous; hex membership is derived from continuous position at that layer.
 2) **Persistent world**: NPCs/factions/entities tick forward whether the player is present or not.
 3) **Deterministic simulation**: seeded RNG; deterministic tick loop; stable replays of the same seed + inputs.
 4) **OSR consequence**: no HP bloat, no rubber-banding, no level-scaling; lethality and scarcity are core.
@@ -70,6 +70,7 @@ Goal: content expansion becomes data entry + balance, not new code.
 ## Architecture Discipline Guardrail (Campaign Plane)
 - Contributors must not introduce mechanics that assume hex-step movement or turn-based cadence at the campaign layer.
 - Hex membership is a derived index, not the canonical location.
+- Campaign-role movement, pursuit, escape, travel timing, and road/terrain effects must be modeled on continuous position/time, not on hex-boundary stepping cadence.
 - Any new system that depends on hex adjacency as the fundamental spatial metric must be justified in `docs/ARCHITECTURE.md` before implementation.
 
 - Any PR that introduces top-down-only assumptions, screen-space logic in simulation, or projection-coupled combat semantics must be rejected unless `docs/ARCHITECTURE.md` is updated first with a justified contract change.
