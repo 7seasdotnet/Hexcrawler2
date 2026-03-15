@@ -1440,6 +1440,50 @@ class SitePressureSummary:
         )
 
 
+@dataclass(frozen=True)
+class SiteEvidenceSummary:
+    total_strength: int
+    by_evidence_type: dict[str, int]
+    by_faction: dict[str, int]
+    dominant_evidence_type: str | None
+    dominant_strength: int
+    record_count: int
+
+    @classmethod
+    def from_records(cls, records: list["EvidenceRecord"]) -> "SiteEvidenceSummary":
+        evidence_type_totals: dict[str, int] = {}
+        faction_totals: dict[str, int] = {}
+        total_strength = 0
+        for record in records:
+            total_strength += record.strength
+            evidence_type_totals[record.evidence_type] = evidence_type_totals.get(record.evidence_type, 0) + record.strength
+            if record.faction_id is not None:
+                faction_totals[record.faction_id] = faction_totals.get(record.faction_id, 0) + record.strength
+
+        by_evidence_type = {
+            evidence_type: evidence_type_totals[evidence_type] for evidence_type in sorted(evidence_type_totals)
+        }
+        by_faction = {faction_id: faction_totals[faction_id] for faction_id in sorted(faction_totals)}
+
+        dominant_evidence_type: str | None = None
+        dominant_strength = 0
+        if by_evidence_type:
+            dominant_evidence_type = min(
+                by_evidence_type,
+                key=lambda evidence_type: (-by_evidence_type[evidence_type], evidence_type),
+            )
+            dominant_strength = by_evidence_type[dominant_evidence_type]
+
+        return cls(
+            total_strength=total_strength,
+            by_evidence_type=by_evidence_type,
+            by_faction=by_faction,
+            dominant_evidence_type=dominant_evidence_type,
+            dominant_strength=dominant_strength,
+            record_count=len(records),
+        )
+
+
 @dataclass
 class SiteWorldState:
     owner_faction_id: str | None = None
@@ -1483,6 +1527,9 @@ class SiteWorldState:
 
     def get_pressure_summary(self) -> "SitePressureSummary":
         return SitePressureSummary.from_records(self.pressure_records)
+
+    def get_evidence_summary(self) -> "SiteEvidenceSummary":
+        return SiteEvidenceSummary.from_records(self.evidence_records)
 
 
     def is_default(self) -> bool:
@@ -2222,6 +2269,11 @@ class WorldState:
         if site_id not in self.sites:
             raise ValueError(f"unknown site_id '{site_id}'")
         return self.sites[site_id].site_state.get_pressure_summary()
+
+    def get_site_evidence_summary(self, site_id: str) -> "SiteEvidenceSummary":
+        if site_id not in self.sites:
+            raise ValueError(f"unknown site_id '{site_id}'")
+        return self.sites[site_id].site_state.get_evidence_summary()
 
     def add_site_evidence(
         self,
