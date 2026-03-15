@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Mutation Seam Slice B2 (implemented deterministic event-driven append seam into site evidence substrate).
+- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Expression Slice B3 (implemented deterministic read-only evidence expression in existing viewer debug site inspection rows).
 - **Next action:** Substrate Hardening — downstream evidence producer/consumer slices (still substrate-only; no rumor/investigation/faction policy semantics).
-- **Phase status:** ✅ Slice B2 landed with deterministic `site_evidence_apply` → `WorldState.add_site_evidence(...)` mutation handling and concise forensic `site_evidence_outcome` events (`applied`, `unknown_site`, `invalid_strength`, `invalid_payload`).
+- **Phase status:** ✅ Slice B3 landed with bounded deterministic viewer-site evidence rows (read-only expression only; no new mutation or policy logic).
 
 
 ## What changed in this commit
-- Added a dedicated deterministic evidence mutation rule module (`SiteEvidenceMutationModule`) that consumes `site_evidence_apply`, validates JSON-safe payload fields, mutates only through `WorldState.add_site_evidence(...)`, and emits forensic `site_evidence_outcome` events.
-- Added focused B2 tests covering valid apply mutation, deterministic rejections, stable ordering, FIFO eviction through the event seam, and save/load + replay/hash stability.
-- Updated verification commands for B2 seam coverage and retained full-suite verification guidance.
+- Added compact read-only evidence expression to existing viewer debug `sites` rows, showing bounded recent site evidence entries (`type`, `strength`, `tick`, optional `faction`, optional `source`) in deterministic order.
+- Added focused viewer CLI tests for evidence row presence, deterministic bounded recent-tail ordering/truncation, and hash-stability/non-mutation of the inspection path.
+- Updated status/verification guidance for Slice B3 expression coverage.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
