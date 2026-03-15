@@ -2,14 +2,21 @@
 
 ## Phase
 - **Current phase:** Substrate Hardening — Observability Doctrine Documentation Slice (documentation-only guardrail formalization; no simulation logic mutation).
-- **Next action:** Execute A1 near-term product target lock in implementation planning: prioritize player-visible campaign→local playable loop work over additional substrate expansion unless directly required by that loop.
-- **Phase status:** ✅ Observability Doctrine remains a merge gate, now paired with an explicit near-term playable product-target direction lock.
+- **Next action:** Resume A1 implementation planning/execution under clarified A2 wording: keep campaign-role simulation continuous while retaining hexcrawl-first editor/map organization contracts.
+- **Phase status:** ✅ Observability Doctrine remains a merge gate, with A1 near-term product-target direction lock and explicit A2 hex/continuous wording clarification in core docs.
 
 
 ## What changed in this commit
-- Added an A1 near-term product target lock in `docs/VISION.md` so the immediate slice is explicit: continuous campaign traversal/contact, campaign→local transition, brutal local combat, and persistent wound/extraction/return pressure.
-- Added AI work-prioritization guidance in `AGENTS.md` directing current implementation toward the near-term playable loop before further substrate expansion unless directly required.
-- Updated `docs/STATUS.md` to document this direction lock while preserving existing deterministic/observability architecture guardrails.
+- Clarified `docs/ARCHITECTURE.md` contracts so campaign-role motion/travel timing remain continuous-authoritative, and hex topology is explicitly framed as authoring/indexing/presentation scaffolding rather than campaign physics cadence.
+- Clarified `AGENTS.md` and `docs/VISION.md` wording so hexcrawl-first identity is preserved while making continuous campaign authority + derived hex membership hard to misread.
+- Updated `docs/STATUS.md` with this A2 documentation-only clarification pass and no simulation logic mutation.
+
+
+## Direction Clarification (A2 Hex/Continuous Wording Cleanup)
+- Campaign role remains an authoritative continuous 2D plane: movement, pursuit/escape, travel timing, roads, and terrain effects must not depend on hex-step movement.
+- Hexes remain first-class and intentional for authoring/editor workflows, campaign map indexing/presentation, and regional/content lookup/trigger scaffolding.
+- Campaign hex membership is derived from continuous position; hex coordinates are not the sole authoritative campaign movement/physics truth.
+- This clarification is documentation-only and preserves OSR/hexcrawl product identity, deterministic architecture constraints, and future multi-topology local-space flexibility.
 
 
 ## Direction Clarification (A1 Product Target Lock)

@@ -11,11 +11,13 @@ This document locks core engine contracts and invariants for the simulation subs
   - simulation tick counter,
   - simulation-owned RNG state.
 - **Contract:** Rendering/view state is never part of world state.
+- **Contract (campaign role):** continuous position/time is authoritative for campaign motion physics; hex membership is a derived indexing/view/content signal.
 
 ## 2) Topology Contract
 - **Contract:** Current overworld topology is bounded axial hex.
 - **Contract:** Bounds are enforced by valid-hex membership (`coord in world.hexes`), not by separate min/max clamps.
 - **Contract:** Generation helpers (for example: disk/rectangle) may be used to create topology, but persistence stores only the realized valid-cell set.
+- **Contract:** Overworld hex topology is an authoring/organization/presentation lattice and regional lookup scaffold; it does not make campaign movement cadence discrete.
 - **Contract:** Future dungeon spaces may use a different topology (for example: square grid) while sharing the same simulation clock and entity model.
 
 ## 2A) Space Roles: Campaign vs Local
@@ -35,6 +37,7 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Hex coordinates are **derived indices** used for content placement, editor tooling, spatial partitioning, cadence/event triggers, and player-facing map presentation.
 - **Contract:** Hexes are **not** the primary physics layer.
 - **Contract:** Movement, pursuit, and campaign interactions operate on continuous positions; hex membership is computed from position and is never the authoritative location of an entity.
+- **Contract:** Travel speed, roads, terrain effects, pursuit, escape, and travel timing must not be fundamentally defined as hex-step transitions.
 - **Contract:** Systems must not assume meaningful movement only occurs at hex boundaries.
 - **Rationale:** Hexes remain first-class for OSR hexcrawl content organization, editor usability, and marketing/aesthetic alignment with the hexcrawl genre, while simulation logic remains agnostic to the hex grid as a physics substrate.
 
