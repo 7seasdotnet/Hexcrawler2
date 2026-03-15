@@ -149,6 +149,16 @@ When asked to implement:
 - STATUS.md must list the currently supported action intent types (provisional; subject to rename/expansion later).
 
 
+
+## Observability Requirement
+- Observability is a merge gate, not optional polish.
+- When Codex or other AI tools implement new systems, they must:
+  - expose inspectable state,
+  - maintain deterministic mutation seams,
+  - add read-only inspection paths where appropriate,
+  - avoid introducing opaque behavior.
+- Systems that cannot be inspected deterministically must not be merged.
+
 ## UPDATED AND NEW INSTRUCTIONS
 - After every change that affects functionality, tests, run commands, file locations, or phase progress: update docs/STATUS.md in the same commit.
 
