@@ -1,22 +1,22 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Site Pressure Summary Consumer Slice A7 (implemented, deterministic explicit-trigger downstream forensic seam).
-- **Next action:** Substrate Hardening — Site Pressure follow-on slice (TBD), still no ownership/strategy policy and no autonomous strategic behaviors.
-- **Phase status:** ✅ Slice A7 landed with an explicit, deterministic `site_pressure_summary_check` consumer that emits bounded `site_pressure_summary_outcome` forensic events; no ownership, diplomacy, claim resolution, pressure decay, or autonomous strategy behavior added.
+- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Substrate Slice B1 (implemented, deterministic site-scoped evidence container + mutation seam).
+- **Next action:** Substrate Hardening — Evidence producers/consumers follow-on slices (TBD), still substrate-only (no rumor/investigation/faction behavior policy).
+- **Phase status:** ✅ Slice B1 landed with deterministic, bounded site-scoped `evidence_records` substrate and `WorldState.add_site_evidence(...)` mutation seam; no evidence producers, decay policy, rumor logic, investigation logic, or faction AI behavior added.
 
 
 ## What changed in this commit
-- Added a tiny explicit-trigger downstream consumer seam (`SitePressureSummaryConsumerModule`) that handles `site_pressure_summary_check` and emits deterministic bounded `site_pressure_summary_outcome` events only.
-- Added focused A7 tests for threshold-met / below-threshold outcomes, deterministic dominant-faction tie-break passthrough, invalid-context forensic handling, and save/load + replay/hash stability.
-- Kept scope narrow and forensic-only: no ownership mutation, no strategic behaviors, no global site scanning, and no pressure decay policy.
+- Added a deterministic, serialized `EvidenceRecord` substrate on `SiteWorldState` with bounded FIFO storage (`MAX_SITE_EVIDENCE_RECORDS`) and legacy-load defaulting.
+- Added deterministic append-only world mutation seam `WorldState.add_site_evidence(...)` (site-scoped, no producer/policy semantics).
+- Clarified test naming/scope: moved evidence substrate coverage to `tests/test_site_evidence_substrate_b1.py` and kept A1 pressure coverage in `tests/test_site_world_state_substrate_a1.py`.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
   - The debug `sites` section now also exposes read-only site pressure summaries for operator inspection with deterministic bounded recent rows.
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
-  - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records and append-only mutation helper (`WorldState.add_site_pressure`) for future campaign-role consequence systems.
+  - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records (`pressure_records`), bounded evidence/aftermath records (`evidence_records`), and append-only mutation helpers (`WorldState.add_site_pressure`, `WorldState.add_site_evidence`) for future campaign/local diegetic consequence systems.
   - Deterministic read-only site pressure interpretation seam (`SitePressureSummary`, `SiteWorldState.get_pressure_summary`, `WorldState.get_site_pressure_summary`) that aggregates existing pressure history without introducing ownership or policy.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Same-tick event execution now drains-until-empty for tick `T` (including events scheduled during `T`) with deterministic FIFO behavior and a hard deterministic guard for runaway self-rescheduling.
@@ -115,6 +115,8 @@
 - `sed -n '1,220p' docs/PROMPTLOG.md`
 
 ## Verification Commands (current)
+- `PYTHONPATH=src pytest -q tests/test_site_world_state_substrate_a1.py tests/test_site_evidence_substrate_b1.py`
+- `PYTHONPATH=src pytest -q`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/sim/encounters.py`
 - `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_layout.py`

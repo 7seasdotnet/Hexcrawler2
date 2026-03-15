@@ -5,7 +5,6 @@ from hexcrawler.sim.core import Simulation
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.world import MAX_SITE_PRESSURE_RECORDS, SiteRecord, WorldState
 
-
 def _world_with_site() -> WorldState:
     world = load_world_json("content/examples/basic_map.json")
     world.sites = {
@@ -17,7 +16,6 @@ def _world_with_site() -> WorldState:
         )
     }
     return world
-
 
 def test_site_state_initializes_for_legacy_site_payload() -> None:
     world = WorldState.from_dict(
@@ -39,7 +37,6 @@ def test_site_state_initializes_for_legacy_site_payload() -> None:
     assert site_state.owner_faction_id is None
     assert site_state.pressure_records == []
     assert site_state.condition_markers == []
-
 
 def test_add_site_pressure_appends_record() -> None:
     world = _world_with_site()
@@ -63,7 +60,6 @@ def test_add_site_pressure_appends_record() -> None:
         "tick": 12,
     }
 
-
 def test_add_site_pressure_fifo_eviction_is_deterministic() -> None:
     world = _world_with_site()
 
@@ -81,7 +77,6 @@ def test_add_site_pressure_fifo_eviction_is_deterministic() -> None:
     assert records[0].tick == 5
     assert records[-1].tick == MAX_SITE_PRESSURE_RECORDS + 4
 
-
 def test_site_state_save_load_and_hash_round_trip(tmp_path) -> None:
     world = _world_with_site()
     sim = Simulation(world=world, seed=101)
@@ -98,15 +93,3 @@ def test_site_state_save_load_and_hash_round_trip(tmp_path) -> None:
 
     assert payload_before["world_state"]["sites"] == payload_after["world_state"]["sites"]
     assert world_before == world_hash(loaded_world)
-
-
-def test_site_state_pressure_changes_simulation_hash_deterministically() -> None:
-    sim_a = Simulation(world=_world_with_site(), seed=33)
-    sim_b = Simulation(world=_world_with_site(), seed=33)
-
-    before = simulation_hash(sim_a)
-    sim_a.state.world.add_site_pressure("camp_01", "faction_red", "presence", 2, tick=7)
-    sim_b.state.world.add_site_pressure("camp_01", "faction_red", "presence", 2, tick=7)
-
-    assert simulation_hash(sim_a) != before
-    assert simulation_hash(sim_a) == simulation_hash(sim_b)
