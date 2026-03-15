@@ -106,6 +106,12 @@ If a proposed change conflicts with DIEGETIC_INTELLIGENCE.md, the document must 
 - If the current phase is domain-level, do not modify substrate contracts unless explicitly approved and documented.
 - If a requested feature exceeds the declared phase scope, stop and propose a scope clarification instead of expanding the implementation.
 
+## Near-Term Product Target Prioritization (A1)
+- Current AI-assisted implementation direction is to prioritize the near-term playable loop over additional substrate expansion unless a substrate change is directly required to ship that loop.
+- The near-term playable loop is: continuous campaign-role traversal on an authoritative continuous plane, visible danger/contact, transition into local-role encounter spaces, fast brutal high-consequence local combat, then extraction/return under persistent wound pressure.
+- "Mount and Blade" and "Hotline Miami" are directional shorthand only, not cloning instructions; OSR/hexcrawl identity and deterministic architecture constraints remain mandatory.
+- Long-term ambitions (ecology, diegetic intelligence depth, editor breadth, systemic world evolution, multiplayer-safe architecture) remain valid, but they must not displace immediate progress toward the playable slice.
+
 ## Output Discipline (how you work)
 When asked to implement:
 1) Propose a short plan and file-level change list.
@@ -181,4 +187,3 @@ If Codex fails to update STATUS.md, you reject the output.
 - Campaign-role spaces handle travel/time/logistics/encounter triggering and abstract outcomes.
 - Local-role spaces handle tactical movement and tactical combat resolution.
 - Tactical combat intents (`attack_intent`, `turn_intent`, and other tactical commands) are inadmissible in campaign-role spaces.
-
