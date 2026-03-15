@@ -33,6 +33,7 @@ MAX_CONTACTS_PER_FACTION = 64
 MAX_CONTACT_TTL_TICKS = 1_000_000
 MAX_CONTACT_DECAY_PER_TICK = 128
 MAX_SITE_PRESSURE_RECORDS = 32
+MAX_SITE_EVIDENCE_RECORDS = 64
 MAX_SITE_CONDITION_MARKERS = 32
 DEFAULT_CONTACT_TTL_CONFIG = {
     "enabled": False,
@@ -1443,6 +1444,7 @@ class SitePressureSummary:
 class SiteWorldState:
     owner_faction_id: str | None = None
     pressure_records: list[SitePressureRecord] = field(default_factory=list)
+    evidence_records: list["EvidenceRecord"] = field(default_factory=list)
     condition_markers: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -1458,6 +1460,14 @@ class SiteWorldState:
         if len(normalized_pressure_records) > MAX_SITE_PRESSURE_RECORDS:
             normalized_pressure_records = normalized_pressure_records[-MAX_SITE_PRESSURE_RECORDS:]
         self.pressure_records = normalized_pressure_records
+
+        normalized_evidence_records: list[EvidenceRecord] = []
+        for record in self.evidence_records:
+            normalized = record if isinstance(record, EvidenceRecord) else EvidenceRecord.from_dict(dict(record))
+            normalized_evidence_records.append(normalized)
+        if len(normalized_evidence_records) > MAX_SITE_EVIDENCE_RECORDS:
+            normalized_evidence_records = normalized_evidence_records[-MAX_SITE_EVIDENCE_RECORDS:]
+        self.evidence_records = normalized_evidence_records
 
         if not isinstance(self.condition_markers, list):
             raise ValueError("condition_markers must be a list")
@@ -1479,12 +1489,14 @@ class SiteWorldState:
         return (
             self.owner_faction_id is None
             and not self.pressure_records
+            and not self.evidence_records
             and not self.condition_markers
         )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "pressure_records": [record.to_dict() for record in self.pressure_records],
+            "evidence_records": [record.to_dict() for record in self.evidence_records],
             "condition_markers": list(self.condition_markers),
         }
         if self.owner_faction_id is not None:
@@ -1499,7 +1511,58 @@ class SiteWorldState:
                 SitePressureRecord.from_dict(dict(row))
                 for row in list(data.get("pressure_records", []))
             ],
+            evidence_records=[
+                EvidenceRecord.from_dict(dict(row))
+                for row in list(data.get("evidence_records", []))
+            ],
             condition_markers=[str(marker) for marker in list(data.get("condition_markers", []))],
+        )
+
+
+@dataclass
+class EvidenceRecord:
+    evidence_type: str
+    strength: int
+    tick: int
+    source_event_id: str | None = None
+    faction_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evidence_type, str) or not self.evidence_type:
+            raise ValueError("evidence_type must be a non-empty string")
+        if isinstance(self.strength, bool) or not isinstance(self.strength, int):
+            raise ValueError("strength must be an integer")
+        if self.faction_id is not None and (not isinstance(self.faction_id, str) or not self.faction_id):
+            raise ValueError("faction_id must be a non-empty string when present")
+        if self.source_event_id is not None and (
+            not isinstance(self.source_event_id, str) or not self.source_event_id
+        ):
+            raise ValueError("source_event_id must be a non-empty string when present")
+        if isinstance(self.tick, bool) or not isinstance(self.tick, int):
+            raise ValueError("tick must be an integer")
+        if self.tick < 0:
+            raise ValueError("tick must be >= 0")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "evidence_type": self.evidence_type,
+            "strength": self.strength,
+            "tick": self.tick,
+        }
+        if self.source_event_id is not None:
+            payload["source_event_id"] = self.source_event_id
+        if self.faction_id is not None:
+            payload["faction_id"] = self.faction_id
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "EvidenceRecord":
+        return cls(
+            evidence_type=str(data["evidence_type"]),
+            strength=int(data["strength"]),
+            tick=int(data.get("tick", 0)),
+            source_event_id=(str(data["source_event_id"]) if data.get("source_event_id") is not None else None),
+            faction_id=(str(data["faction_id"]) if data.get("faction_id") is not None else None),
         )
 
 
@@ -2159,6 +2222,32 @@ class WorldState:
         if site_id not in self.sites:
             raise ValueError(f"unknown site_id '{site_id}'")
         return self.sites[site_id].site_state.get_pressure_summary()
+
+    def add_site_evidence(
+        self,
+        site_id: str,
+        evidence_type: str,
+        strength: int,
+        faction_id: str | None = None,
+        source_event_id: str | None = None,
+        *,
+        tick: int = 0,
+    ) -> EvidenceRecord:
+        if site_id not in self.sites:
+            raise ValueError(f"unknown site_id '{site_id}'")
+        record = EvidenceRecord(
+            evidence_type=evidence_type,
+            strength=strength,
+            tick=tick,
+            faction_id=faction_id,
+            source_event_id=source_event_id,
+        )
+        site_state = self.sites[site_id].site_state
+        site_state.evidence_records.append(record)
+        if len(site_state.evidence_records) > MAX_SITE_EVIDENCE_RECORDS:
+            overflow = len(site_state.evidence_records) - MAX_SITE_EVIDENCE_RECORDS
+            del site_state.evidence_records[:overflow]
+        return record
 
     def upsert_signal(self, record: dict[str, Any]) -> bool:
         signal_uid = str(record["signal_uid"])
