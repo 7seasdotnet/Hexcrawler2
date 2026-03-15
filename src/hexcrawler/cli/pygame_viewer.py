@@ -82,6 +82,7 @@ ENCOUNTER_DEBUG_RUMOR_LIMIT = 20
 SUPPLY_DEBUG_OUTCOME_LIMIT = 20
 SITE_ENTER_DEBUG_OUTCOME_LIMIT = 20
 SITE_PRESSURE_DEBUG_ROW_LIMIT = 5
+SITE_EVIDENCE_DEBUG_ROW_LIMIT = 5
 ENCOUNTER_DEBUG_SECTION_ROWS = 6
 PANEL_SECTION_ENTRY_LIMIT = 30
 SELECTED_ENTITY_TRACE_LIMIT = 12
@@ -1905,6 +1906,7 @@ def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState, debug_
 def _site_debug_rows(site: Any) -> list[str]:
     rows = [f"site_id={site.site_id} type={site.site_type} entrance={'yes' if site.entrance else 'no'}"]
     pressure_records = list(site.site_state.pressure_records)
+    evidence_records = list(site.site_state.evidence_records)
     pressure_summary = site.site_state.get_pressure_summary()
     dominant_faction_id = pressure_summary.dominant_faction_id if pressure_summary.dominant_faction_id is not None else "none"
     rows.append(
@@ -1915,16 +1917,27 @@ def _site_debug_rows(site: Any) -> list[str]:
         f"records={pressure_summary.record_count}"
     )
     pressure_count = len(pressure_records)
-    if pressure_count <= 0:
-        return rows
-    recent_records = pressure_records[-SITE_PRESSURE_DEBUG_ROW_LIMIT:]
-    rows.append(f"pressure_records={pressure_count} showing_recent={len(recent_records)}")
-    for record in recent_records:
-        source_event_id = record.source_event_id if record.source_event_id is not None else "-"
-        rows.append(
-            f"pressure faction={record.faction_id} type={record.pressure_type} "
-            f"strength={record.strength} tick={record.tick} source={source_event_id}"
-        )
+    if pressure_count > 0:
+        recent_records = pressure_records[-SITE_PRESSURE_DEBUG_ROW_LIMIT:]
+        rows.append(f"pressure_records={pressure_count} showing_recent={len(recent_records)}")
+        for record in recent_records:
+            source_event_id = record.source_event_id if record.source_event_id is not None else "-"
+            rows.append(
+                f"pressure faction={record.faction_id} type={record.pressure_type} "
+                f"strength={record.strength} tick={record.tick} source={source_event_id}"
+            )
+
+    evidence_count = len(evidence_records)
+    if evidence_count > 0:
+        recent_evidence = evidence_records[-SITE_EVIDENCE_DEBUG_ROW_LIMIT:]
+        rows.append(f"evidence_records={evidence_count} showing_recent={len(recent_evidence)}")
+        for record in recent_evidence:
+            faction_id = record.faction_id if record.faction_id is not None else "-"
+            source_event_id = record.source_event_id if record.source_event_id is not None else "-"
+            rows.append(
+                f"evidence type={record.evidence_type} strength={record.strength} "
+                f"tick={record.tick} faction={faction_id} source={source_event_id}"
+            )
     return rows
 
 

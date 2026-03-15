@@ -51,7 +51,16 @@ from hexcrawler.sim.encounters import (
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
-from hexcrawler.sim.world import HexCoord, LOCAL_SPACE_ROLE, RumorRecord, SitePressureRecord, SiteRecord, SiteWorldState, SpaceState
+from hexcrawler.sim.world import (
+    EvidenceRecord,
+    HexCoord,
+    LOCAL_SPACE_ROLE,
+    RumorRecord,
+    SitePressureRecord,
+    SiteRecord,
+    SiteWorldState,
+    SpaceState,
+)
 
 
 def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
@@ -1034,6 +1043,98 @@ def test_debug_sites_pressure_expression_does_not_mutate_simulation() -> None:
         site_state=SiteWorldState(
             pressure_records=[
                 SitePressureRecord(faction_id="faction:red", pressure_type="threat", strength=2, tick=8)
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+    sim_hash_before = simulation_hash(sim)
+    world_hash_before = world_hash(sim.state.world)
+
+    _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert simulation_hash(sim) == sim_hash_before
+    assert world_hash(sim.state.world) == world_hash_before
+
+
+def test_debug_sites_rows_include_site_evidence_expression() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["evidence-site"] = SiteRecord(
+        site_id="evidence-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            evidence_records=[
+                EvidenceRecord(
+                    evidence_type="tracks",
+                    strength=3,
+                    tick=14,
+                    faction_id="faction:ash",
+                    source_event_id="evt-14",
+                )
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+
+    assert any("site_id=evidence-site" in row for row in rows["sites"])
+    assert any("evidence_records=1 showing_recent=1" in row for row in rows["sites"])
+    assert any(
+        "evidence type=tracks strength=3 tick=14 faction=faction:ash source=evt-14" in row
+        for row in rows["sites"]
+    )
+
+
+def test_debug_sites_evidence_rows_use_deterministic_recent_tail_order() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["evidence-order-site"] = SiteRecord(
+        site_id="evidence-order-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            evidence_records=[
+                EvidenceRecord(
+                    evidence_type=f"type:{i}",
+                    strength=i,
+                    tick=i,
+                    faction_id=(None if i % 2 == 0 else f"faction:{i}"),
+                    source_event_id=(None if i % 3 else f"evt-{i}"),
+                )
+                for i in range(7)
+            ]
+        ),
+    )
+    rumor_state = RumorPanelState()
+    debug_filter_state = DebugFilterState()
+
+    rows = _debug_rows_by_section(sim, rumor_state, debug_filter_state)
+    evidence_rows = [row for row in rows["sites"] if row.startswith("evidence type=")]
+
+    assert any("evidence_records=7 showing_recent=5" in row for row in rows["sites"])
+    assert evidence_rows == [
+        "evidence type=type:6 strength=6 tick=6 faction=- source=evt-6",
+        "evidence type=type:5 strength=5 tick=5 faction=faction:5 source=-",
+        "evidence type=type:4 strength=4 tick=4 faction=- source=-",
+        "evidence type=type:3 strength=3 tick=3 faction=faction:3 source=evt-3",
+        "evidence type=type:2 strength=2 tick=2 faction=- source=-",
+    ]
+
+
+def test_debug_sites_evidence_expression_does_not_mutate_simulation() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    sim.state.world.sites["evidence-safe-site"] = SiteRecord(
+        site_id="evidence-safe-site",
+        site_type="town",
+        location={"space_id": player.space_id, "coord": {"x": 0, "y": 0}},
+        site_state=SiteWorldState(
+            evidence_records=[
+                EvidenceRecord(evidence_type="burns", strength=2, tick=9),
             ]
         ),
     )
