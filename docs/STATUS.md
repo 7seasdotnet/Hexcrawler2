@@ -2,14 +2,20 @@
 
 ## Phase
 - **Current phase:** Substrate Hardening — Observability Doctrine Documentation Slice (documentation-only guardrail formalization; no simulation logic mutation).
-- **Next action:** Resume substrate hardening with narrow deterministic seams while enforcing Observability Doctrine merge-gate checks for new systems.
-- **Phase status:** ✅ Observability Doctrine formalized as a core architecture guardrail across architecture and contributor instructions.
+- **Next action:** Execute A1 near-term product target lock in implementation planning: prioritize player-visible campaign→local playable loop work over additional substrate expansion unless directly required by that loop.
+- **Phase status:** ✅ Observability Doctrine remains a merge gate, now paired with an explicit near-term playable product-target direction lock.
 
 
 ## What changed in this commit
-- Formalized a new `Observability Doctrine` in `docs/ARCHITECTURE.md` as a core architectural guardrail with explicit principles for mutation transparency, inspectability, bounded inspection, and AI-assisted auditability.
-- Added an `Observability Implementation Checklist` to require serialized/bounded state, explicit seams, read-only inspection, legible deterministic outputs, and deterministic test verification before merge.
-- Updated `AGENTS.md` and `docs/STATUS.md` so observability is treated as a merge gate for all new systems.
+- Added an A1 near-term product target lock in `docs/VISION.md` so the immediate slice is explicit: continuous campaign traversal/contact, campaign→local transition, brutal local combat, and persistent wound/extraction/return pressure.
+- Added AI work-prioritization guidance in `AGENTS.md` directing current implementation toward the near-term playable loop before further substrate expansion unless directly required.
+- Updated `docs/STATUS.md` to document this direction lock while preserving existing deterministic/observability architecture guardrails.
+
+
+## Direction Clarification (A1 Product Target Lock)
+- Near-term target is a playable, commercially legible loop: campaign-role continuous traversal with visible danger/contact, deterministic transition into local-role spaces, and fast high-consequence local combat with persistent wound/extraction pressure.
+- This is a sequencing lock, not a scope retreat: long-term ecology, diegetic intelligence depth, editor depth, systemic world evolution, and multiplayer-safe architecture remain in force.
+- Architecture invariants remain unchanged: deterministic simulation, command/event authoritative mutation, serialized/hash-covered state, bounded structures, UI/viewer read-only mutation policy, campaign/local role separation, and ephemeral rule modules.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
