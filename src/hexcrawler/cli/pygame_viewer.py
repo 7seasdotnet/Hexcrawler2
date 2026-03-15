@@ -24,6 +24,7 @@ from hexcrawler.sim.encounters import (
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
+    LocalEncounterRequestModule,
     LocalEncounterInstanceModule,
     EncounterSelectionModule,
     RumorPipelineModule,
@@ -33,6 +34,7 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.groups import GroupMovementModule
+from hexcrawler.sim.campaign_danger import CampaignDangerModule
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.combat import CombatExecutionModule
 from hexcrawler.sim.entity_stats import EntityStatsExecutionModule
@@ -2427,7 +2429,9 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
     sim.register_rule_module(EncounterActionModule())
     sim.register_rule_module(EncounterActionExecutionModule())
+    sim.register_rule_module(LocalEncounterRequestModule())
     sim.register_rule_module(LocalEncounterInstanceModule())
+    sim.register_rule_module(CampaignDangerModule())
     sim.register_rule_module(SiteEcologyModule())
     sim.register_rule_module(RumorPipelineModule())
     sim.register_rule_module(RumorDecayModule())

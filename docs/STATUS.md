@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Implement deterministic, player-visible campaign danger movers with a deterministic contact handoff into a minimal hostile local encounter that can inflict persistent wounds and force extraction/return decisions.
+- **Next action:** Tighten local encounter hostility/combat pressure after deterministic campaign danger contact now ships in the playable loop.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -87,6 +87,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added an explicit **A4 policy** section that separates active-path systems from preserved-but-not-immediate-critical-path systems.
-- Added a compact future-work decision rule and anti-drift reminder to reduce noncritical expansion during playable-slice execution.
-- Kept all determinism, mutation safety, role separation, and anti-lock-out invariants unchanged.
+- Added a deterministic `campaign_danger` module that spawns a visible campaign-role danger patrol entity, moves it continuously on a fixed waypoint loop, and emits deterministic contact events on proximity overlap.
+- Routed campaign danger contact through the existing encounter bridge (`encounter_resolve_request` → `local_encounter_request`) with serialized anti-spam overlap state that survives save/load and replay.
+- Hardened campaign-danger coverage to explicitly verify the feature uses the existing resolve→request bridge (no direct local shortcut), while keeping deterministic movement/contact, anti-spam, role-gating, and save/load stability checks.
