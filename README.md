@@ -1,18 +1,23 @@
 # Hexcrawler2
 
-Deterministic engine substrate prototype for a hexcrawl simulation.
+Hexcrawler2 is a deterministic simulation engine substrate for a persistent hexcrawl world, with simulation logic separated from read-only viewer/debug surfaces.
 
-## Included in this phase
-- Axial hex world state keyed by coordinate.
-- Per-hex editable records with JSON load/save.
-- Deterministic fixed-tick simulation core.
-- Smooth entity movement with sub-hex offsets.
-- Minimal CLI viewer/controller split.
-- Determinism + save/load hash tests.
+## Current architecture identity
+- Deterministic fixed-tick simulation core with seeded RNG and replay/hash stability.
+- Persistent serialized world state (including site-local pressure/evidence aftermath substrates).
+- Viewer/UI remains read-only with respect to authoritative simulation mutation (commands/events drive changes).
 
-## Quickstart
+## Canonical run
 ```bash
-python -m pip install pytest
-pytest -q
-PYTHONPATH=src python -m hexcrawler.cli.viewer
+python play.py
 ```
+
+## Canonical test
+```bash
+PYTHONPATH=src pytest -q
+```
+
+## Further reading
+- `docs/ARCHITECTURE.md`
+- `docs/STATUS.md`
+- `AGENTS.md`

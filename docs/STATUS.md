@@ -1,22 +1,22 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Expression Slice B3 (implemented deterministic read-only evidence expression in existing viewer debug site inspection rows).
-- **Next action:** Substrate Hardening — downstream evidence producer/consumer slices (still substrate-only; no rumor/investigation/faction policy semantics).
-- **Phase status:** ✅ Slice B3 landed with bounded deterministic viewer-site evidence rows (read-only expression only; no new mutation or policy logic).
+- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Producer Bridge Slice B4 (implemented first deterministic explicit-event bridge into the site evidence seam).
+- **Next action:** Substrate Hardening — additional narrow evidence producer/consumer bridge slices (still substrate-only; no rumor/investigation/faction policy semantics).
+- **Phase status:** ✅ Slice B4 landed with a deterministic bridge from explicit claim-opportunity consumption events into `site_evidence_apply` (minimal mapping only; no rumor/investigation/policy logic).
 
 
 ## What changed in this commit
-- Added compact read-only evidence expression to existing viewer debug `sites` rows, showing bounded recent site evidence entries (`type`, `strength`, `tick`, optional `faction`, optional `source`) in deterministic order.
-- Added focused viewer CLI tests for evidence row presence, deterministic bounded recent-tail ordering/truncation, and hash-stability/non-mutation of the inspection path.
-- Updated status/verification guidance for Slice B3 expression coverage.
+- Added `SiteEvidenceBridgeModule` as a minimal deterministic bridge from `claim_opportunity_consumed` events into `site_evidence_apply` with fixed payload mapping (`evidence_type="claim_marker"`, `strength=1`, `faction_id="group:<group_id>"`).
+- Added focused Slice B4 tests for bridge emission, invalid-context skip behavior, stable ordering, and save/load hash stability.
+- Updated README front-door commands/pointers and refreshed STATUS for Slice B4 progress.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
   - The debug `sites` section now also exposes read-only site pressure summaries for operator inspection with deterministic bounded recent rows.
 - `src/hexcrawler/sim/`
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
-  - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records (`pressure_records`), bounded evidence/aftermath records (`evidence_records`), and append-only mutation helpers (`WorldState.add_site_pressure`, `WorldState.add_site_evidence`) and event-driven deterministic evidence seam handling (`SiteEvidenceMutationModule`) for future campaign/local diegetic consequence systems.
+  - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records (`pressure_records`), bounded evidence/aftermath records (`evidence_records`), and append-only mutation helpers (`WorldState.add_site_pressure`, `WorldState.add_site_evidence`) and event-driven deterministic evidence seams (`SiteEvidenceBridgeModule` + `SiteEvidenceMutationModule`) for minimal explicit-event evidence production and append-only mutation.
   - Deterministic read-only site pressure interpretation seam (`SitePressureSummary`, `SiteWorldState.get_pressure_summary`, `WorldState.get_site_pressure_summary`) that aggregates existing pressure history without introducing ownership or policy.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Same-tick event execution now drains-until-empty for tick `T` (including events scheduled during `T`) with deterministic FIFO behavior and a hard deterministic guard for runaway self-rescheduling.
@@ -211,6 +211,7 @@
 - Canonical launch: `python play.py`
 
 ## Current Verification Commands
+- `PYTHONPATH=src pytest -q tests/test_site_evidence_bridge_b4.py`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `PYTHONPATH=src pytest -q tests/test_site_pressure_interpretation_a5.py`
