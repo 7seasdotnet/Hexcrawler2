@@ -26,16 +26,36 @@ During this phase, new work is prioritized by all of the following:
 
 If a task does not materially advance the playable loop, defer it unless it is strictly required to unblock the loop.
 
-## Long-Term Ambitions Preserved (Not Abandoned)
-The following remain valid and required long-term goals, but must not displace the current playable slice:
-- deeper ecology/world simulation,
-- deeper diegetic intelligence/belief/rumor richness,
-- richer in-game editor workflows,
-- broader systemic world simulation richness,
-- multiplayer-safe/server-authoritative feasibility.
+## A4 Policy — Active Path vs Preserved-But-Not-Immediate-Critical-Path
 
-## Not on Immediate Critical Path
-Advanced second-order systems are preserved as constraints and future direction, but are **not** on the immediate critical path unless a specific element is required to ship the playable slice above.
+### Active Path Systems (current playable slice)
+Prefer implementation work in this set unless a justified dependency requires otherwise:
+- campaign-role travel/movement visibility on the continuous campaign plane,
+- visible campaign danger/contact,
+- deterministic campaign → local encounter handoff,
+- minimal hostile local behavior,
+- fast brutal local combat resolution,
+- wound application/persistence,
+- extraction/return pressure with minimal supporting supplies/loot/recovery surfaces.
+
+### Preserved but Not Immediate Critical Path
+These systems remain valid and preserved, but are **not immediate critical path** and should expand only when directly required by the playable slice:
+- deeper belief/intelligence propagation,
+- advanced diplomacy/political reaction depth,
+- broader ecology/site evolution depth,
+- nonessential observability expansion,
+- editor expansion beyond slice-critical authoring/testing needs,
+- higher-order rumor sophistication beyond immediate gameplay payoff.
+
+### Decision Rule for Future Work
+Select work in this order:
+1) player-facing payoff,
+2) direct relevance to the current playable loop,
+3) bounded complexity/growth,
+4) compatibility with locked architecture contracts.
+
+### Anti-Drift Reminder
+Robust/engine-first/do-not-lock-out requirements are architecture guardrails, not permission to expand noncritical systems ahead of playable-loop delivery.
 
 ## Invariants (Unchanged, Non-Negotiable)
 - Deterministic simulation remains authoritative.
@@ -67,6 +87,6 @@ Advanced second-order systems are preserved as constraints and future direction,
 - `python play.py`
 
 ## What changed in this commit
-- Reset active phase framing from substrate-hardening emphasis to a single, explicit **Playable Core Loop Slice** execution phase.
-- Rewrote next-action and milestone language to force player-visible delivery: campaign travel, visible contact, local encounter, brutal combat, extraction/return, persistent consequences.
-- Kept determinism, mutation safety, role separation, and long-term anti-lock-out constraints explicit while marking advanced systems as not on immediate critical path.
+- Added an explicit **A4 policy** section that separates active-path systems from preserved-but-not-immediate-critical-path systems.
+- Added a compact future-work decision rule and anti-drift reminder to reduce noncritical expansion during playable-slice execution.
+- Kept all determinism, mutation safety, role separation, and anti-lock-out invariants unchanged.
