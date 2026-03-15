@@ -1,15 +1,15 @@
 # Hexcrawler2 — Current State
 
 ## Phase
-- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Producer Bridge Slice B4 (implemented first deterministic explicit-event bridge into the site evidence seam).
-- **Next action:** Substrate Hardening — additional narrow evidence producer/consumer bridge slices (still substrate-only; no rumor/investigation/faction policy semantics).
-- **Phase status:** ✅ Slice B4 landed with a deterministic bridge from explicit claim-opportunity consumption events into `site_evidence_apply` (minimal mapping only; no rumor/investigation/policy logic).
+- **Current phase:** Substrate Hardening — Local Evidence / Aftermath Interpretation Slice B5 (deterministic read-only aggregation over existing site evidence history).
+- **Next action:** Substrate Hardening — additional narrow evidence bridge slices and future read-only consumers of evidence summaries (still substrate-only; no rumor/investigation/faction policy semantics).
+- **Phase status:** ✅ Slice B5 landed with deterministic read-only `SiteEvidenceSummary` aggregation (`total_strength`, grouped totals, dominant type tie-break, record count) derived strictly from serialized `evidence_records`.
 
 
 ## What changed in this commit
-- Added `SiteEvidenceBridgeModule` as a minimal deterministic bridge from `claim_opportunity_consumed` events into `site_evidence_apply` with fixed payload mapping (`evidence_type="claim_marker"`, `strength=1`, `faction_id="group:<group_id>"`).
-- Added focused Slice B4 tests for bridge emission, invalid-context skip behavior, stable ordering, and save/load hash stability.
-- Updated README front-door commands/pointers and refreshed STATUS for Slice B4 progress.
+- Added deterministic read-only site evidence interpretation seam (`SiteEvidenceSummary`, `SiteWorldState.get_evidence_summary`, `WorldState.get_site_evidence_summary`) over existing bounded `evidence_records`.
+- Added focused Slice B5 tests for empty defaults, by-type and by-faction aggregation, dominant evidence-type lexical tie-break, save/load stability, and hash/non-mutation guarantees.
+- Updated STATUS phase/verification details for Slice B5.
 
 ## What Exists (folders / entry points)
 - `src/hexcrawler/cli/pygame_viewer.py` now includes a Viewer Oversight layout foundation with explicit computed regions (control bar, world view, right inspector foundation, bottom debug/event foundation), bounded text/scroll helpers, resizable-window-aware geometry recomputation, and the existing `ViewerRuntimeController` canonical new/load/save/advance/pause control adapter.
@@ -18,6 +18,7 @@
   - Deterministic fixed-tick simulation core, movement math, world model, RNG stream derivation, hashing.
   - Deterministic site world-state substrate on sites (`SiteWorldState`) including bounded pressure history records (`pressure_records`), bounded evidence/aftermath records (`evidence_records`), and append-only mutation helpers (`WorldState.add_site_pressure`, `WorldState.add_site_evidence`) and event-driven deterministic evidence seams (`SiteEvidenceBridgeModule` + `SiteEvidenceMutationModule`) for minimal explicit-event evidence production and append-only mutation.
   - Deterministic read-only site pressure interpretation seam (`SitePressureSummary`, `SiteWorldState.get_pressure_summary`, `WorldState.get_site_pressure_summary`) that aggregates existing pressure history without introducing ownership or policy.
+  - Deterministic read-only site evidence interpretation seam (`SiteEvidenceSummary`, `SiteWorldState.get_evidence_summary`, `WorldState.get_site_evidence_summary`) that aggregates existing evidence history without introducing consumers/policy/behavior.
   - Deterministic command log + deterministic event queue substrate (`SimEvent`, schedule/cancel APIs, same-tick insertion ordering, execution trace API).
   - Same-tick event execution now drains-until-empty for tick `T` (including events scheduled during `T`) with deterministic FIFO behavior and a hard deterministic guard for runaway self-rescheduling.
   - Deterministic bounded execution trace substrate (`SimulationState.event_trace`) for executed events only, serialized in canonical saves and included in `simulation_hash`.
@@ -116,6 +117,7 @@
 
 ## Verification Commands (current)
 - `PYTHONPATH=src pytest -q tests/test_site_evidence_mutation_b2.py`
+- `PYTHONPATH=src pytest -q tests/test_site_evidence_interpretation_b5.py`
 - `PYTHONPATH=src pytest -q tests/test_site_world_state_substrate_a1.py tests/test_site_evidence_substrate_b1.py`
 - `PYTHONPATH=src pytest -q`
 - `python -m py_compile src/hexcrawler/sim/site_evidence.py tests/test_site_evidence_mutation_b2.py`
