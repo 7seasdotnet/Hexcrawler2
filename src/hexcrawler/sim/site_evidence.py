@@ -2,11 +2,97 @@ from __future__ import annotations
 
 from typing import Any
 
+from hexcrawler.sim.encounters import CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE
 from hexcrawler.sim.core import SimEvent, Simulation
 from hexcrawler.sim.rules import RuleModule
 
 SITE_EVIDENCE_APPLY_EVENT_TYPE = "site_evidence_apply"
 SITE_EVIDENCE_OUTCOME_EVENT_TYPE = "site_evidence_outcome"
+SITE_EVIDENCE_BRIDGE_OUTCOME_EVENT_TYPE = "site_evidence_bridge_outcome"
+
+
+class SiteEvidenceBridgeModule(RuleModule):
+    """Minimal deterministic bridge from explicit site claim events into site evidence."""
+
+    name = "site_evidence_bridge"
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != CLAIM_OPPORTUNITY_CONSUMED_EVENT_TYPE:
+            return
+
+        site_id = self._site_id_from_site_key(event.params.get("site_key"))
+        faction_id = self._group_faction_id(event.params.get("group_id"))
+        if site_id is None or faction_id is None:
+            self._schedule_bridge_outcome(
+                sim,
+                tick=event.tick,
+                source_event_id=event.event_id,
+                outcome="skipped_invalid_context",
+                details={"site_id": site_id, "faction_id": faction_id},
+            )
+            return
+
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=SITE_EVIDENCE_APPLY_EVENT_TYPE,
+            params={
+                "site_id": site_id,
+                "evidence_type": "claim_marker",
+                "strength": 1,
+                "faction_id": faction_id,
+                "source_event_id": event.event_id,
+                "tick": event.tick,
+            },
+        )
+        self._schedule_bridge_outcome(
+            sim,
+            tick=event.tick,
+            source_event_id=event.event_id,
+            outcome="emitted",
+            details={"site_id": site_id, "faction_id": faction_id},
+        )
+
+    def _schedule_bridge_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        source_event_id: str,
+        outcome: str,
+        details: dict[str, Any],
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=SITE_EVIDENCE_BRIDGE_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": tick,
+                "source_event_id": source_event_id,
+                "outcome": outcome,
+                "details": dict(details),
+            },
+        )
+
+    @staticmethod
+    def _optional_non_empty_string(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        return stripped if stripped else None
+
+    def _group_faction_id(self, value: Any) -> str | None:
+        group_id = self._optional_non_empty_string(value)
+        if group_id is None:
+            return None
+        return f"group:{group_id}"
+
+    def _site_id_from_site_key(self, value: Any) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        template_id = self._optional_non_empty_string(value.get("template_id"))
+        if template_id is None or not template_id.startswith("site:"):
+            return None
+        site_id = template_id[len("site:") :]
+        return site_id if site_id else None
 
 
 class SiteEvidenceMutationModule(RuleModule):
