@@ -73,6 +73,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 ## Supported Action Intent Types (Current)
 - Combat/tactical intents currently executed through the authoritative seam: `attack_intent`, `turn_intent` (local-role gated).
 - Provisional deterministic encounter action intents currently executed: `signal_intent`, `track_intent`.
+- Campaign encounter-control intents currently executed through the authoritative seam: `accept_encounter_offer`, `flee_encounter_offer`.
 - Campaign recovery intent currently executed through rule-module command/event seam: `safe_recovery_intent` (campaign-role and safe-site gated).
 - Campaign reward turn-in intent currently executed through rule-module command/event seam: `turn_in_reward_token_intent` (campaign-role and safe-site gated).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
@@ -85,11 +86,12 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `python play.py --headless`
 - `python play.py`
 
 ## What changed in this commit
-- Tightened local reward eligibility to current-encounter participants only (`encounter_participant_entity_ids`), preventing stale incapacitated hostiles in reused local spaces from minting reward tokens.
-- Hardened turn-in consistency: if ration grant fails after token consumption, the system deterministically refunds the consumed token and records both grant/refund outcomes in the forensic payload.
-- Expanded reward-loop tests to cover stale-hostile non-participant rejection and refund-on-grant-failure behavior alongside existing persistence/idempotence coverage.
+- Tightened encounter-offer control state to be player-scoped (`pending_offer_by_player` and `flee_ignore_until_by_player`) while preserving deterministic command/event handoff behavior.
+- Added campaign-danger test coverage confirming player-scoped offer command handling (wrong actor cannot consume another actor's pending offer).
+- Kept viewer compatibility by reading player-scoped offer state first with backward-compatible fallback to legacy single-offer shape.

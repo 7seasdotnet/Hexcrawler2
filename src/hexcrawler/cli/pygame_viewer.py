@@ -34,7 +34,11 @@ from hexcrawler.sim.encounters import (
     SpawnMaterializationModule,
 )
 from hexcrawler.sim.groups import GroupMovementModule
-from hexcrawler.sim.campaign_danger import CampaignDangerModule
+from hexcrawler.sim.campaign_danger import (
+    ACCEPT_ENCOUNTER_OFFER_INTENT,
+    FLEE_ENCOUNTER_OFFER_INTENT,
+    CampaignDangerModule,
+)
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.local_hostiles import LocalHostileBehaviorModule
 from hexcrawler.sim.combat import CombatExecutionModule
@@ -260,6 +264,26 @@ class SimulationController:
                 tick=self.sim.state.tick,
                 entity_id=self.entity_id,
                 command_type="end_local_encounter_intent",
+                params={"entity_id": self.entity_id},
+            )
+        )
+
+    def accept_encounter_offer(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+                params={"entity_id": self.entity_id},
+            )
+        )
+
+    def flee_encounter_offer(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=FLEE_ENCOUNTER_OFFER_INTENT,
                 params={"entity_id": self.entity_id},
             )
         )
@@ -1177,6 +1201,9 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
         entity_space_id = _entity_space_id(entity)
         if not _is_in_current_space(entity_space_id, active_space_id):
             continue
+        if entity.entity_id == PLAYER_ID:
+            # Player is rendered through interpolation in the primary entity pass.
+            continue
         label = _entity_marker_label(entity)
         _, marker_color = _entity_marker_role_and_color(entity)
         if active_location_topology == SQUARE_GRID_TOPOLOGY:
@@ -1202,6 +1229,33 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
                 label=_truncate_label(label),
             ),
         )
+
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is not None:
+        player_space_id = _entity_space_id(player)
+        if isinstance(player_space_id, str):
+            return_context = _get_return_context_for_space(sim, player_space_id)
+            if isinstance(return_context, dict):
+                return_exit_coord = return_context.get("return_exit_coord")
+                if isinstance(return_exit_coord, dict):
+                    add_marker(
+                        _marker_cell_from_location(
+                            {
+                                "space_id": player_space_id,
+                                "topology_type": SQUARE_GRID_TOPOLOGY,
+                                "coord": return_exit_coord,
+                            },
+                            active_location_topology,
+                        ),
+                        MarkerRecord(
+                            priority=1,
+                            marker_id=f"return_exit:{player_space_id}",
+                            marker_kind="return_exit",
+                            color=(145, 220, 160),
+                            radius=5,
+                            label="extract",
+                        ),
+                    )
 
     for index, record in enumerate(sim.state.world.spawn_descriptors):
         action_uid = str(record.get("action_uid", "?"))
@@ -1537,6 +1591,62 @@ def _is_return_in_progress(sim: Simulation, local_space_id: str) -> bool:
     if not isinstance(in_progress_by_local_space, dict):
         return False
     return bool(in_progress_by_local_space.get(local_space_id, False))
+
+
+def _pending_encounter_offer(sim: Simulation) -> dict[str, Any] | None:
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    if not isinstance(state, dict):
+        return None
+    pending_offer_by_player = state.get("pending_offer_by_player")
+    if isinstance(pending_offer_by_player, dict):
+        pending_offer = pending_offer_by_player.get(PLAYER_ID)
+    else:
+        # Backward-compat with pre-player-scoped state.
+        pending_offer = state.get("pending_offer")
+    if not isinstance(pending_offer, dict):
+        return None
+    return pending_offer
+
+
+def _draw_encounter_offer_modal(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    viewport_rect: pygame.Rect,
+) -> dict[str, pygame.Rect]:
+    offer = _pending_encounter_offer(sim)
+    if offer is None:
+        return {}
+
+    width = min(380, max(280, viewport_rect.width // 2))
+    height = 126
+    panel = pygame.Rect(
+        viewport_rect.centerx - (width // 2),
+        viewport_rect.y + 20,
+        width,
+        height,
+    )
+    pygame.draw.rect(screen, (26, 28, 38), panel)
+    pygame.draw.rect(screen, (128, 132, 144), panel, 1)
+
+    label = str(offer.get("encounter_label", "Encounter"))
+    title = _truncate_text_to_pixel_width(f"Encounter: {label}", font, panel.width - 18)
+    screen.blit(font.render(title, True, (245, 235, 190)), (panel.x + 9, panel.y + 10))
+    hint = _truncate_text_to_pixel_width("Fight [F] or Flee [X]", font, panel.width - 18)
+    screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
+
+    button_w = 110
+    button_h = 34
+    fight_rect = pygame.Rect(panel.x + 24, panel.bottom - button_h - 14, button_w, button_h)
+    flee_rect = pygame.Rect(panel.right - button_w - 24, panel.bottom - button_h - 14, button_w, button_h)
+    for rect, text, color in (
+        (fight_rect, "Fight", (125, 198, 128)),
+        (flee_rect, "Flee", (208, 138, 112)),
+    ):
+        pygame.draw.rect(screen, color, rect)
+        pygame.draw.rect(screen, (16, 18, 22), rect, 1)
+        screen.blit(font.render(text, True, (15, 15, 15)), (rect.x + 30, rect.y + 8))
+    return {"fight": fight_rect, "flee": flee_rect}
 
 
 def _draw_local_arena_overlay(
@@ -2152,8 +2262,13 @@ def _entity_marker_label(entity: EntityState) -> str:
         if isinstance(faction_id, str) and faction_id:
             return f"inv:{faction_id}"
         return "investigator"
+    template_id = str(entity.template_id or "")
+    if template_id == "campaign_danger_patrol":
+        return "danger"
+    if template_id == "encounter_hostile_v1":
+        return "hostile"
     if entity.template_id:
-        return str(entity.template_id)
+        return template_id
     return _short_stable_id(entity.entity_id)
 
 
@@ -2165,6 +2280,9 @@ def _selected_entity_for_click(
     *,
     radius_px: float = 12.0,
 ) -> str | None:
+    direct_entity_hit = _find_entity_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
+    if direct_entity_hit is not None:
+        return direct_entity_hit
     markers = _find_world_marker_candidates_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
     for marker in markers:
         if marker.marker_kind != "entity":
@@ -2749,6 +2867,7 @@ def run_pygame_viewer(
         dt = clock.tick(target_fps) / 1000.0
         accumulator += dt
 
+        offer_buttons: dict[str, pygame.Rect] = {}
         for event in pygame_module.event.get():
             if event.type == pygame_module.QUIT:
                 running = False
@@ -2837,7 +2956,15 @@ def run_pygame_viewer(
                 if center is not None:
                     world_center = center
                     local_camera_cache.center = center
-                status_message = focus_message
+                    status_message = focus_message
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_f:
+                if _pending_encounter_offer(sim) is not None:
+                    controller.accept_encounter_offer()
+                    status_message = "encounter offer accepted"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_x:
+                if _pending_encounter_offer(sim) is not None:
+                    controller.flee_encounter_offer()
+                    status_message = "encounter offer fled"
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -2958,6 +3085,15 @@ def run_pygame_viewer(
                             controller.end_local_encounter()
                 context_menu = None
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and viewport_rect.collidepoint(event.pos):
+                if _pending_encounter_offer(sim) is not None:
+                    if offer_buttons.get("fight") is not None and offer_buttons["fight"].collidepoint(event.pos):
+                        controller.accept_encounter_offer()
+                        status_message = "encounter offer accepted"
+                        continue
+                    if offer_buttons.get("flee") is not None and offer_buttons["flee"].collidepoint(event.pos):
+                        controller.flee_encounter_offer()
+                        status_message = "encounter offer fled"
+                        continue
                 status_message = _queue_selection_command_for_click(
                     sim,
                     controller,
@@ -3058,6 +3194,7 @@ def run_pygame_viewer(
             debug_panel_cache,
         )
         _draw_context_menu(screen, font, context_menu, viewport_rect)
+        offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect)
         pygame_module.display.flip()
 
     pygame_module.quit()
