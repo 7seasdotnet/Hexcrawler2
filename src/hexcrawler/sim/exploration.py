@@ -14,11 +14,16 @@ EXPLORE_EXECUTE_EVENT_TYPE = "explore_execute"
 EXPLORATION_OUTCOME_EVENT_TYPE = "exploration_outcome"
 RECOVERY_EXECUTE_EVENT_TYPE = "recovery_execute"
 SAFE_RECOVERY_INTENT_COMMAND_TYPE = "safe_recovery_intent"
+TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE = "turn_in_reward_token_intent"
 RECOVERY_OUTCOME_EVENT_TYPE = "recovery_outcome"
+REWARD_TURN_IN_OUTCOME_EVENT_TYPE = "reward_turn_in_outcome"
 
 SAFE_SITE_TYPES = {"town"}
 SAFE_SITE_TAG = "safe"
 MAX_RECOVERY_ACTION_UIDS = 2048
+REWARD_TOKEN_ITEM_ID = "proof_token"
+REWARD_TURN_IN_BENEFIT_ITEM_ID = "rations"
+REWARD_TURN_IN_BENEFIT_QUANTITY = 1
 
 
 class ExplorationExecutionModule(RuleModule):
@@ -32,6 +37,10 @@ class ExplorationExecutionModule(RuleModule):
     _STATE_COMPLETED_ACTION_UIDS = "completed_action_uids"
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type == TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE:
+            self._handle_reward_turn_in_intent(sim, command=command, command_index=command_index)
+            return True
+
         if command.command_type == SAFE_RECOVERY_INTENT_COMMAND_TYPE:
             action_uid = f"recovery:{command.tick}:{command_index}"
             recovery_state = self._recovery_rules_state(sim)
@@ -301,6 +310,209 @@ class ExplorationExecutionModule(RuleModule):
         state[self._STATE_COMPLETED_ACTION_UIDS] = sorted(completed)
         sim.set_rules_state(self.name, {**sim.get_rules_state(self.name), **state})
 
+
+    def _handle_reward_turn_in_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
+        action_uid = f"reward_turn_in:{command.tick}:{command_index}"
+        if command.entity_id is None or command.entity_id not in sim.state.entities:
+            self._schedule_reward_turn_in_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                applied=False,
+                reason="unknown_entity",
+                details={},
+            )
+            return
+
+        location = self._entity_location(sim, entity_id=command.entity_id)
+        space = sim.state.world.spaces.get(location.space_id)
+        if space is None or space.role != "campaign":
+            self._schedule_reward_turn_in_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                applied=False,
+                reason="campaign_space_required",
+                location=location,
+                details={},
+            )
+            return
+
+        is_safe_site, site_id, _ = self._is_safe_recovery_site(sim, location=location)
+        if not is_safe_site:
+            self._schedule_reward_turn_in_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                applied=False,
+                reason="safe_site_required",
+                location=location,
+                details={},
+            )
+            return
+
+        entity = sim.state.entities[command.entity_id]
+        container_id = entity.inventory_container_id
+        if container_id is None or container_id not in sim.state.world.containers:
+            self._schedule_reward_turn_in_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                applied=False,
+                reason="no_inventory_container",
+                location=location,
+                site_id=site_id,
+                details={},
+            )
+            return
+
+        consume_uid = f"{action_uid}:consume"
+        sim._execute_inventory_intent(
+            SimCommand(
+                tick=command.tick,
+                entity_id=command.entity_id,
+                command_type="inventory_intent",
+                params={
+                    "src_container_id": container_id,
+                    "dst_container_id": None,
+                    "item_id": REWARD_TOKEN_ITEM_ID,
+                    "quantity": 1,
+                    "reason": "consume",
+                    "action_uid": consume_uid,
+                },
+            ),
+            command_index=0,
+        )
+        consume_outcome = self._inventory_outcome_for_action_uid(sim=sim, action_uid=consume_uid)
+        if consume_outcome != "applied":
+            reason = "token_required" if consume_outcome == "insufficient_quantity" else "token_consume_rejected"
+            self._schedule_reward_turn_in_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                applied=False,
+                reason=reason,
+                location=location,
+                site_id=site_id,
+                details={"consume_outcome": consume_outcome},
+            )
+            return
+
+        grant_uid = f"{action_uid}:grant"
+        sim._execute_inventory_intent(
+            SimCommand(
+                tick=command.tick,
+                entity_id=command.entity_id,
+                command_type="inventory_intent",
+                params={
+                    "src_container_id": None,
+                    "dst_container_id": container_id,
+                    "item_id": REWARD_TURN_IN_BENEFIT_ITEM_ID,
+                    "quantity": REWARD_TURN_IN_BENEFIT_QUANTITY,
+                    "reason": "spawn",
+                    "action_uid": grant_uid,
+                },
+            ),
+            command_index=0,
+        )
+        grant_outcome = self._inventory_outcome_for_action_uid(sim=sim, action_uid=grant_uid)
+        if grant_outcome != "applied":
+            refund_uid = f"{action_uid}:refund"
+            sim._execute_inventory_intent(
+                SimCommand(
+                    tick=command.tick,
+                    entity_id=command.entity_id,
+                    command_type="inventory_intent",
+                    params={
+                        "src_container_id": None,
+                        "dst_container_id": container_id,
+                        "item_id": REWARD_TOKEN_ITEM_ID,
+                        "quantity": 1,
+                        "reason": "spawn",
+                        "action_uid": refund_uid,
+                    },
+                ),
+                command_index=0,
+            )
+            refund_outcome = self._inventory_outcome_for_action_uid(sim=sim, action_uid=refund_uid)
+            self._schedule_reward_turn_in_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                applied=False,
+                reason="benefit_grant_rejected",
+                location=location,
+                site_id=site_id,
+                details={"grant_outcome": grant_outcome, "refund_outcome": refund_outcome},
+            )
+            return
+
+        self._schedule_reward_turn_in_outcome(
+            sim,
+            tick=command.tick,
+            entity_id=command.entity_id,
+            action_uid=action_uid,
+            applied=True,
+            reason="reward_turned_in",
+            location=location,
+            site_id=site_id,
+            details={
+                "consumed_item_id": REWARD_TOKEN_ITEM_ID,
+                "granted_item_id": REWARD_TURN_IN_BENEFIT_ITEM_ID,
+                "granted_quantity": REWARD_TURN_IN_BENEFIT_QUANTITY,
+            },
+        )
+
+    @staticmethod
+    def _inventory_outcome_for_action_uid(*, sim: Simulation, action_uid: str) -> str:
+        for entry in reversed(sim.state.event_trace):
+            if entry.get("event_type") != "inventory_outcome":
+                continue
+            params = entry.get("params")
+            if not isinstance(params, dict) or params.get("action_uid") != action_uid:
+                continue
+            outcome = params.get("outcome")
+            if isinstance(outcome, str):
+                return outcome
+        return "missing_outcome"
+
+    def _schedule_reward_turn_in_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        entity_id: str | None,
+        action_uid: str,
+        applied: bool,
+        reason: str,
+        location: LocationRef | None = None,
+        site_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        params: dict[str, Any] = {
+            "tick": tick,
+            "entity_id": entity_id,
+            "action_uid": action_uid,
+            "applied": bool(applied),
+            "reason": reason,
+        }
+        if location is not None:
+            params["location"] = location.to_dict()
+        if site_id is not None:
+            params["site_id"] = site_id
+        if details is not None:
+            params["details"] = copy.deepcopy(details)
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
+            params=params,
+        )
 
     def _recovery_rules_state(self, sim: Simulation) -> dict[str, list[str]]:
         state = sim.get_rules_state(self.name)

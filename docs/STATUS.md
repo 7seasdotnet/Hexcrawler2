@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Validate the retreat→safe-site→recover rhythm in the playable loop and tune bounded recovery values without expanding into full medical simulation.
+- **Next action:** Tune reward pacing (token yield ↔ ration utility) against local combat lethality while keeping the one-token/one-benefit loop bounded and deterministic.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -74,6 +74,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Combat/tactical intents currently executed through the authoritative seam: `attack_intent`, `turn_intent` (local-role gated).
 - Provisional deterministic encounter action intents currently executed: `signal_intent`, `track_intent`.
 - Campaign recovery intent currently executed through rule-module command/event seam: `safe_recovery_intent` (campaign-role and safe-site gated).
+- Campaign reward turn-in intent currently executed through rule-module command/event seam: `turn_in_reward_token_intent` (campaign-role and safe-site gated).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -89,6 +90,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added deterministic bounds/capping for safe-recovery UID ledgers (`recovery_scheduled_action_uids`, `recovery_completed_action_uids`) with FIFO eviction to preserve bounded serialized state.
-- Kept the campaign-role safe-site delayed recovery seam unchanged while tightening ledger normalization and validation behavior.
-- Added focused tests for ledger-cap eviction determinism and invalid recovery ledger type handling alongside the existing recovery-loop coverage.
+- Tightened local reward eligibility to current-encounter participants only (`encounter_participant_entity_ids`), preventing stale incapacitated hostiles in reused local spaces from minting reward tokens.
+- Hardened turn-in consistency: if ration grant fails after token consumption, the system deterministically refunds the consumed token and records both grant/refund outcomes in the forensic payload.
+- Expanded reward-loop tests to cover stale-hostile non-participant rejection and refund-on-grant-failure behavior alongside existing persistence/idempotence coverage.
