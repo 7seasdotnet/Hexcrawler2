@@ -70,6 +70,7 @@ MIN_WORLD_HEIGHT = 220
 INSPECTOR_MIN_WIDTH = 320
 SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
+PENDING_OFFER_DECISION_TICK_CAP = 12
 
 TERRAIN_COLORS: dict[str, tuple[int, int, int]] = {
     "plains": (132, 168, 94),
@@ -401,6 +402,15 @@ class ViewerRuntimeController:
     def toggle_pause(self) -> bool:
         self.state.paused = not self.state.paused
         return self.state.paused
+
+    def resolve_pending_offer_decision(self, *, tick_cap: int = PENDING_OFFER_DECISION_TICK_CAP) -> int:
+        """Advance bounded authoritative ticks so pending-offer decision commands are consumed."""
+        cap = max(1, int(tick_cap))
+        advanced = 0
+        while _pending_encounter_offer(self.state.sim) is not None and advanced < cap:
+            self.state.sim.advance_ticks(1)
+            advanced += 1
+        return advanced
 
 
 @dataclass(frozen=True)
@@ -2970,11 +2980,19 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_f:
                 if _pending_encounter_offer(sim) is not None:
                     controller.accept_encounter_offer()
-                    status_message = "encounter offer accepted"
+                    advanced = runtime_controller.resolve_pending_offer_decision()
+                    if _pending_encounter_offer(sim) is None:
+                        status_message = f"encounter offer accepted (resolved in {advanced} ticks)"
+                    else:
+                        status_message = f"encounter offer accept pending after {advanced} ticks (cap reached)"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_x:
                 if _pending_encounter_offer(sim) is not None:
                     controller.flee_encounter_offer()
-                    status_message = "encounter offer fled"
+                    advanced = runtime_controller.resolve_pending_offer_decision()
+                    if _pending_encounter_offer(sim) is None:
+                        status_message = f"encounter offer fled (resolved in {advanced} ticks)"
+                    else:
+                        status_message = f"encounter offer flee pending after {advanced} ticks (cap reached)"
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -3098,11 +3116,19 @@ def run_pygame_viewer(
                 if _pending_encounter_offer(sim) is not None:
                     if offer_buttons.get("fight") is not None and offer_buttons["fight"].collidepoint(event.pos):
                         controller.accept_encounter_offer()
-                        status_message = "encounter offer accepted"
+                        advanced = runtime_controller.resolve_pending_offer_decision()
+                        if _pending_encounter_offer(sim) is None:
+                            status_message = f"encounter offer accepted (resolved in {advanced} ticks)"
+                        else:
+                            status_message = f"encounter offer accept pending after {advanced} ticks (cap reached)"
                         continue
                     if offer_buttons.get("flee") is not None and offer_buttons["flee"].collidepoint(event.pos):
                         controller.flee_encounter_offer()
-                        status_message = "encounter offer fled"
+                        advanced = runtime_controller.resolve_pending_offer_decision()
+                        if _pending_encounter_offer(sim) is None:
+                            status_message = f"encounter offer fled (resolved in {advanced} ticks)"
+                        else:
+                            status_message = f"encounter offer flee pending after {advanced} ticks (cap reached)"
                         continue
                 status_message = _queue_selection_command_for_click(
                     sim,

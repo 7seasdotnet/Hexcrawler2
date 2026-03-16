@@ -10,6 +10,7 @@ from hexcrawler.cli.pygame_viewer import (
     SimulationController,
     ViewerRuntimeController,
     ViewerRuntimeState,
+    PENDING_OFFER_DECISION_TICK_CAP,
     _consume_rumor_outcome,
     _refresh_rumor_query,
     _build_parser,
@@ -40,7 +41,7 @@ from hexcrawler.cli.pygame_viewer import (
     _format_debug_trace_row,
 )
 from hexcrawler.sim.core import EntityState
-from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT
+from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT, CampaignDangerModule
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
@@ -517,6 +518,89 @@ def test_find_world_marker_at_pixel_uses_same_positions_as_rendering_pipeline() 
     assert marker is not None
     assert marker.marker_id == "site:site-alpha"
 
+
+
+
+def test_viewer_runtime_pending_offer_decision_accept_resolves_while_auto_advance_paused() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True, seed=77)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=True,
+        current_save_path="saves/session_save.json",
+        paused=True,
+    )
+    runtime = ViewerRuntimeController(state)
+
+    danger = sim.state.entities["danger:raider_patrol_alpha"]
+    player = sim.state.entities[PLAYER_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    assert viewer_module._single_player_offer_pause(sim) is True
+    runtime.controller.accept_encounter_offer()
+    advanced = runtime.resolve_pending_offer_decision()
+
+    control = sim.get_rules_state("campaign_danger").get("encounter_control_by_player", {}).get(PLAYER_ID, {})
+    assert advanced >= 1
+    assert viewer_module._single_player_offer_pause(sim) is False
+    assert control.get("state") in {"accepted_loading", "in_local"}
+
+
+def test_viewer_runtime_pending_offer_decision_flee_resolves_without_retrigger() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True, seed=78)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=True,
+        current_save_path="saves/session_save.json",
+        paused=True,
+    )
+    runtime = ViewerRuntimeController(state)
+
+    danger = sim.state.entities["danger:raider_patrol_alpha"]
+    player = sim.state.entities[PLAYER_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    assert viewer_module._single_player_offer_pause(sim) is True
+    runtime.controller.flee_encounter_offer()
+    advanced = runtime.resolve_pending_offer_decision()
+
+    state_after = sim.get_rules_state("campaign_danger")
+    control = state_after.get("encounter_control_by_player", {}).get(PLAYER_ID, {})
+    assert advanced >= 1
+    assert viewer_module._single_player_offer_pause(sim) is False
+    assert control.get("state") == "post_encounter_cooldown"
+    assert state_after.get("pending_offer_by_player", {}).get(PLAYER_ID) is None
+
+
+def test_viewer_runtime_pending_offer_decision_step_is_bounded() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True, seed=79)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=True,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+
+    danger = sim.state.entities["danger:raider_patrol_alpha"]
+    player = sim.state.entities[PLAYER_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+    assert viewer_module._single_player_offer_pause(sim) is True
+
+    advanced = runtime.resolve_pending_offer_decision(tick_cap=3)
+
+    assert advanced == 3
+    assert viewer_module._single_player_offer_pause(sim) is True
+    control = sim.get_rules_state(CampaignDangerModule.name).get("encounter_control_by_player", {}).get(PLAYER_ID, {})
+    assert control.get("state") == "pending_offer"
+    assert PENDING_OFFER_DECISION_TICK_CAP >= 3
 
 def test_viewer_runtime_controller_new_simulation_replaces_state_deterministically() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=42)
