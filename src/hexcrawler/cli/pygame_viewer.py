@@ -1611,6 +1611,10 @@ def _pending_encounter_offer(sim: Simulation) -> dict[str, Any] | None:
     return pending_offer
 
 
+def _single_player_offer_pause(sim: Simulation) -> bool:
+    return _pending_encounter_offer(sim) is not None
+
+
 def _draw_encounter_offer_modal(
     screen: pygame.Surface,
     sim: Simulation,
@@ -3116,10 +3120,11 @@ def run_pygame_viewer(
             controller.set_move_vector(move_x, move_y)
             last_sent_move_vector = (move_x, move_y)
 
+        single_player_offer_pause = _single_player_offer_pause(sim)
         accumulator, ticks_advanced = _drain_sim_accumulator(
             accumulator,
             SIM_TICK_SECONDS,
-            paused=runtime_state.paused,
+            paused=(runtime_state.paused or single_player_offer_pause),
         )
         if ticks_advanced > 0:
             previous_snapshot = current_snapshot

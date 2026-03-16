@@ -240,6 +240,33 @@ def test_local_encounter_return_migrates_legacy_origin_coord_shape() -> None:
     assert return_event["params"]["to_space_id"] == "overworld"
 
 
+
+
+def test_local_encounter_return_uses_immutable_origin_context_not_mutated_from_location() -> None:
+    sim = _build_sim(seed=63)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+
+    immutable_origin = dict(active["origin_location"])
+    active["from_location"] = {
+        "space_id": CAMPAIGN_SPACE_ID,
+        "topology_type": SQUARE_GRID_TOPOLOGY,
+        "coord": {"x": 99, "y": 99},
+    }
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["to_coord"] == immutable_origin["coord"]
 def test_local_encounter_return_save_load_hash_stable_with_legacy_context() -> None:
     sim_a = _build_sim(seed=71)
     sim_b = _build_sim(seed=71)

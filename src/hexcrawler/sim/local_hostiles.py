@@ -53,9 +53,11 @@ class LocalHostileBehaviorModule(RuleModule):
             player_location = sim._entity_location_ref(player)
             distance = distance_between_locations(hostile_location, player_location)
             if distance is not None and distance <= 1:
+                # Hold hostile movement while in melee contact so command ordering
+                # cannot re-introduce same-cell shove loops before combat intent resolves.
+                self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)
                 if last_attack_tick_by_entity.get(entity_id) == tick:
                     continue
-                self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)
                 sim.append_command(
                     SimCommand(
                         tick=tick,

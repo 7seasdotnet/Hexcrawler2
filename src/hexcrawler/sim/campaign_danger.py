@@ -92,6 +92,11 @@ class CampaignDangerModule(RuleModule):
                     held_source_id = self._optional_non_empty_string(offer.get("danger_entity_id"))
 
         danger = sim.state.entities.get(self._danger_entity_id)
+        held_source = sim.state.entities.get(held_source_id) if held_source_id is not None else None
+        held_source_is_campaign = held_source is not None and self._is_campaign_entity(sim, held_source)
+        if player_state == ENCOUNTER_STATE_PENDING_OFFER and held_source_is_campaign and held_source is not None:
+            sim.stop_entity(held_source.entity_id)
+
         hold_danger = (
             danger is not None
             and held_source_id == self._danger_entity_id

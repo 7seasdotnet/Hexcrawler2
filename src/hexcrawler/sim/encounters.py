@@ -437,7 +437,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 elif self._is_exit_pinned_by_hostile(sim=sim, entity_id=entity_id):
                     reason = "hostile_adjacent"
                 else:
-                    origin_location = copy.deepcopy(active_context.get("origin_location", active_context.get("from_location")))
+                    origin_location = copy.deepcopy(active_context.get("origin_location"))
                     return_in_progress_by_local_space = dict(state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE])
                     return_in_progress_by_local_space[local_space_id] = True
                     state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE] = {
@@ -1095,7 +1095,7 @@ class LocalEncounterInstanceModule(RuleModule):
             fallback_space_id = str(context.get("origin_space_id", context["from_space_id"]))
             normalized_origin = self._normalize_origin_location_payload(
                 origin_space_id=fallback_space_id,
-                origin_location_payload=context.get("origin_location", context.get("from_location")),
+                origin_location_payload=context.get("origin_location"),
                 legacy_coord=context.get("return_spawn_coord"),
             )
             to_space_id = str(normalized_origin.get("space_id", fallback_space_id)) if normalized_origin is not None else fallback_space_id

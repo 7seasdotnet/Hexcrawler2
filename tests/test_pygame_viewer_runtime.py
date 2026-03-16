@@ -11,6 +11,7 @@ from hexcrawler.cli.pygame_viewer import (
     _build_viewer_simulation,
     _drain_sim_accumulator,
     _focus_camera_on_selected,
+    _single_player_offer_pause,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.hash import simulation_hash, world_hash
@@ -143,3 +144,34 @@ def test_follow_off_state_reports_off_without_camera_changes() -> None:
     assert center is None
     assert message is None
     assert follow_state.status == FOLLOW_STATUS_OFF
+
+
+def test_single_player_offer_pause_detects_pending_offer_state() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    assert _single_player_offer_pause(sim) is False
+
+    state = sim.get_rules_state("campaign_danger")
+    state["pending_offer_by_player"] = {
+        PLAYER_ID: {
+            "player_entity_id": PLAYER_ID,
+            "danger_entity_id": "danger:test",
+            "source_label": "test source",
+            "encounter_label": "test encounter",
+            "context": "campaign",
+            "trigger": "contact",
+            "category": "hostile",
+            "table_id": "table",
+            "entry_id": "entry",
+            "suggested_local_template_id": "local_template_forest",
+            "tick": 0,
+            "roll": 1,
+            "tags": [],
+            "location": {
+                "space_id": "overworld",
+                "topology_type": "overworld_hex",
+                "coord": {"q": 0, "r": 0},
+            },
+        }
+    }
+    sim.set_rules_state("campaign_danger", state)
+    assert _single_player_offer_pause(sim) is True

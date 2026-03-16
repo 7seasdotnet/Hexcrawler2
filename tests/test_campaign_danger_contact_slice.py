@@ -468,3 +468,49 @@ def test_no_new_offer_while_in_local_or_returning() -> None:
     state = sim.get_rules_state(CampaignDangerModule.name)
     assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") in {"returning", "post_encounter_cooldown"}
     assert state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID) is None
+
+
+def test_pending_offer_holds_dynamic_contact_source_entity() -> None:
+    sim = _build_sim(seed=703)
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    sim.add_entity(
+        EntityState(
+            entity_id="danger:dynamic_contact",
+            position_x=player.position_x,
+            position_y=player.position_y,
+            speed_per_tick=0.4,
+            target_position=(player.position_x + 4.0, player.position_y),
+            space_id=player.space_id,
+            template_id="campaign_dynamic_hostile",
+        )
+    )
+
+    sim.schedule_event_at(
+        tick=0,
+        event_type=ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
+        params={
+            "tick": 0,
+            "context": "global",
+            "trigger": "travel",
+            "location": sim._entity_location_ref(player).to_dict(),
+            "roll": 31,
+            "category": "hostile",
+            "table_id": "enc_table_primary",
+            "entry_id": "wolves_1",
+            "source_entity_id": "danger:dynamic_contact",
+            "source_label": "dynamic patrol",
+            "offer_required": True,
+            "offer_accepted": False,
+        },
+    )
+    sim.advance_ticks(2)
+
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    pending_offer = state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID)
+    assert isinstance(pending_offer, dict)
+    assert pending_offer.get("danger_entity_id") == "danger:dynamic_contact"
+
+    source = sim.state.entities["danger:dynamic_contact"]
+    held_start = (source.position_x, source.position_y)
+    sim.advance_ticks(6)
+    assert (source.position_x, source.position_y) == held_start

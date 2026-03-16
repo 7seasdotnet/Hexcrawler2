@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a short live playable-loop smoke pass in viewer mode (Fight/Flee pending hold -> local combat -> return) and then tune pending-offer cooldown/pressure values only if needed.
+- **Next action:** Run a short viewer smoke pass to tune pending-offer UX copy and contact-pressure values (no contract changes) after validating this fix pass in hands-on play.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -95,6 +95,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Clarified and renumbered the canonical encounter authority section to `6N) Player Encounter Flow Authority Contract (B3)` in `docs/ARCHITECTURE.md` to remove duplicate section numbering ambiguity.
-- Updated `AGENTS.md` reminder pointer to the corrected canonical section number (`6N`) so future implementation passes reference the right contract location.
-- Re-ran focused encounter authority regression checks and a short headless runtime smoke command to confirm behavior remains stable after docs alignment.
+- Implemented single-player pending-offer campaign auto-advance suppression in the pygame runtime while keeping encounter decisions command/event-authoritative.
+- Unified held-source behavior for pending offers (including dynamic `source_entity_id` contacts), fixed local hostile contact stall behavior, and tightened local return restoration to immutable captured `origin_location` context.
+- Added focused regression coverage for pending-offer hold semantics, dynamic-source hold, local contact non-stall combat continuity, immutable return-context behavior, and viewer pending-offer pause detection; revalidated full-suite determinism/save-load stability.
