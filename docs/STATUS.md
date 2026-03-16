@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a short viewer smoke pass to tune pending-offer UX copy and contact-pressure values (no contract changes) after validating this fix pass in hands-on play.
+- **Next action:** Execute an interactive viewer smoke pass (manual) for dynamic/static contact Fight/Flee UX polish now that automated full-suite + encounter smoke verification are green.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -88,13 +88,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
-- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_encounter_controller_smoke_slice.py`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `python play.py --headless`
 - `python play.py`
 
 ## What changed in this commit
-- Implemented single-player pending-offer campaign auto-advance suppression in the pygame runtime while keeping encounter decisions command/event-authoritative.
-- Unified held-source behavior for pending offers (including dynamic `source_entity_id` contacts), fixed local hostile contact stall behavior, and tightened local return restoration to immutable captured `origin_location` context.
-- Added focused regression coverage for pending-offer hold semantics, dynamic-source hold, local contact non-stall combat continuity, immutable return-context behavior, and viewer pending-offer pause detection; revalidated full-suite determinism/save-load stability.
+- Closed the previous validation caveat by running the full repository suite successfully (`691 passed`) and confirming there is no deterministic deadlock at the prior ~52% progress point.
+- Confirmed encounter-flow smoke coverage for pending-offer Fight/Flee paths across dynamic/static sources remains green in targeted regression runs.
+- Kept architecture/runtime contracts unchanged: pending-offer readability pause remains runtime-level while decision consumption remains authoritative command/tick driven.

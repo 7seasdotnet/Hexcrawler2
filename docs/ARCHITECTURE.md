@@ -344,6 +344,7 @@ Before landing a new system, confirm:
   - No additional offer creation is allowed for that player.
   - No local entry is allowed except through explicit `accept_encounter_offer` -> `encounter_resolve_request(offer_accepted=true)` path.
 - **Prototype runtime note (single-player):** while `pending_offer` is visible, the current pygame runtime suppresses campaign auto-advance so the decision surface stays stable and legible; this is a runtime/viewer behavior and does not grant direct viewer mutation authority.
+- **Decision-consumption requirement during single-player pause:** if the viewer appends `accept_encounter_offer` or `flee_encounter_offer` while auto-advance is suppressed, runtime control must still run bounded authoritative ticks so command consumption resolves `pending_offer` deterministically (or surfaces a bounded-cap failure signal) without direct viewer state mutation.
 - **Future multiplayer-safe note:** keep the same encounter-control states, but resolve pending offers through bounded per-player deadline/timeout ticks rather than requiring any global simulation pause.
 - **Transition contract:**
   - `none` -> `pending_offer` on eligible contact/resolve-request with `offer_required=true` and not accepted.
