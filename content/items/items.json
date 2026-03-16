@@ -2,6 +2,16 @@
   "schema_version": 1,
   "items": [
     {
+      "item_id": "proof_token",
+      "name": "Proof Token",
+      "stackable": true,
+      "unit_mass": 0.1,
+      "tags": [
+        "reward",
+        "token"
+      ]
+    },
+    {
       "item_id": "rations",
       "name": "Trail Rations",
       "stackable": true,

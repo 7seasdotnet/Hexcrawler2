@@ -31,6 +31,7 @@ END_LOCAL_ENCOUNTER_INTENT = "end_local_encounter_intent"
 END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE = "end_local_encounter_outcome"
 LOCAL_ENCOUNTER_END_EVENT_TYPE = "local_encounter_end"
 LOCAL_ENCOUNTER_RETURN_EVENT_TYPE = "local_encounter_return"
+LOCAL_ENCOUNTER_REWARD_EVENT_TYPE = "local_encounter_reward"
 SITE_STATE_TICK_EVENT_TYPE = "site_state_tick"
 SITE_EFFECT_SCHEDULED_EVENT_TYPE = "site_effect_scheduled"
 SITE_EFFECT_CONSUMED_EVENT_TYPE = "site_effect_consumed"
@@ -114,6 +115,9 @@ SITE_ECOLOGY_CONFIG_ALLOWED_MARKER_TYPES = {
 }
 LOCAL_ENCOUNTER_EXIT_PIN_DISTANCE = 1
 LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
+LOCAL_REWARD_TOKEN_ITEM_ID = "proof_token"
+LOCAL_REWARD_TOKEN_QUANTITY = 1
+LOCAL_REWARD_INCAPACITATE_SEVERITY = 3
 
 
 
@@ -868,6 +872,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_position": copy.deepcopy(origin_position),
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
                 "return_exit_coord": copy.deepcopy(to_spawn_coord),
+                "encounter_participant_entity_ids": [
+                    str(row.get("entity_id"))
+                    for row in participant_spawn_records
+                    if isinstance(row, dict) and isinstance(row.get("entity_id"), str) and row.get("entity_id")
+                ],
                 "started_tick": int(event.tick),
                 "site_key": copy.deepcopy(normalized_site_key),
                 "is_active": True,
@@ -1155,6 +1164,16 @@ class LocalEncounterInstanceModule(RuleModule):
         state[self._STATE_SITE_STATE_BY_KEY] = dict(sorted(site_state_by_key.items()))
         sim.set_rules_state(self.name, state)
 
+        reward_outcome = self._grant_local_reward_token(
+            sim=sim,
+            tick=event.tick,
+            action_uid=action_uid,
+            entity_id=entity_id,
+            local_space_id=local_space_id,
+            encounter_participant_entity_ids=context.get("encounter_participant_entity_ids", []) if isinstance(context, dict) else [],
+            return_applied=applied,
+        )
+
         sim.schedule_event_at(
             tick=event.tick,
             event_type=LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
@@ -1180,6 +1199,154 @@ class LocalEncounterInstanceModule(RuleModule):
                 "tags": [str(tag) for tag in event.params.get("tags", [])] if isinstance(event.params.get("tags"), list) else [],
             },
         )
+        sim.schedule_event_at(
+            tick=event.tick,
+            event_type=LOCAL_ENCOUNTER_REWARD_EVENT_TYPE,
+            params={
+                "tick": int(event.tick),
+                "action_uid": action_uid,
+                "entity_id": entity_id,
+                "local_space_id": local_space_id,
+                "applied": bool(reward_outcome["applied"]),
+                "reason": str(reward_outcome["reason"]),
+                "details": copy.deepcopy(reward_outcome.get("details", {})),
+            },
+        )
+
+    def _grant_local_reward_token(
+        self,
+        *,
+        sim: Simulation,
+        tick: int,
+        action_uid: str,
+        entity_id: str | None,
+        local_space_id: str,
+        encounter_participant_entity_ids: list[Any],
+        return_applied: bool,
+    ) -> dict[str, Any]:
+        if not return_applied:
+            return {"applied": False, "reason": "return_not_applied", "details": {}}
+        if entity_id is None or entity_id not in sim.state.entities:
+            return {"applied": False, "reason": "invalid_entity", "details": {}}
+
+        incapacitated_count = self._count_incapacitated_hostiles(
+            sim=sim,
+            local_space_id=local_space_id,
+            encounter_participant_entity_ids=encounter_participant_entity_ids,
+        )
+        if incapacitated_count <= 0:
+            return {
+                "applied": False,
+                "reason": "no_incapacitated_hostile",
+                "details": {"incapacitated_hostiles": 0},
+            }
+
+        entity = sim.state.entities[entity_id]
+        container_id = entity.inventory_container_id
+        if container_id is None or container_id not in sim.state.world.containers:
+            return {
+                "applied": False,
+                "reason": "no_inventory_container",
+                "details": {"incapacitated_hostiles": incapacitated_count},
+            }
+
+        reward_action_uid = f"local_reward_token:{action_uid}"
+        sim._execute_inventory_intent(
+            SimCommand(
+                tick=tick,
+                entity_id=entity_id,
+                command_type="inventory_intent",
+                params={
+                    "src_container_id": None,
+                    "dst_container_id": container_id,
+                    "item_id": LOCAL_REWARD_TOKEN_ITEM_ID,
+                    "quantity": LOCAL_REWARD_TOKEN_QUANTITY,
+                    "reason": "spawn",
+                    "action_uid": reward_action_uid,
+                },
+            ),
+            command_index=0,
+        )
+
+        inventory_outcome = self._inventory_outcome_for_action_uid(sim=sim, action_uid=reward_action_uid)
+        if inventory_outcome == "applied":
+            return {
+                "applied": True,
+                "reason": "token_granted",
+                "details": {
+                    "item_id": LOCAL_REWARD_TOKEN_ITEM_ID,
+                    "quantity": LOCAL_REWARD_TOKEN_QUANTITY,
+                    "incapacitated_hostiles": incapacitated_count,
+                },
+            }
+        if inventory_outcome == "already_applied":
+            return {
+                "applied": False,
+                "reason": "already_processed",
+                "details": {"incapacitated_hostiles": incapacitated_count},
+            }
+        return {
+            "applied": False,
+            "reason": "inventory_rejected",
+            "details": {
+                "inventory_outcome": inventory_outcome,
+                "incapacitated_hostiles": incapacitated_count,
+            },
+        }
+
+    @staticmethod
+    def _inventory_outcome_for_action_uid(*, sim: Simulation, action_uid: str) -> str:
+        for entry in reversed(sim.state.event_trace):
+            if entry.get("event_type") != "inventory_outcome":
+                continue
+            params = entry.get("params")
+            if not isinstance(params, dict):
+                continue
+            if params.get("action_uid") != action_uid:
+                continue
+            outcome = params.get("outcome")
+            if isinstance(outcome, str):
+                return outcome
+        return "missing_outcome"
+
+    @staticmethod
+    def _count_incapacitated_hostiles(
+        *,
+        sim: Simulation,
+        local_space_id: str,
+        encounter_participant_entity_ids: list[Any],
+    ) -> int:
+        participant_ids = {
+            str(entity_id)
+            for entity_id in encounter_participant_entity_ids
+            if isinstance(entity_id, str) and entity_id
+        }
+        if not participant_ids:
+            return 0
+
+        count = 0
+        for participant_id in sorted(participant_ids):
+            entity = sim.state.entities.get(participant_id)
+            if entity is None:
+                continue
+            if entity.space_id != local_space_id:
+                continue
+            if entity.template_id != LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID:
+                continue
+            if LocalEncounterInstanceModule._is_incapacitated(entity.wounds):
+                count += 1
+        return count
+
+    @staticmethod
+    def _is_incapacitated(wounds: list[dict[str, Any]]) -> bool:
+        severity_total = 0
+        for wound in wounds:
+            if not isinstance(wound, dict):
+                continue
+            severity = wound.get("severity")
+            if isinstance(severity, int) and severity > 0:
+                severity_total += severity
+        return severity_total >= LOCAL_REWARD_INCAPACITATE_SEVERITY
 
     def _rules_state(self, sim: Simulation) -> dict[str, Any]:
         state = sim.get_rules_state(self.name)
@@ -1254,6 +1421,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_position": copy.deepcopy(origin_position),
                 "return_spawn_coord": copy.deepcopy(return_spawn_coord),
                 "return_exit_coord": copy.deepcopy(return_exit_coord),
+                "encounter_participant_entity_ids": [
+                    str(entity_id)
+                    for entity_id in context.get("encounter_participant_entity_ids", [])
+                    if isinstance(entity_id, str) and entity_id
+                ],
                 "started_tick": int(context.get("started_tick", 0)),
                 "site_key": self._normalize_site_key_payload(context.get("site_key")),
                 "is_active": bool(context.get("is_active", True)),
