@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Tighten local encounter hostility/combat pressure after deterministic campaign danger contact now ships in the playable loop.
+- **Next action:** Keep local hostile pressure in the playable loop while continuing to move wound/combat policy into rule/domain modules (not simulation core) as the slice grows.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -71,6 +71,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Local topology/projection flexibility remains preserved.
 
 ## Supported Action Intent Types (Current)
+- Combat/tactical intents currently executed through the authoritative seam: `attack_intent`, `turn_intent` (local-role gated).
 - Provisional deterministic encounter action intents currently executed: `signal_intent`, `track_intent`.
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
@@ -87,6 +88,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added a deterministic `campaign_danger` module that spawns a visible campaign-role danger patrol entity, moves it continuously on a fixed waypoint loop, and emits deterministic contact events on proximity overlap.
-- Routed campaign danger contact through the existing encounter bridge (`encounter_resolve_request` → `local_encounter_request`) with serialized anti-spam overlap state that survives save/load and replay.
-- Hardened campaign-danger coverage to explicitly verify the feature uses the existing resolve→request bridge (no direct local shortcut), while keeping deterministic movement/contact, anti-spam, role-gating, and save/load stability checks.
+- Refactored wound movement-consequence policy out of `sim/core.py` into a dedicated deterministic `sim/wounds.py` domain helper, keeping core movement execution infrastructural.
+- Kept the hostile local slice behavior unchanged (local-role only, attack through `attack_intent`) while updating tests to consume the new wound policy seam.
+- Added focused `tests/test_wounds.py` coverage to validate deterministic wound movement multipliers and bounded/invalid payload handling.
