@@ -376,3 +376,95 @@ def test_pending_offer_and_control_state_survive_save_load() -> None:
     state = loaded.get_rules_state(CampaignDangerModule.name)
     assert isinstance(state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID), dict)
     assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") == "pending_offer"
+
+
+def test_pending_offer_holds_campaign_contact_source_patrol() -> None:
+    sim = _build_sim(seed=700)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    held_start = (danger.position_x, danger.position_y)
+    sim.advance_ticks(8)
+    held_end = (danger.position_x, danger.position_y)
+    assert held_end == held_start
+
+
+def test_encounter_control_transitions_include_returning() -> None:
+    sim = _build_sim(seed=701)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": DEFAULT_PLAYER_ENTITY_ID},
+        )
+    )
+    sim.advance_ticks(3)
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") == "in_local"
+
+    begin_params = _events(sim, "local_encounter_begin")[0]["params"]
+    exit_coord = begin_params["return_exit_coord"]
+    sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_x = float(exit_coord["x"]) + 0.5
+    sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_y = float(exit_coord["y"]) + 0.5
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type="end_local_encounter_intent",
+            params={"intent": "end_local_encounter_intent", "entity_id": DEFAULT_PLAYER_ENTITY_ID, "tags": []},
+        )
+    )
+    sim.advance_ticks(3)
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    assert _events(sim, "local_encounter_end")
+    assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") in {"returning", "post_encounter_cooldown"}
+
+    sim.advance_ticks(2)
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") == "post_encounter_cooldown"
+
+
+def test_no_new_offer_while_in_local_or_returning() -> None:
+    sim = _build_sim_with_encounter_check(seed=702)
+    sim.advance_ticks(250)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": DEFAULT_PLAYER_ENTITY_ID},
+        )
+    )
+    sim.advance_ticks(3)
+
+    # While in local, encounter checks should not create additional pending offers.
+    sim.advance_ticks(200)
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    assert state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID) is None
+
+    begin_params = _events(sim, "local_encounter_begin")[0]["params"]
+    exit_coord = begin_params["return_exit_coord"]
+    sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_x = float(exit_coord["x"]) + 0.5
+    sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_y = float(exit_coord["y"]) + 0.5
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type="end_local_encounter_intent",
+            params={"intent": "end_local_encounter_intent", "entity_id": DEFAULT_PLAYER_ENTITY_ID, "tags": []},
+        )
+    )
+    sim.advance_ticks(2)
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") in {"returning", "post_encounter_cooldown"}
+    assert state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID) is None
