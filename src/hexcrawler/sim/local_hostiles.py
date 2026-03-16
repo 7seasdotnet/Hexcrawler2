@@ -52,7 +52,7 @@ class LocalHostileBehaviorModule(RuleModule):
             hostile_location = sim._entity_location_ref(entity)
             player_location = sim._entity_location_ref(player)
             distance = distance_between_locations(hostile_location, player_location)
-            if distance == 1:
+            if distance is not None and distance <= 1:
                 if last_attack_tick_by_entity.get(entity_id) == tick:
                     continue
                 self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)

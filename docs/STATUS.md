@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a brief playtest pass on encounter-contact readability and tune post-offer cooldown/anti-retrigger timings without reintroducing forced-entry behavior.
+- **Next action:** Run a short live playable-loop smoke pass in viewer mode (Fight/Flee pending hold -> local combat -> return) and then tune pending-offer cooldown/pressure values only if needed.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -86,6 +86,8 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py`
 - `PYTHONPATH=src pytest -q tests/test_encounter_controller_smoke_slice.py`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
@@ -93,6 +95,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added focused encounter-controller smoke tests that validate the manual play checks for dynamic and encounter-check contact sources, pending-offer-only entry, authoritative Fight/Flee outcomes, and no nested local begin churn.
-- Verified the full deterministic test suite with the new smoke coverage in place (`681 passed`) and kept the encounter-controller behavior stable.
-- Kept encounter-control flow and viewer surfaces unchanged in this commit; this pass adds verification confidence for the prior fix.
+- Clarified and renumbered the canonical encounter authority section to `6N) Player Encounter Flow Authority Contract (B3)` in `docs/ARCHITECTURE.md` to remove duplicate section numbering ambiguity.
+- Updated `AGENTS.md` reminder pointer to the corrected canonical section number (`6N`) so future implementation passes reference the right contract location.
+- Re-ran focused encounter authority regression checks and a short headless runtime smoke command to confirm behavior remains stable after docs alignment.

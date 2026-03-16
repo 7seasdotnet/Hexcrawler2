@@ -327,6 +327,32 @@ Before landing a new system, confirm:
   4. cut over serialization schema version.
 - **Contract:** No fixed-point commitment is made now; this is a planned compatibility path.
 
+## 6N) Player Encounter Flow Authority Contract (B3)
+- **Space role scope:** both (`campaign` + `local`) with role-gated command admissibility.
+- **Authoritative owner:** `CampaignDangerModule.rules_state["encounter_control_by_player"]` is the sole per-player encounter-control authority for campaign-facing flow ownership.
+- **Canonical states:** `none`, `pending_offer`, `accepted_loading`, `in_local`, `returning`, `post_encounter_cooldown`.
+- **Command admissibility by state:**
+  - `none`: campaign movement and normal encounter eligibility are allowed.
+  - `pending_offer`: only `accept_encounter_offer`/`flee_encounter_offer` are admissible for encounter resolution; campaign movement commands for the involved player are suppressed.
+  - `accepted_loading`: no second offer/entry is admissible; handoff waits for local begin event.
+  - `in_local`: tactical/local resolution in local-role space only.
+  - `returning`: return processing only; no new offer/local entry.
+  - `post_encounter_cooldown`: no new offer until cooldown expires.
+- **Suppression contract while `pending_offer`:**
+  - Player remains in campaign space until explicit decision.
+  - The captured contact source (`danger_entity_id`) is held (ordinary patrol/movement suppressed) until Fight/Flee resolves.
+  - No additional offer creation is allowed for that player.
+  - No local entry is allowed except through explicit `accept_encounter_offer` -> `encounter_resolve_request(offer_accepted=true)` path.
+- **Transition contract:**
+  - `none` -> `pending_offer` on eligible contact/resolve-request with `offer_required=true` and not accepted.
+  - `pending_offer` -> `accepted_loading` on `accept_encounter_offer`.
+  - `pending_offer` -> `post_encounter_cooldown` on `flee_encounter_offer`.
+  - `accepted_loading` -> `in_local` on `local_encounter_begin`.
+  - `in_local` -> `returning` on `local_encounter_end`.
+  - `returning` -> `post_encounter_cooldown` on `local_encounter_return`.
+  - `post_encounter_cooldown` -> `none` when cooldown expires.
+- **Single-entry/single-return invariant:** local encounter entry and return are only valid through the existing authoritative encounter modules; campaign-side decision flow must not trigger local return restoration.
+
 ## 10) Rendering & Interpolation Contract
 - **Contract:** Simulation remains fixed-tick authoritative and only advances on simulation tick boundaries.
 - **Contract:** Viewer rendering may run at a higher frame rate and interpolate visual positions between the previous committed tick state (`T-1`) and current committed tick state (`T`).
@@ -357,3 +383,5 @@ Before landing a new system, confirm:
 - **Propagation Contract:** Signal perception uses deterministic bounded topology-aware path evaluation within signal radius and computes `effective_path_cost = step_count + occlusion_cost`.
 - **Forensics Contract:** Perception outcomes may include `step_count`, `occlusion_cost`, and `effective_path_cost` as deterministic JSON-safe values.
 - **Phase Boundary (Hard):** No AI reaction, stealth modeling, probabilistic checks, combat branching, or presentation-side mutation paths are introduced by this contract.
+
+

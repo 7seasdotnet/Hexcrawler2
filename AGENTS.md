@@ -188,3 +188,8 @@ If Codex fails to update STATUS.md, you reject the output.
 - Campaign-role spaces handle travel/time/logistics/encounter triggering and abstract outcomes.
 - Local-role spaces handle tactical movement and tactical combat resolution.
 - Tactical combat intents (`attack_intent`, `turn_intent`, and other tactical commands) are inadmissible in campaign-role spaces.
+
+
+## Encounter Authority Reminder (B3)
+- Canonical player encounter-flow authority contract is documented in `docs/ARCHITECTURE.md` under **6N) Player Encounter Flow Authority Contract (B3)**.
+- Implementation changes touching contact/offer/local entry/return must preserve that contract and keep `CampaignDangerModule` as the single per-player encounter-control owner for campaign-facing flow state.

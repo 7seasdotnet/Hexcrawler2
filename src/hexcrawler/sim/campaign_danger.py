@@ -7,6 +7,7 @@ from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, SimComman
 from hexcrawler.sim.encounters import (
     ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
     LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+    LOCAL_ENCOUNTER_END_EVENT_TYPE,
     LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
 )
 from hexcrawler.sim.movement import axial_to_world_xy
@@ -80,12 +81,25 @@ class CampaignDangerModule(RuleModule):
         )
         state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
         player = sim.state.entities.get(DEFAULT_PLAYER_ENTITY_ID)
-        if player is not None and self._encounter_state_for_player(
-            encounter_control_by_player, player.entity_id
-        ) == ENCOUNTER_STATE_PENDING_OFFER:
-            sim.stop_entity(player.entity_id)
+        player_state = ENCOUNTER_STATE_NONE
+        held_source_id: str | None = None
+        if player is not None:
+            player_state = self._encounter_state_for_player(encounter_control_by_player, player.entity_id)
+            if player_state == ENCOUNTER_STATE_PENDING_OFFER:
+                sim.stop_entity(player.entity_id)
+                offer = state[self._STATE_PENDING_OFFER_BY_PLAYER].get(player.entity_id)
+                if isinstance(offer, dict):
+                    held_source_id = self._optional_non_empty_string(offer.get("danger_entity_id"))
+
         danger = sim.state.entities.get(self._danger_entity_id)
-        if danger is not None and self._is_campaign_entity(sim, danger):
+        hold_danger = (
+            danger is not None
+            and held_source_id == self._danger_entity_id
+            and player_state == ENCOUNTER_STATE_PENDING_OFFER
+        )
+        if hold_danger and danger is not None:
+            sim.stop_entity(danger.entity_id)
+        elif danger is not None and self._is_campaign_entity(sim, danger):
             if danger.target_position is None:
                 danger.target_position = self._next_waypoint(danger)
             elif self._distance_sq(
@@ -248,7 +262,19 @@ class CampaignDangerModule(RuleModule):
         if event.event_type == LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE:
             entity_id = self._optional_non_empty_string(event.params.get("entity_id"))
             if entity_id is not None:
+                pending_offer_by_player.pop(entity_id, None)
                 encounter_control_by_player[entity_id] = {"state": ENCOUNTER_STATE_IN_LOCAL, "until_tick": -1}
+                state[self._STATE_PENDING_OFFER_BY_PLAYER] = pending_offer_by_player
+                state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
+                sim.set_rules_state(self.name, state)
+            return
+
+        if event.event_type == LOCAL_ENCOUNTER_END_EVENT_TYPE:
+            entity_id = self._optional_non_empty_string(event.params.get("entity_id"))
+            if entity_id is None:
+                return
+            if self._encounter_state_for_player(encounter_control_by_player, entity_id) == ENCOUNTER_STATE_IN_LOCAL:
+                encounter_control_by_player[entity_id] = {"state": ENCOUNTER_STATE_RETURNING, "until_tick": -1}
                 state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
                 sim.set_rules_state(self.name, state)
             return
@@ -283,8 +309,10 @@ class CampaignDangerModule(RuleModule):
         player_state = self._encounter_state_for_player(encounter_control_by_player, player_id)
 
         if command.command_type in {"set_move_vector", "set_target_position"} and player_state == ENCOUNTER_STATE_PENDING_OFFER:
-            sim.stop_entity(player_id)
-            return True
+            player = sim.state.entities.get(player_id)
+            if player is not None and self._is_campaign_entity(sim, player):
+                sim.stop_entity(player_id)
+                return True
 
         if command.command_type not in {ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT}:
             return False
@@ -305,7 +333,11 @@ class CampaignDangerModule(RuleModule):
         if command.command_type == ACCEPT_ENCOUNTER_OFFER_INTENT:
             if self._has_active_local_encounter_state(sim=sim, player=player):
                 return True
-            player_location = sim._entity_location_ref(player).to_dict()
+            offer_location = offer.get("location")
+            if not isinstance(offer_location, dict):
+                offer_location = sim._entity_location_ref(player).to_dict()
+            else:
+                offer_location = dict(offer_location)
             sim.schedule_event_at(
                 tick=command.tick + 1,
                 event_type=ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
@@ -316,7 +348,7 @@ class CampaignDangerModule(RuleModule):
                     "source_entity_id": str(offer.get("danger_entity_id", self._danger_entity_id)),
                     "source_label": str(offer.get("source_label", "campaign danger")),
                     "danger_entity_id": str(offer.get("danger_entity_id", self._danger_entity_id)),
-                    "location": player_location,
+                    "location": offer_location,
                     "roll": int(offer.get("roll", 0)),
                     "category": str(offer.get("category", "hostile")),
                     "table_id": str(offer.get("table_id", "campaign_danger_contact")),
