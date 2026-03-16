@@ -21,6 +21,7 @@ from hexcrawler.sim.movement import (
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import ContainerState, DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
+from hexcrawler.sim.wounds import movement_multiplier_from_wounds
 
 TICKS_PER_DAY = 240
 TARGET_REACHED_THRESHOLD = 0.05
@@ -1218,7 +1219,9 @@ class Simulation:
         if move_x == 0.0 and move_y == 0.0:
             return
 
-        step_size = entity.speed_per_tick
+        step_size = entity.speed_per_tick * movement_multiplier_from_wounds(entity.wounds)
+        if step_size <= 0.0:
+            return
         if target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
             delta_x = target[0] - entity.position_x
             delta_y = target[1] - entity.position_y
@@ -1246,6 +1249,7 @@ class Simulation:
                 )
         elif target is not None and entity.move_input_x == 0.0 and entity.move_input_y == 0.0:
             entity.target_position = None
+
 
     def _position_is_within_world(self, x: float, y: float, *, space_id: str = DEFAULT_OVERWORLD_SPACE_ID) -> bool:
         space = self.state.world.spaces.get(space_id)

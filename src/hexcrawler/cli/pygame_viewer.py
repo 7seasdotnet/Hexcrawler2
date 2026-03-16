@@ -36,6 +36,7 @@ from hexcrawler.sim.encounters import (
 from hexcrawler.sim.groups import GroupMovementModule
 from hexcrawler.sim.campaign_danger import CampaignDangerModule
 from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.local_hostiles import LocalHostileBehaviorModule
 from hexcrawler.sim.combat import CombatExecutionModule
 from hexcrawler.sim.entity_stats import EntityStatsExecutionModule
 from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE, ExplorationExecutionModule
@@ -2431,6 +2432,7 @@ def _register_encounter_modules(sim: Simulation) -> None:
     sim.register_rule_module(EncounterActionExecutionModule())
     sim.register_rule_module(LocalEncounterRequestModule())
     sim.register_rule_module(LocalEncounterInstanceModule())
+    sim.register_rule_module(LocalHostileBehaviorModule())
     sim.register_rule_module(CampaignDangerModule())
     sim.register_rule_module(SiteEcologyModule())
     sim.register_rule_module(RumorPipelineModule())
