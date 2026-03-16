@@ -1214,3 +1214,18 @@ def test_format_debug_trace_row_uses_bounded_pipe_separators() -> None:
         "tick=7 | event=viewer_event | action_uid=a-1 | source_action_uid=a-0 | "
         "source_event_id=e-1 | request_event_id=e-0"
     )
+
+
+def test_world_marker_placements_do_not_duplicate_local_hostile_marker_dot() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.state.entities["hostile:test"] = EntityState(
+        entity_id="hostile:test",
+        position_x=sim.state.entities[PLAYER_ID].position_x + 1.0,
+        position_y=sim.state.entities[PLAYER_ID].position_y,
+        space_id=sim.state.entities[PLAYER_ID].space_id,
+        template_id="encounter_hostile_v1",
+    )
+
+    placements = _world_marker_placements(sim, (200.0, 200.0), zoom_scale=1.0)
+
+    assert all(placement.marker.marker_id != "entity:hostile:test" for placement in placements)
