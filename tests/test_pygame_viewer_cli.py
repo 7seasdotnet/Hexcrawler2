@@ -40,6 +40,7 @@ from hexcrawler.cli.pygame_viewer import (
     _format_debug_trace_row,
 )
 from hexcrawler.sim.core import EntityState
+from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     EncounterActionExecutionModule,
@@ -136,6 +137,19 @@ def test_simulation_controller_appends_selection_commands() -> None:
     assert sim.input_log[-2].params == {"selected_entity_id": PLAYER_ID}
     assert sim.input_log[-1].command_type == "clear_selected_entity"
     assert sim.input_log[-1].params == {}
+
+
+def test_simulation_controller_appends_encounter_offer_commands() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    controller.accept_encounter_offer()
+    controller.flee_encounter_offer()
+
+    assert sim.input_log[-2].command_type == ACCEPT_ENCOUNTER_OFFER_INTENT
+    assert sim.input_log[-2].params == {"entity_id": PLAYER_ID}
+    assert sim.input_log[-1].command_type == FLEE_ENCOUNTER_OFFER_INTENT
+    assert sim.input_log[-1].params == {"entity_id": PLAYER_ID}
 
 
 def test_rumor_panel_queries_outcomes_without_mutating_world_hash() -> None:
@@ -404,6 +418,7 @@ def test_selected_entity_for_click_soft_fails_on_malformed_marker_id(monkeypatch
     def _bad_candidates(*args: object, **kwargs: object) -> list[MarkerRecord]:
         return [MarkerRecord(priority=0, marker_id="entity", marker_kind="entity", color=(1, 1, 1), radius=4, label="broken")]
 
+    monkeypatch.setattr(viewer_module, "_find_entity_at_pixel", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(viewer_module, "_find_world_marker_candidates_at_pixel", _bad_candidates)
 
     selected = _selected_entity_for_click(sim, (100, 100), (100.0, 100.0), radius_px=24.0)
@@ -435,6 +450,14 @@ def test_campaign_hex_topologies_route_to_overworld_projection() -> None:
     assert supported == OVERWORLD_HEX_TOPOLOGY
     assert _viewer_topology_diagnostic(hex_space) is None
     assert any(placement.marker.marker_id == "site:hex-site" for placement in placements)
+
+
+def test_world_marker_placements_do_not_include_player_entity_marker_dot() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+
+    placements = _world_marker_placements(sim, (200.0, 200.0), zoom_scale=1.0)
+
+    assert all(placement.marker.marker_id != f"entity:{PLAYER_ID}" for placement in placements)
 
 def test_world_marker_placements_skip_unsupported_topology_with_diagnostic() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
