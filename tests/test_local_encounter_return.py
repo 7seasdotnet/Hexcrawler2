@@ -15,6 +15,7 @@ from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import square_grid_cell_to_world_xy, world_xy_to_square_grid_cell
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, SpaceState
+from hexcrawler.sim.wounds import movement_multiplier_from_wounds
 
 
 CAMPAIGN_SPACE_ID = "campaign_plane_beta"
@@ -79,7 +80,9 @@ def test_local_encounter_return_happy_path() -> None:
 
     begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
     local_space_id = begin["params"]["to_space_id"]
+    return_exit_coord = begin["params"]["return_exit_coord"]
     assert sim.state.entities["scout"].space_id == local_space_id
+    assert world_xy_to_square_grid_cell(sim.state.entities["scout"].position_x, sim.state.entities["scout"].position_y) == return_exit_coord
 
     _issue_end_intent(sim)
     sim.advance_ticks(3)
@@ -409,6 +412,181 @@ def test_local_encounter_return_restores_exact_campaign_position_after_save_load
     return_event = _trace_by_type(loaded, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
     assert return_event["params"]["restore_mode"] == "exact_position"
 
+
+def test_end_local_encounter_rejected_when_not_at_exit_zone() -> None:
+    sim = _build_sim(seed=333)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    return_exit_coord = begin["params"]["return_exit_coord"]
+    assert sim.state.entities["scout"].space_id == local_space_id
+    away_coord = {"x": max(return_exit_coord["x"] - 1, 0), "y": return_exit_coord["y"]}
+    away_x, away_y = square_grid_cell_to_world_xy(away_coord["x"], away_coord["y"])
+    sim.state.entities["scout"].position_x = away_x
+    sim.state.entities["scout"].position_y = away_y
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(1)
+    outcome = _trace_by_type(sim, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)[0]
+    assert outcome["params"]["applied"] is False
+    assert outcome["params"]["reason"] == "not_at_return_exit"
+    assert len(_trace_by_type(sim, LOCAL_ENCOUNTER_END_EVENT_TYPE)) == 0
+    assert len(_trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)) == 0
+
+
+def test_end_local_encounter_rejected_when_hostile_adjacent_at_exit() -> None:
+    sim = _build_sim(seed=334)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    return_exit_coord = begin["params"]["return_exit_coord"]
+
+    hostile_id = begin["params"]["spawned_entities"][0]["entity_id"]
+    hostile = sim.state.entities[hostile_id]
+    hx, hy = square_grid_cell_to_world_xy(return_exit_coord["x"], return_exit_coord["y"])
+    hostile.space_id = local_space_id
+    hostile.position_x = hx
+    hostile.position_y = hy
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(1)
+    outcome = _trace_by_type(sim, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)[0]
+    assert outcome["params"]["applied"] is False
+    assert outcome["params"]["reason"] == "hostile_adjacent"
+    assert len(_trace_by_type(sim, LOCAL_ENCOUNTER_END_EVENT_TYPE)) == 0
+
+
+def test_end_local_encounter_exit_zone_and_pin_state_survive_save_load() -> None:
+    sim = _build_sim(seed=335)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    context = rules_state["active_by_local_space"][local_space_id]
+    assert context["return_exit_coord"] == begin["params"]["return_exit_coord"]
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    loaded_rules_state = loaded.get_rules_state(LocalEncounterInstanceModule.name)
+    loaded_context = loaded_rules_state["active_by_local_space"][local_space_id]
+    assert loaded_context["return_exit_coord"] == begin["params"]["return_exit_coord"]
+
+    return_exit_coord = begin["params"]["return_exit_coord"]
+    away_coord = {"x": max(return_exit_coord["x"] - 1, 0), "y": return_exit_coord["y"]}
+    away_x, away_y = square_grid_cell_to_world_xy(away_coord["x"], away_coord["y"])
+    loaded.state.entities["scout"].position_x = away_x
+    loaded.state.entities["scout"].position_y = away_y
+    _issue_end_intent(loaded)
+    loaded.advance_ticks(1)
+    assert _trace_by_type(loaded, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)[0]["params"]["reason"] == "not_at_return_exit"
+
+
+def test_wound_consequence_persists_after_successful_return() -> None:
+    sim = _build_sim(seed=336)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    sim.state.entities["scout"].wounds = [{"severity": 2, "region": "leg"}]
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    returned = sim.state.entities["scout"]
+    assert returned.space_id == CAMPAIGN_SPACE_ID
+    assert returned.wounds == [{"severity": 2, "region": "leg"}]
+
+    start_x = returned.position_x
+    start_y = returned.position_y
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_move_vector",
+            params={"x": 1.0, "y": 0.0},
+        )
+    )
+    sim.advance_ticks(1)
+
+    expected_step = returned.speed_per_tick * movement_multiplier_from_wounds(returned.wounds)
+    assert sim.state.entities["scout"].position_x == start_x + expected_step
+    assert sim.state.entities["scout"].position_y == start_y
+
+
+
+
+def test_local_encounter_return_legacy_context_without_exit_coord_derives_deterministically() -> None:
+    sim = _build_sim(seed=337)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+    active.pop("return_exit_coord", None)
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+
+    loaded_state = loaded.get_rules_state(LocalEncounterInstanceModule.name)
+    derived = loaded_state["active_by_local_space"][local_space_id]["return_exit_coord"]
+    assert derived == world_xy_to_square_grid_cell(
+        loaded.state.entities["scout"].position_x,
+        loaded.state.entities["scout"].position_y,
+    )
+
+
+def test_repeated_end_intent_after_successful_return_is_deterministically_rejected() -> None:
+    sim = _build_sim(seed=338)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(1)
+
+    outcomes = _trace_by_type(sim, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)
+    assert outcomes[-1]["params"]["applied"] is False
+    assert outcomes[-1]["params"]["reason"] == "not_in_local_space"
+    assert len(_trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)) == 1
+
+
+def test_rejection_reason_for_not_at_exit_is_hash_stable() -> None:
+    sim_a = _build_sim(seed=339)
+    sim_b = _build_sim(seed=339)
+    _schedule_request(sim_a)
+    _schedule_request(sim_b)
+    sim_a.advance_ticks(3)
+    sim_b.advance_ticks(3)
+
+    for sim in (sim_a, sim_b):
+        begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+        coord = begin["params"]["return_exit_coord"]
+        away_x, away_y = square_grid_cell_to_world_xy(max(coord["x"] - 1, 0), coord["y"])
+        sim.state.entities["scout"].position_x = away_x
+        sim.state.entities["scout"].position_y = away_y
+        _issue_end_intent(sim)
+        sim.advance_ticks(1)
+
+    reason_a = _trace_by_type(sim_a, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)[0]["params"]["reason"]
+    reason_b = _trace_by_type(sim_b, END_LOCAL_ENCOUNTER_OUTCOME_EVENT_TYPE)[0]["params"]["reason"]
+    assert reason_a == "not_at_return_exit"
+    assert reason_a == reason_b
+    assert simulation_hash(sim_a) == simulation_hash(sim_b)
 
 def test_local_encounter_entry_stops_campaign_motion_and_survives_save_load() -> None:
     sim = _build_sim(seed=211)

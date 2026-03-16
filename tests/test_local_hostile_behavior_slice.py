@@ -14,7 +14,7 @@ from hexcrawler.sim.encounters import (
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.local_hostiles import HOSTILE_TEMPLATE_ID, LocalHostileBehaviorModule
 from hexcrawler.sim.location import SQUARE_GRID_TOPOLOGY
-from hexcrawler.sim.movement import square_grid_cell_to_world_xy
+from hexcrawler.sim.movement import square_grid_cell_to_world_xy, world_xy_to_square_grid_cell
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, SpaceState
 from hexcrawler.sim.wounds import movement_multiplier_from_wounds
 
@@ -121,6 +121,7 @@ def test_wound_consequence_persists_through_return_and_save_load() -> None:
     sim.advance_ticks(3)
     begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
     local_space_id = begin["to_space_id"]
+    return_exit_coord = begin["return_exit_coord"]
     hostile_id = sorted(
         entity_id
         for entity_id, entity in sim.state.entities.items()
@@ -136,6 +137,13 @@ def test_wound_consequence_persists_through_return_and_save_load() -> None:
     player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
     wounded_speed = player.speed_per_tick * movement_multiplier_from_wounds(player.wounds)
     assert wounded_speed < player.speed_per_tick
+
+    exit_x, exit_y = square_grid_cell_to_world_xy(return_exit_coord["x"], return_exit_coord["y"])
+    player.position_x = exit_x
+    player.position_y = exit_y
+    assert world_xy_to_square_grid_cell(player.position_x, player.position_y) == return_exit_coord
+    hostile.position_x = player.position_x + 3.0
+    hostile.position_y = player.position_y
 
     sim.append_command(
         SimCommand(

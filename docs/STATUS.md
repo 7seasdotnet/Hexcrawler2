@@ -88,6 +88,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Refactored wound movement-consequence policy out of `sim/core.py` into a dedicated deterministic `sim/wounds.py` domain helper, keeping core movement execution infrastructural.
-- Kept the hostile local slice behavior unchanged (local-role only, attack through `attack_intent`) while updating tests to consume the new wound policy seam.
-- Added focused `tests/test_wounds.py` coverage to validate deterministic wound movement multipliers and bounded/invalid payload handling.
+- Hardened local-role extraction compatibility for legacy active encounters by deterministically deriving missing `return_exit_coord` from serialized actor location during rules-state normalization.
+- Kept the existing local encounter return authority path unchanged and explicitly verified repeat-end behavior cannot duplicate return mutations after successful extraction.
+- Added focused deterministic tests for legacy-context derivation, repeat-end idempotence, and stable rejection reasons/hash behavior for failed extraction attempts.
