@@ -14,6 +14,7 @@ from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_
 from hexcrawler.sim.movement import axial_to_world_xy, square_grid_cell_to_world_xy
 from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.signals import distance_between_locations
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, MAX_CLAIM_OPPORTUNITIES, RUMOR_KINDS, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
@@ -111,6 +112,8 @@ SITE_ECOLOGY_CONFIG_ALLOWED_MARKER_TYPES = {
     REINHABITATION_PENDING_EFFECT_TYPE,
     FORTIFICATION_PENDING_EFFECT_TYPE,
 }
+LOCAL_ENCOUNTER_EXIT_PIN_DISTANCE = 1
+LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
 
 
 
@@ -417,6 +420,10 @@ class LocalEncounterInstanceModule(RuleModule):
                     reason = "no_active_local_encounter"
                 elif state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE].get(local_space_id, False):
                     reason = "already_returning"
+                elif not self._is_at_local_return_exit(sim=sim, entity_id=entity_id, active_context=active_context):
+                    reason = "not_at_return_exit"
+                elif self._is_exit_pinned_by_hostile(sim=sim, entity_id=entity_id):
+                    reason = "hostile_adjacent"
                 else:
                     origin_location = copy.deepcopy(active_context.get("origin_location", active_context.get("from_location")))
                     return_in_progress_by_local_space = dict(state[self._STATE_RETURN_IN_PROGRESS_BY_LOCAL_SPACE])
@@ -835,6 +842,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "template_id": template_id,
                 "template_selection_reason": selection_reason,
                 "placement_rule": placement_rule,
+                "return_exit_coord": copy.deepcopy(to_spawn_coord),
                 "spawned_entities": copy.deepcopy(participant_spawn_records),
                 "reuse": reused_existing,
                 "site_key": copy.deepcopy(normalized_site_key),
@@ -859,6 +867,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_location": copy.deepcopy(origin_location),
                 "origin_position": copy.deepcopy(origin_position),
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
+                "return_exit_coord": copy.deepcopy(to_spawn_coord),
                 "started_tick": int(event.tick),
                 "site_key": copy.deepcopy(normalized_site_key),
                 "is_active": True,
@@ -1218,6 +1227,13 @@ class LocalEncounterInstanceModule(RuleModule):
                 legacy_coord=return_spawn_coord,
             )
             origin_position = self._normalize_origin_position_payload(context.get("origin_position"))
+            return_exit_coord = self._normalize_local_square_coord_payload(context.get("return_exit_coord"))
+            if return_exit_coord is None:
+                entity_id = context.get("entity_id")
+                if isinstance(entity_id, str) and entity_id in sim.state.entities:
+                    entity = sim.state.entities[entity_id]
+                    if entity.space_id == local_space_id:
+                        return_exit_coord = self._normalize_local_square_coord_payload(sim._entity_location_ref(entity).coord)
             if not isinstance(from_location, dict) or not isinstance(return_spawn_coord, dict):
                 continue
             if not isinstance(origin_space_id, str) or not origin_space_id:
@@ -1237,6 +1253,7 @@ class LocalEncounterInstanceModule(RuleModule):
                 "origin_location": copy.deepcopy(origin_location),
                 "origin_position": copy.deepcopy(origin_position),
                 "return_spawn_coord": copy.deepcopy(return_spawn_coord),
+                "return_exit_coord": copy.deepcopy(return_exit_coord),
                 "started_tick": int(context.get("started_tick", 0)),
                 "site_key": self._normalize_site_key_payload(context.get("site_key")),
                 "is_active": bool(context.get("is_active", True)),
@@ -2250,6 +2267,44 @@ class LocalEncounterInstanceModule(RuleModule):
         if not math.isfinite(x) or not math.isfinite(y):
             return None
         return {"x": x, "y": y}
+
+    @staticmethod
+    def _normalize_local_square_coord_payload(coord_payload: Any) -> dict[str, int] | None:
+        if not isinstance(coord_payload, dict):
+            return None
+        try:
+            x = int(coord_payload["x"])
+            y = int(coord_payload["y"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return {"x": x, "y": y}
+
+    def _is_at_local_return_exit(self, *, sim: Simulation, entity_id: str, active_context: dict[str, Any]) -> bool:
+        entity = sim.state.entities.get(entity_id)
+        if entity is None:
+            return False
+        target_coord = self._normalize_local_square_coord_payload(active_context.get("return_exit_coord"))
+        if target_coord is None:
+            return False
+        actor_coord = sim._entity_location_ref(entity).coord
+        return actor_coord == target_coord
+
+    def _is_exit_pinned_by_hostile(self, *, sim: Simulation, entity_id: str) -> bool:
+        actor = sim.state.entities.get(entity_id)
+        if actor is None:
+            return False
+        actor_location = sim._entity_location_ref(actor)
+        for hostile_id in sorted(sim.state.entities):
+            hostile = sim.state.entities[hostile_id]
+            if hostile.space_id != actor.space_id:
+                continue
+            if hostile.template_id != LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID:
+                continue
+            hostile_location = sim._entity_location_ref(hostile)
+            distance = distance_between_locations(actor_location, hostile_location)
+            if distance is not None and distance <= LOCAL_ENCOUNTER_EXIT_PIN_DISTANCE:
+                return True
+        return False
 
     @staticmethod
     def _select_entity_id(sim: Simulation, *, from_space_id: str) -> str | None:
