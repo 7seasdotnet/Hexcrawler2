@@ -137,6 +137,10 @@ class EncounterSelectionModule(RuleModule):
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
         if event.event_type != ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE:
             return
+        offer_required = bool(event.params.get("offer_required", False))
+        offer_accepted = bool(event.params.get("offer_accepted", False))
+        if offer_required and not offer_accepted:
+            return
 
         selected_entry = self._select_entry(sim)
         sim.schedule_event_at(
@@ -269,6 +273,10 @@ class LocalEncounterRequestModule(RuleModule):
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
         if event.event_type != ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE:
+            return
+        offer_required = bool(event.params.get("offer_required", False))
+        offer_accepted = bool(event.params.get("offer_accepted", False))
+        if offer_required and not offer_accepted:
             return
 
         from_location_payload = event.params.get("location")
@@ -4494,6 +4502,8 @@ class EncounterCheckModule(RuleModule):
                 "location": dict(event.params["location"]),
                 "roll": event.params["roll"],
                 "category": event.params["category"],
+                "offer_required": True,
+                "offer_accepted": False,
             },
         )
 

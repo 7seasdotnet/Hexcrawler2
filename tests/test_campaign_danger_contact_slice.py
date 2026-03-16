@@ -12,6 +12,7 @@ from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, SimComman
 from hexcrawler.sim.encounters import (
     ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
     LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE,
+    EncounterCheckModule,
     LocalEncounterInstanceModule,
     LocalEncounterRequestModule,
 )
@@ -33,6 +34,12 @@ def _build_sim(seed: int = 77) -> Simulation:
 
 def _events(sim: Simulation, event_type: str) -> list[dict]:
     return [entry for entry in sim.get_event_trace() if entry["event_type"] == event_type]
+
+
+def _build_sim_with_encounter_check(seed: int = 77) -> Simulation:
+    sim = _build_sim(seed=seed)
+    sim.register_rule_module(EncounterCheckModule())
+    return sim
 
 
 def test_campaign_danger_visible_and_movement_is_deterministic() -> None:
@@ -99,6 +106,24 @@ def test_campaign_contact_flee_dismisses_offer_and_prevents_immediate_retrigger(
     sim.advance_ticks(2)
     assert isinstance(sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID), dict)
 
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=FLEE_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": DEFAULT_PLAYER_ENTITY_ID},
+        )
+    )
+    sim.advance_ticks(2)
+    assert sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID) is None
+
+    player.position_x += 3.0
+    player.position_y += 3.0
+    sim.advance_ticks(1)
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(4)
+    assert sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID) is None
 
 def test_campaign_offer_state_is_player_scoped_for_command_handling() -> None:
     sim = _build_sim(seed=224)
@@ -262,3 +287,92 @@ def test_campaign_contact_does_not_create_offer_when_already_in_local_role() -> 
 
     state = sim.get_rules_state(CampaignDangerModule.name)
     assert state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID) is None
+
+
+def test_pending_offer_suppresses_campaign_movement_until_resolved() -> None:
+    sim = _build_sim(seed=612)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    start_pos = (player.position_x, player.position_y)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type="set_move_vector",
+            params={"x": 1.0, "y": 0.0},
+        )
+    )
+    sim.advance_ticks(2)
+    assert (player.position_x, player.position_y) == start_pos
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=FLEE_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": DEFAULT_PLAYER_ENTITY_ID},
+        )
+    )
+    sim.advance_ticks(10)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type="set_move_vector",
+            params={"x": 1.0, "y": 0.0},
+        )
+    )
+    sim.advance_ticks(1)
+    assert player.position_x > start_pos[0]
+
+
+def test_encounter_check_requests_pending_offer_instead_of_forced_entry() -> None:
+    sim = _build_sim_with_encounter_check(seed=17)
+    sim.advance_ticks(250)
+
+    pending_offer = sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID)
+    assert isinstance(pending_offer, dict)
+    assert len(_events(sim, LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE)) == 0
+
+
+def test_fight_command_consumes_pending_offer_from_encounter_check() -> None:
+    sim = _build_sim_with_encounter_check(seed=17)
+    sim.advance_ticks(250)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": DEFAULT_PLAYER_ENTITY_ID},
+        )
+    )
+    sim.advance_ticks(6)
+
+    assert len(_events(sim, ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE)) >= 1
+    assert len(_events(sim, LOCAL_ENCOUNTER_REQUEST_EVENT_TYPE)) >= 1
+
+
+
+def test_pending_offer_and_control_state_survive_save_load() -> None:
+    sim = _build_sim(seed=881)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CampaignDangerModule())
+
+    state = loaded.get_rules_state(CampaignDangerModule.name)
+    assert isinstance(state.get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID), dict)
+    assert state.get("encounter_control_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID, {}).get("state") == "pending_offer"

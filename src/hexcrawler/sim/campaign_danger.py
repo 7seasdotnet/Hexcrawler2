@@ -4,7 +4,11 @@ import math
 from typing import Any
 
 from hexcrawler.sim.core import DEFAULT_PLAYER_ENTITY_ID, EntityState, SimCommand, SimEvent, Simulation
-from hexcrawler.sim.encounters import ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE
+from hexcrawler.sim.encounters import (
+    ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
+    LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+    LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
+)
 from hexcrawler.sim.movement import axial_to_world_xy
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, HexCoord
@@ -17,8 +21,24 @@ DEFAULT_DANGER_SPACE_ID = "overworld"
 DEFAULT_DANGER_SPEED_PER_TICK = 0.12
 DEFAULT_CONTACT_RADIUS = 0.72
 DEFAULT_FLEE_IGNORE_TICKS = 20
+DEFAULT_POST_ENCOUNTER_COOLDOWN_TICKS = 8
 MAX_FLEE_IGNORE_SOURCES = 8
 MAX_PENDING_PLAYERS = 8
+
+ENCOUNTER_STATE_NONE = "none"
+ENCOUNTER_STATE_PENDING_OFFER = "pending_offer"
+ENCOUNTER_STATE_ACCEPTED_LOADING = "accepted_loading"
+ENCOUNTER_STATE_IN_LOCAL = "in_local"
+ENCOUNTER_STATE_RETURNING = "returning"
+ENCOUNTER_STATE_POST_ENCOUNTER_COOLDOWN = "post_encounter_cooldown"
+_ALLOWED_ENCOUNTER_STATES = {
+    ENCOUNTER_STATE_NONE,
+    ENCOUNTER_STATE_PENDING_OFFER,
+    ENCOUNTER_STATE_ACCEPTED_LOADING,
+    ENCOUNTER_STATE_IN_LOCAL,
+    ENCOUNTER_STATE_RETURNING,
+    ENCOUNTER_STATE_POST_ENCOUNTER_COOLDOWN,
+}
 
 
 class CampaignDangerModule(RuleModule):
@@ -28,6 +48,7 @@ class CampaignDangerModule(RuleModule):
     _STATE_OVERLAP_BY_DANGER = "overlap_by_danger"
     _STATE_PENDING_OFFER_BY_PLAYER = "pending_offer_by_player"
     _STATE_FLEE_IGNORE_UNTIL_BY_PLAYER = "flee_ignore_until_by_player"
+    _STATE_ENCOUNTER_CONTROL_BY_PLAYER = "encounter_control_by_player"
 
     def __init__(
         self,
@@ -36,11 +57,13 @@ class CampaignDangerModule(RuleModule):
         danger_space_id: str = DEFAULT_DANGER_SPACE_ID,
         contact_radius: float = DEFAULT_CONTACT_RADIUS,
         flee_ignore_ticks: int = DEFAULT_FLEE_IGNORE_TICKS,
+        post_encounter_cooldown_ticks: int = DEFAULT_POST_ENCOUNTER_COOLDOWN_TICKS,
     ) -> None:
         self._danger_entity_id = danger_entity_id
         self._danger_space_id = danger_space_id
         self._contact_radius = float(contact_radius)
         self._flee_ignore_ticks = int(flee_ignore_ticks)
+        self._post_encounter_cooldown_ticks = int(post_encounter_cooldown_ticks)
         first_x, first_y = axial_to_world_xy(HexCoord(2, -1))
         second_x, second_y = axial_to_world_xy(HexCoord(2, 1))
         self._patrol_waypoints = ((first_x, first_y), (second_x, second_y))
@@ -50,24 +73,29 @@ class CampaignDangerModule(RuleModule):
         sim.set_rules_state(self.name, self._normalized_state(sim))
 
     def on_tick_start(self, sim: Simulation, tick: int) -> None:
-        del tick
+        state = self._normalized_state(sim)
+        encounter_control_by_player = self._prune_encounter_control(
+            dict(state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER]),
+            tick=tick,
+        )
+        state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
+        player = sim.state.entities.get(DEFAULT_PLAYER_ENTITY_ID)
+        if player is not None and self._encounter_state_for_player(
+            encounter_control_by_player, player.entity_id
+        ) == ENCOUNTER_STATE_PENDING_OFFER:
+            sim.stop_entity(player.entity_id)
         danger = sim.state.entities.get(self._danger_entity_id)
-        if danger is None:
-            return
-        if not self._is_campaign_entity(sim, danger):
-            return
-
-        if danger.target_position is None:
-            danger.target_position = self._next_waypoint(danger)
-            return
-
-        if self._distance_sq(
-            danger.position_x,
-            danger.position_y,
-            danger.target_position[0],
-            danger.target_position[1],
-        ) <= 0.0001:
-            danger.target_position = self._next_waypoint(danger)
+        if danger is not None and self._is_campaign_entity(sim, danger):
+            if danger.target_position is None:
+                danger.target_position = self._next_waypoint(danger)
+            elif self._distance_sq(
+                danger.position_x,
+                danger.position_y,
+                danger.target_position[0],
+                danger.target_position[1],
+            ) <= 0.0001:
+                danger.target_position = self._next_waypoint(danger)
+        sim.set_rules_state(self.name, state)
 
     def on_tick_end(self, sim: Simulation, tick: int) -> None:
         danger = sim.state.entities.get(self._danger_entity_id)
@@ -79,26 +107,47 @@ class CampaignDangerModule(RuleModule):
             str(player_id): dict(source_map)
             for player_id, source_map in state[self._STATE_FLEE_IGNORE_UNTIL_BY_PLAYER].items()
         }
+        encounter_control_by_player = self._prune_encounter_control(
+            dict(state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER]),
+            tick=tick,
+        )
 
         prior_overlap = bool(overlap_by_danger.get(self._danger_entity_id, False))
         overlap = self._is_campaign_overlap(sim=sim, danger=danger, player=player)
 
         if overlap and not prior_overlap and danger is not None and player is not None:
             player_id = player.entity_id
-            player_flee_ignore = flee_ignore_until_by_player.get(player_id, {})
-            if self._has_pending_offer(state, player_entity_id=player_id) or self._has_active_local_encounter_state(sim=sim, player=player):
-                pass
-            elif tick < int(player_flee_ignore.get(self._danger_entity_id, 0)):
-                pass
-            else:
+            if self._player_can_receive_offer(
+                sim=sim,
+                player=player,
+                encounter_control_by_player=encounter_control_by_player,
+                pending_offer_by_player=pending_offer_by_player,
+                source_id=self._danger_entity_id,
+                tick=tick,
+                flee_ignore_until_by_player=flee_ignore_until_by_player,
+            ):
                 player_location = sim._entity_location_ref(player).to_dict()
                 offer = self._build_pending_offer(
                     tick=tick,
-                    danger_entity_id=self._danger_entity_id,
+                    source_entity_id=self._danger_entity_id,
+                    source_label="campaign danger",
+                    encounter_label="Raider Patrol",
                     player=player,
                     location=player_location,
+                    context="campaign_danger_contact",
+                    trigger="campaign_contact",
+                    roll=0,
+                    category="hostile",
+                    table_id="campaign_danger_contact",
+                    entry_id="danger_patrol",
+                    suggested_local_template_id="local_template_forest",
+                    tags=["campaign", "danger_contact", f"space:{player.space_id}"],
                 )
                 pending_offer_by_player[player_id] = offer
+                encounter_control_by_player[player_id] = {
+                    "state": ENCOUNTER_STATE_PENDING_OFFER,
+                    "until_tick": -1,
+                }
                 sim.schedule_event_at(
                     tick=tick + 1,
                     event_type=CAMPAIGN_DANGER_CONTACT_EVENT_TYPE,
@@ -116,27 +165,130 @@ class CampaignDangerModule(RuleModule):
                             )
                         ),
                         "encounter_label": offer["encounter_label"],
+                        "source_label": offer["source_label"],
                         "outcome": "offer_created",
                     },
                 )
 
         overlap_by_danger[self._danger_entity_id] = overlap
+        state[self._STATE_OVERLAP_BY_DANGER] = overlap_by_danger
         state[self._STATE_PENDING_OFFER_BY_PLAYER] = pending_offer_by_player
         state[self._STATE_FLEE_IGNORE_UNTIL_BY_PLAYER] = flee_ignore_until_by_player
+        state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
         sim.set_rules_state(self.name, state)
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        state = self._normalized_state(sim)
+        pending_offer_by_player = dict(state[self._STATE_PENDING_OFFER_BY_PLAYER])
+        encounter_control_by_player = dict(state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER])
+
+        if event.event_type == ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE:
+            if bool(event.params.get("offer_required", False)) and not bool(event.params.get("offer_accepted", False)):
+                player = sim.state.entities.get(DEFAULT_PLAYER_ENTITY_ID)
+                if player is None:
+                    return
+                player_id = player.entity_id
+                source_entity_id = self._optional_non_empty_string(event.params.get("source_entity_id")) or "encounter:global"
+                flee_ignore_until_by_player = {
+                    str(pid): dict(row)
+                    for pid, row in state[self._STATE_FLEE_IGNORE_UNTIL_BY_PLAYER].items()
+                }
+                if not self._player_can_receive_offer(
+                    sim=sim,
+                    player=player,
+                    encounter_control_by_player=encounter_control_by_player,
+                    pending_offer_by_player=pending_offer_by_player,
+                    source_id=source_entity_id,
+                    tick=int(event.tick),
+                    flee_ignore_until_by_player=flee_ignore_until_by_player,
+                ):
+                    return
+                location_payload = event.params.get("location")
+                if not isinstance(location_payload, dict):
+                    return
+                offer = self._build_pending_offer(
+                    tick=int(event.params.get("tick", event.tick)),
+                    source_entity_id=source_entity_id,
+                    source_label=self._optional_non_empty_string(event.params.get("source_label")) or "encounter source",
+                    encounter_label=self._offer_label_from_event(event),
+                    player=player,
+                    location=dict(location_payload),
+                    context=str(event.params.get("context", "global")),
+                    trigger=str(event.params.get("trigger", "idle")),
+                    roll=int(event.params.get("roll", 0)),
+                    category=str(event.params.get("category", "hostile")),
+                    table_id=self._optional_non_empty_string(event.params.get("table_id")) or "encounter_table",
+                    entry_id=self._optional_non_empty_string(event.params.get("entry_id")) or "encounter_entry",
+                    suggested_local_template_id=self._optional_non_empty_string(event.params.get("suggested_local_template_id")) or "local_template_forest",
+                    tags=list(event.params.get("entry_tags", ["campaign", "encounter"])),
+                )
+                pending_offer_by_player[player_id] = offer
+                encounter_control_by_player[player_id] = {
+                    "state": ENCOUNTER_STATE_PENDING_OFFER,
+                    "until_tick": -1,
+                }
+                sim.schedule_event_at(
+                    tick=event.tick + 1,
+                    event_type=CAMPAIGN_DANGER_CONTACT_EVENT_TYPE,
+                    params={
+                        "tick": int(event.tick),
+                        "danger_entity_id": source_entity_id,
+                        "player_entity_id": player_id,
+                        "space_id": player.space_id,
+                        "encounter_label": offer["encounter_label"],
+                        "source_label": offer["source_label"],
+                        "outcome": "offer_created",
+                    },
+                )
+                state[self._STATE_PENDING_OFFER_BY_PLAYER] = pending_offer_by_player
+                state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
+                sim.set_rules_state(self.name, state)
+                return
+
+        if event.event_type == LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE:
+            entity_id = self._optional_non_empty_string(event.params.get("entity_id"))
+            if entity_id is not None:
+                encounter_control_by_player[entity_id] = {"state": ENCOUNTER_STATE_IN_LOCAL, "until_tick": -1}
+                state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
+                sim.set_rules_state(self.name, state)
+            return
+
+        if event.event_type == LOCAL_ENCOUNTER_RETURN_EVENT_TYPE:
+            entity_id = self._optional_non_empty_string(event.params.get("entity_id"))
+            if entity_id is None:
+                return
+            encounter_control_by_player[entity_id] = {
+                "state": ENCOUNTER_STATE_POST_ENCOUNTER_COOLDOWN,
+                "until_tick": int(event.tick) + max(1, self._post_encounter_cooldown_ticks),
+            }
+            pending_offer_by_player.pop(entity_id, None)
+            state[self._STATE_PENDING_OFFER_BY_PLAYER] = pending_offer_by_player
+            state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
+            sim.set_rules_state(self.name, state)
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
         del command_index
-        if command.command_type not in {ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT}:
-            return False
-
         state = self._normalized_state(sim)
         pending_offer_by_player = dict(state[self._STATE_PENDING_OFFER_BY_PLAYER])
         flee_ignore_until_by_player = {
             str(player_id): dict(source_map)
             for player_id, source_map in state[self._STATE_FLEE_IGNORE_UNTIL_BY_PLAYER].items()
         }
+        encounter_control_by_player = self._prune_encounter_control(
+            dict(state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER]),
+            tick=int(command.tick),
+        )
+
         player_id = str(command.entity_id) if isinstance(command.entity_id, str) and command.entity_id else DEFAULT_PLAYER_ENTITY_ID
+        player_state = self._encounter_state_for_player(encounter_control_by_player, player_id)
+
+        if command.command_type in {"set_move_vector", "set_target_position"} and player_state == ENCOUNTER_STATE_PENDING_OFFER:
+            sim.stop_entity(player_id)
+            return True
+
+        if command.command_type not in {ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT}:
+            return False
+
         offer = pending_offer_by_player.get(player_id)
         if offer is None:
             return True
@@ -144,7 +296,9 @@ class CampaignDangerModule(RuleModule):
         player = sim.state.entities.get(player_id)
         if player is None:
             pending_offer_by_player.pop(player_id, None)
+            encounter_control_by_player[player_id] = {"state": ENCOUNTER_STATE_NONE, "until_tick": -1}
             state[self._STATE_PENDING_OFFER_BY_PLAYER] = pending_offer_by_player
+            state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
             sim.set_rules_state(self.name, state)
             return True
 
@@ -159,6 +313,8 @@ class CampaignDangerModule(RuleModule):
                     "tick": command.tick,
                     "context": str(offer.get("context", "campaign_danger_contact")),
                     "trigger": str(offer.get("trigger", "campaign_contact")),
+                    "source_entity_id": str(offer.get("danger_entity_id", self._danger_entity_id)),
+                    "source_label": str(offer.get("source_label", "campaign danger")),
                     "danger_entity_id": str(offer.get("danger_entity_id", self._danger_entity_id)),
                     "location": player_location,
                     "roll": int(offer.get("roll", 0)),
@@ -166,7 +322,9 @@ class CampaignDangerModule(RuleModule):
                     "table_id": str(offer.get("table_id", "campaign_danger_contact")),
                     "entry_id": str(offer.get("entry_id", "danger_patrol")),
                     "suggested_local_template_id": str(offer.get("suggested_local_template_id", "local_template_forest")),
-                    "tags": list(offer.get("tags", ["campaign", "danger_contact"])),
+                    "entry_tags": list(offer.get("tags", ["campaign", "danger_contact"])),
+                    "offer_required": True,
+                    "offer_accepted": True,
                 },
             )
             sim.schedule_event_at(
@@ -178,6 +336,7 @@ class CampaignDangerModule(RuleModule):
                     "player_entity_id": DEFAULT_PLAYER_ENTITY_ID,
                     "space_id": player.space_id,
                     "encounter_label": str(offer.get("encounter_label", "danger contact")),
+                    "source_label": str(offer.get("source_label", "campaign danger")),
                     "outcome": "offer_accepted",
                 },
             )
@@ -185,6 +344,7 @@ class CampaignDangerModule(RuleModule):
             player_flee_ignore = dict(flee_ignore_until_by_player.get(player_id, {}))
             player_flee_ignore[source_id] = command.tick + 2
             flee_ignore_until_by_player[player_id] = player_flee_ignore
+            encounter_control_by_player[player_id] = {"state": ENCOUNTER_STATE_ACCEPTED_LOADING, "until_tick": -1}
             pending_offer_by_player.pop(player_id, None)
         else:
             sim.schedule_event_at(
@@ -196,6 +356,7 @@ class CampaignDangerModule(RuleModule):
                     "player_entity_id": DEFAULT_PLAYER_ENTITY_ID,
                     "space_id": player.space_id,
                     "encounter_label": str(offer.get("encounter_label", "danger contact")),
+                    "source_label": str(offer.get("source_label", "campaign danger")),
                     "outcome": "offer_fled",
                 },
             )
@@ -203,11 +364,38 @@ class CampaignDangerModule(RuleModule):
             player_flee_ignore = dict(flee_ignore_until_by_player.get(player_id, {}))
             player_flee_ignore[source_id] = command.tick + max(1, self._flee_ignore_ticks)
             flee_ignore_until_by_player[player_id] = player_flee_ignore
+            encounter_control_by_player[player_id] = {
+                "state": ENCOUNTER_STATE_POST_ENCOUNTER_COOLDOWN,
+                "until_tick": int(command.tick) + max(1, self._post_encounter_cooldown_ticks),
+            }
             pending_offer_by_player.pop(player_id, None)
+
         state[self._STATE_PENDING_OFFER_BY_PLAYER] = pending_offer_by_player
         state[self._STATE_FLEE_IGNORE_UNTIL_BY_PLAYER] = flee_ignore_until_by_player
+        state[self._STATE_ENCOUNTER_CONTROL_BY_PLAYER] = encounter_control_by_player
         sim.set_rules_state(self.name, state)
         return True
+
+    def _player_can_receive_offer(
+        self,
+        *,
+        sim: Simulation,
+        player: EntityState,
+        encounter_control_by_player: dict[str, dict[str, Any]],
+        pending_offer_by_player: dict[str, dict[str, Any]],
+        source_id: str,
+        tick: int,
+        flee_ignore_until_by_player: dict[str, dict[str, int]],
+    ) -> bool:
+        player_id = player.entity_id
+        if self._encounter_state_for_player(encounter_control_by_player, player_id) != ENCOUNTER_STATE_NONE:
+            return False
+        if isinstance(pending_offer_by_player.get(player_id), dict):
+            return False
+        if self._has_active_local_encounter_state(sim=sim, player=player):
+            return False
+        player_flee_ignore = flee_ignore_until_by_player.get(player_id, {})
+        return tick >= int(player_flee_ignore.get(source_id, 0))
 
     def _ensure_danger_entity(self, sim: Simulation) -> None:
         if self._danger_entity_id in sim.state.entities:
@@ -249,16 +437,16 @@ class CampaignDangerModule(RuleModule):
 
     def _normalized_state(self, sim: Simulation) -> dict[str, Any]:
         state = sim.get_rules_state(self.name)
-        overlap_by_danger = state.get(self._STATE_OVERLAP_BY_DANGER, {})
-        if not isinstance(overlap_by_danger, dict):
+
+        raw_overlap = state.get(self._STATE_OVERLAP_BY_DANGER, {})
+        if not isinstance(raw_overlap, dict):
             raise ValueError("campaign_danger.rules_state.overlap_by_danger must be an object")
         normalized_overlap: dict[str, bool] = {}
-        for danger_id, value in overlap_by_danger.items():
-            if not isinstance(danger_id, str) or not danger_id:
+        for key, value in sorted(raw_overlap.items()):
+            if not isinstance(key, str) or not key:
                 raise ValueError("campaign_danger.rules_state.overlap_by_danger keys must be non-empty strings")
-            if not isinstance(value, bool):
-                raise ValueError("campaign_danger.rules_state.overlap_by_danger values must be booleans")
-            normalized_overlap[danger_id] = value
+            normalized_overlap[key] = bool(value)
+
         raw_pending_offer_by_player = state.get(self._STATE_PENDING_OFFER_BY_PLAYER, {})
         if not isinstance(raw_pending_offer_by_player, dict):
             raise ValueError("campaign_danger.rules_state.pending_offer_by_player must be an object")
@@ -307,10 +495,32 @@ class CampaignDangerModule(RuleModule):
         if len(flee_ignore_until_by_player) > MAX_PENDING_PLAYERS:
             flee_ignore_until_by_player = dict(sorted(flee_ignore_until_by_player.items())[-MAX_PENDING_PLAYERS:])
 
+        raw_control_by_player = state.get(self._STATE_ENCOUNTER_CONTROL_BY_PLAYER, {})
+        if not isinstance(raw_control_by_player, dict):
+            raise ValueError("campaign_danger.rules_state.encounter_control_by_player must be an object")
+        encounter_control_by_player: dict[str, dict[str, Any]] = {}
+        for player_id in sorted(raw_control_by_player):
+            if not isinstance(player_id, str) or not player_id:
+                raise ValueError("campaign_danger.rules_state.encounter_control_by_player keys must be non-empty strings")
+            row = raw_control_by_player[player_id]
+            if not isinstance(row, dict):
+                raise ValueError("campaign_danger.rules_state.encounter_control_by_player values must be objects")
+            state_name = str(row.get("state", ENCOUNTER_STATE_NONE))
+            if state_name not in _ALLOWED_ENCOUNTER_STATES:
+                state_name = ENCOUNTER_STATE_NONE
+            until_tick = int(row.get("until_tick", -1))
+            encounter_control_by_player[player_id] = {
+                "state": state_name,
+                "until_tick": until_tick,
+            }
+        if len(encounter_control_by_player) > MAX_PENDING_PLAYERS:
+            encounter_control_by_player = dict(sorted(encounter_control_by_player.items())[-MAX_PENDING_PLAYERS:])
+
         return {
             self._STATE_OVERLAP_BY_DANGER: normalized_overlap,
             self._STATE_PENDING_OFFER_BY_PLAYER: pending_offer_by_player,
             self._STATE_FLEE_IGNORE_UNTIL_BY_PLAYER: flee_ignore_until_by_player,
+            self._STATE_ENCOUNTER_CONTROL_BY_PLAYER: encounter_control_by_player,
         }
 
     def _normalize_pending_offer(self, raw_pending_offer: Any) -> dict[str, Any] | None:
@@ -322,6 +532,7 @@ class CampaignDangerModule(RuleModule):
         required_str = {
             "player_entity_id",
             "danger_entity_id",
+            "source_label",
             "encounter_label",
             "context",
             "trigger",
@@ -353,25 +564,73 @@ class CampaignDangerModule(RuleModule):
         self,
         *,
         tick: int,
-        danger_entity_id: str,
+        source_entity_id: str,
+        source_label: str,
+        encounter_label: str,
         player: EntityState,
         location: dict[str, Any],
+        context: str,
+        trigger: str,
+        roll: int,
+        category: str,
+        table_id: str,
+        entry_id: str,
+        suggested_local_template_id: str,
+        tags: list[str],
     ) -> dict[str, Any]:
         return {
             "tick": int(tick),
             "player_entity_id": player.entity_id,
-            "danger_entity_id": danger_entity_id,
-            "encounter_label": "Raider Patrol",
-            "context": "campaign_danger_contact",
-            "trigger": "campaign_contact",
+            "danger_entity_id": source_entity_id,
+            "source_label": source_label,
+            "encounter_label": encounter_label,
+            "context": context,
+            "trigger": trigger,
             "location": dict(location),
-            "roll": 0,
-            "category": "hostile",
-            "table_id": "campaign_danger_contact",
-            "entry_id": "danger_patrol",
-            "suggested_local_template_id": "local_template_forest",
-            "tags": ["campaign", "danger_contact", f"space:{player.space_id}"],
+            "roll": int(roll),
+            "category": category,
+            "table_id": table_id,
+            "entry_id": entry_id,
+            "suggested_local_template_id": suggested_local_template_id,
+            "tags": [str(tag) for tag in tags],
         }
+
+    def _prune_encounter_control(self, control: dict[str, dict[str, Any]], *, tick: int) -> dict[str, dict[str, Any]]:
+        pruned: dict[str, dict[str, Any]] = {}
+        for player_id, row in sorted(control.items()):
+            state_name = str(row.get("state", ENCOUNTER_STATE_NONE))
+            until_tick = int(row.get("until_tick", -1))
+            if state_name == ENCOUNTER_STATE_POST_ENCOUNTER_COOLDOWN and until_tick >= 0 and tick >= until_tick:
+                state_name = ENCOUNTER_STATE_NONE
+                until_tick = -1
+            if state_name == ENCOUNTER_STATE_NONE:
+                continue
+            pruned[player_id] = {"state": state_name, "until_tick": until_tick}
+        return pruned
+
+    @staticmethod
+    def _encounter_state_for_player(control: dict[str, dict[str, Any]], player_id: str) -> str:
+        row = control.get(player_id)
+        if not isinstance(row, dict):
+            return ENCOUNTER_STATE_NONE
+        state_name = str(row.get("state", ENCOUNTER_STATE_NONE))
+        if state_name not in _ALLOWED_ENCOUNTER_STATES:
+            return ENCOUNTER_STATE_NONE
+        return state_name
+
+    @staticmethod
+    def _offer_label_from_event(event: SimEvent) -> str:
+        entry_id = event.params.get("entry_id")
+        if isinstance(entry_id, str) and entry_id:
+            return f"Encounter: {entry_id}"
+        category = event.params.get("category")
+        if isinstance(category, str) and category:
+            return f"Encounter: {category}"
+        return "Encounter"
+
+    @staticmethod
+    def _optional_non_empty_string(value: Any) -> str | None:
+        return value if isinstance(value, str) and value else None
 
     @staticmethod
     def _has_pending_offer(state: dict[str, Any], *, player_entity_id: str) -> bool:

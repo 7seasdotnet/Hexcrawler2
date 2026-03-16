@@ -126,7 +126,7 @@ def test_encounter_check_emits_roll_only_on_eligible_and_enforces_cooldown() -> 
         assert entry["params"]["location"]["topology_type"] == OVERWORLD_HEX_TOPOLOGY
 
     for entry in resolve_entries:
-        assert set(entry["params"]) == {"tick", "context", "trigger", "location", "roll", "category"}
+        assert set(entry["params"]) == {"tick", "context", "trigger", "location", "roll", "category", "offer_required", "offer_accepted"}
         assert entry["params"]["category"] in {"hostile", "neutral", "omen"}
         assert 1 <= int(entry["params"]["roll"]) <= 100
         assert entry["params"]["trigger"] in {ENCOUNTER_TRIGGER_IDLE, ENCOUNTER_TRIGGER_TRAVEL}
@@ -227,7 +227,7 @@ def test_encounter_trigger_propagates_check_to_roll_to_result_stub_and_resolve_r
 
         resolve_key = (result_key[0] + 1, roll_value)
         resolve_entry = resolve_entries[resolve_key]
-        assert set(resolve_entry["params"]) == {"tick", "context", "trigger", "location", "roll", "category"}
+        assert set(resolve_entry["params"]) == {"tick", "context", "trigger", "location", "roll", "category", "offer_required", "offer_accepted"}
         assert resolve_entry["params"]["tick"] == result_entry["params"]["tick"]
         assert resolve_entry["params"]["context"] == result_entry["params"]["context"]
         assert resolve_entry["params"]["trigger"] == result_entry["params"]["trigger"]
@@ -309,6 +309,8 @@ def test_travel_trigger_propagates_through_roll_result_stub_and_resolve_request(
         "location": result_entry["params"]["location"],
         "roll": result_entry["params"]["roll"],
         "category": result_entry["params"]["category"],
+        "offer_required": True,
+        "offer_accepted": False,
     }
 
 
@@ -343,7 +345,7 @@ def test_encounter_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "87dea952e5a9b857ee4fa0390deea40d3c77971911b32bddb9637f7cfecbf5b9"
+        == "5ee3def1e5bfc6635d7518a72f8e0de9062d8553406c6af874e27d796b00dae8"
     )
 
 
@@ -353,5 +355,5 @@ def test_travel_trigger_contract_regression_hash_is_stable() -> None:
 
     assert (
         simulation_hash(sim)
-        == "54d8d268c33fa0222ba91c962b573e53aae27bef7a0f670eac7124101c82e505"
+        == "4afa1123a9b09566f083b143d3f0357f1a6d9c8ff784886e14b3d63e6921b799"
     )

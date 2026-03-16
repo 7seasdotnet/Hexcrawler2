@@ -1204,6 +1204,9 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
         if entity.entity_id == PLAYER_ID:
             # Player is rendered through interpolation in the primary entity pass.
             continue
+        if str(entity.template_id or "") == "encounter_hostile_v1":
+            # Local hostiles already render in the entity pass; adding a marker dot duplicates them.
+            continue
         label = _entity_marker_label(entity)
         _, marker_color = _entity_marker_role_and_color(entity)
         if active_location_topology == SQUARE_GRID_TOPOLOGY:
@@ -1619,7 +1622,7 @@ def _draw_encounter_offer_modal(
         return {}
 
     width = min(380, max(280, viewport_rect.width // 2))
-    height = 126
+    height = 146
     panel = pygame.Rect(
         viewport_rect.centerx - (width // 2),
         viewport_rect.y + 20,
@@ -1632,8 +1635,11 @@ def _draw_encounter_offer_modal(
     label = str(offer.get("encounter_label", "Encounter"))
     title = _truncate_text_to_pixel_width(f"Encounter: {label}", font, panel.width - 18)
     screen.blit(font.render(title, True, (245, 235, 190)), (panel.x + 9, panel.y + 10))
-    hint = _truncate_text_to_pixel_width("Fight [F] or Flee [X]", font, panel.width - 18)
+    source_label = str(offer.get("source_label", "contact source"))
+    hint = _truncate_text_to_pixel_width(f"Source: {source_label}", font, panel.width - 18)
     screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
+    action_hint = _truncate_text_to_pixel_width("Fight [F] or Flee [X]", font, panel.width - 18)
+    screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 58))
 
     button_w = 110
     button_h = 34
