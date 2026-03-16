@@ -7,6 +7,23 @@ WOUND_MOVE_MIN_MULTIPLIER = 0.0
 WOUND_INCAPACITATE_SEVERITY = 3
 
 
+def recover_one_light_wound(wounds: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Return a copy of ``wounds`` with at most one light wound removed.
+
+    Space roles:
+    - campaign: used by campaign-role safe-site recovery/rest.
+    - local: no direct use currently; kept topology-agnostic for future reuse.
+    """
+
+    normalized = [dict(wound) for wound in wounds if isinstance(wound, dict)]
+    for index, wound in enumerate(normalized):
+        severity = wound.get("severity")
+        if isinstance(severity, int) and severity == 1:
+            recovered = normalized.pop(index)
+            return normalized, recovered
+    return normalized, None
+
+
 def movement_multiplier_from_wounds(wounds: list[dict[str, Any]]) -> float:
     """Deterministic movement consequence derived from serialized wound ledger.
 

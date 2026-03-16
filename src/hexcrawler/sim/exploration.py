@@ -7,20 +7,129 @@ from typing import Any
 from hexcrawler.sim.core import SimCommand, SimEvent, Simulation
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.wounds import recover_one_light_wound
 
 EXPLORE_INTENT_COMMAND_TYPE = "explore_intent"
 EXPLORE_EXECUTE_EVENT_TYPE = "explore_execute"
 EXPLORATION_OUTCOME_EVENT_TYPE = "exploration_outcome"
+RECOVERY_EXECUTE_EVENT_TYPE = "recovery_execute"
+SAFE_RECOVERY_INTENT_COMMAND_TYPE = "safe_recovery_intent"
+RECOVERY_OUTCOME_EVENT_TYPE = "recovery_outcome"
+
+SAFE_SITE_TYPES = {"town"}
+SAFE_SITE_TAG = "safe"
+MAX_RECOVERY_ACTION_UIDS = 2048
 
 
 class ExplorationExecutionModule(RuleModule):
     name = "exploration"
 
     _SUPPORTED_ACTIONS = {"search", "listen", "rest"}
+    _CAMPAIGN_RECOVERY_DURATION_TICKS = 60
+    _STATE_RECOVERY_SCHEDULED_ACTION_UIDS = "recovery_scheduled_action_uids"
+    _STATE_RECOVERY_COMPLETED_ACTION_UIDS = "recovery_completed_action_uids"
     _STATE_SCHEDULED_ACTION_UIDS = "scheduled_action_uids"
     _STATE_COMPLETED_ACTION_UIDS = "completed_action_uids"
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
+        if command.command_type == SAFE_RECOVERY_INTENT_COMMAND_TYPE:
+            action_uid = f"recovery:{command.tick}:{command_index}"
+            recovery_state = self._recovery_rules_state(sim)
+            scheduled = list(recovery_state[self._STATE_RECOVERY_SCHEDULED_ACTION_UIDS])
+            completed = list(recovery_state[self._STATE_RECOVERY_COMPLETED_ACTION_UIDS])
+            scheduled_set = set(scheduled)
+            completed_set = set(completed)
+
+            if command.entity_id is None or command.entity_id not in sim.state.entities:
+                self._schedule_recovery_outcome(
+                    sim,
+                    tick=command.tick,
+                    entity_id=command.entity_id,
+                    action_uid=action_uid,
+                    outcome="rejected",
+                    reason="unknown_entity",
+                    location=None,
+                )
+                return True
+
+            if action_uid in scheduled_set or action_uid in completed_set:
+                self._schedule_recovery_outcome(
+                    sim,
+                    tick=command.tick,
+                    entity_id=command.entity_id,
+                    action_uid=action_uid,
+                    outcome="rejected",
+                    reason="already_scheduled",
+                    location=self._entity_location(sim, entity_id=command.entity_id),
+                )
+                return True
+
+            location = self._entity_location(sim, entity_id=command.entity_id)
+            space = sim.state.world.spaces.get(location.space_id)
+            if space is None or space.role != "campaign":
+                self._schedule_recovery_outcome(
+                    sim,
+                    tick=command.tick,
+                    entity_id=command.entity_id,
+                    action_uid=action_uid,
+                    outcome="rejected",
+                    reason="campaign_space_required",
+                    location=location,
+                )
+                return True
+
+            is_safe_site, site_id, site_type = self._is_safe_recovery_site(sim, location=location)
+            if not is_safe_site:
+                self._schedule_recovery_outcome(
+                    sim,
+                    tick=command.tick,
+                    entity_id=command.entity_id,
+                    action_uid=action_uid,
+                    outcome="rejected",
+                    reason="safe_site_required",
+                    location=location,
+                    details={"site_type": site_type},
+                )
+                return True
+
+            entity = sim.state.entities[command.entity_id]
+            if not any(isinstance(w, dict) and w.get("severity") == 1 for w in entity.wounds):
+                self._schedule_recovery_outcome(
+                    sim,
+                    tick=command.tick,
+                    entity_id=command.entity_id,
+                    action_uid=action_uid,
+                    outcome="rejected",
+                    reason="no_recoverable_wound",
+                    location=location,
+                    site_id=site_id,
+                )
+                return True
+
+            sim.schedule_event_at(
+                tick=command.tick + self._CAMPAIGN_RECOVERY_DURATION_TICKS,
+                event_type=RECOVERY_EXECUTE_EVENT_TYPE,
+                params={
+                    "entity_id": command.entity_id,
+                    "action_uid": action_uid,
+                    "site_id": site_id,
+                },
+            )
+            scheduled.append(action_uid)
+            recovery_state[self._STATE_RECOVERY_SCHEDULED_ACTION_UIDS] = _normalize_recovery_uid_fifo(scheduled)
+            sim.set_rules_state(self.name, {**sim.get_rules_state(self.name), **recovery_state})
+            self._schedule_recovery_outcome(
+                sim,
+                tick=command.tick,
+                entity_id=command.entity_id,
+                action_uid=action_uid,
+                outcome="scheduled",
+                reason="accepted",
+                location=location,
+                site_id=site_id,
+            )
+            return True
+
         if command.command_type != EXPLORE_INTENT_COMMAND_TYPE:
             return False
 
@@ -91,10 +200,73 @@ class ExplorationExecutionModule(RuleModule):
         )
         scheduled.add(action_uid)
         state[self._STATE_SCHEDULED_ACTION_UIDS] = sorted(scheduled)
-        sim.set_rules_state(self.name, state)
+        sim.set_rules_state(self.name, {**sim.get_rules_state(self.name), **state})
         return True
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type == RECOVERY_EXECUTE_EVENT_TYPE:
+            action_uid = str(event.params.get("action_uid", ""))
+            if not action_uid:
+                raise ValueError("recovery_execute action_uid must be a non-empty string")
+
+            recovery_state = self._recovery_rules_state(sim)
+            scheduled = list(recovery_state[self._STATE_RECOVERY_SCHEDULED_ACTION_UIDS])
+            completed = list(recovery_state[self._STATE_RECOVERY_COMPLETED_ACTION_UIDS])
+            completed_set = set(completed)
+            if action_uid in completed_set:
+                return
+
+            entity_id_raw = event.params.get("entity_id")
+            entity_id = str(entity_id_raw) if isinstance(entity_id_raw, str) else None
+            location = self._entity_location(sim, entity_id=entity_id) if entity_id is not None and entity_id in sim.state.entities else None
+            site_id = str(event.params.get("site_id")) if event.params.get("site_id") is not None else None
+
+            if entity_id is None or entity_id not in sim.state.entities:
+                self._schedule_recovery_outcome(
+                    sim,
+                    tick=event.tick,
+                    entity_id=entity_id,
+                    action_uid=action_uid,
+                    outcome="rejected",
+                    reason="unknown_entity",
+                    location=location,
+                    site_id=site_id,
+                )
+            else:
+                entity = sim.state.entities[entity_id]
+                updated_wounds, recovered = recover_one_light_wound(entity.wounds)
+                entity.wounds = updated_wounds
+                if recovered is None:
+                    self._schedule_recovery_outcome(
+                        sim,
+                        tick=event.tick,
+                        entity_id=entity_id,
+                        action_uid=action_uid,
+                        outcome="completed",
+                        reason="no_recoverable_wound",
+                        location=location,
+                        site_id=site_id,
+                    )
+                else:
+                    self._schedule_recovery_outcome(
+                        sim,
+                        tick=event.tick,
+                        entity_id=entity_id,
+                        action_uid=action_uid,
+                        outcome="completed",
+                        reason="light_wound_recovered",
+                        location=location,
+                        site_id=site_id,
+                        details={"recovered_wound": recovered},
+                    )
+
+            scheduled = [uid for uid in scheduled if uid != action_uid]
+            completed.append(action_uid)
+            recovery_state[self._STATE_RECOVERY_SCHEDULED_ACTION_UIDS] = _normalize_recovery_uid_fifo(scheduled)
+            recovery_state[self._STATE_RECOVERY_COMPLETED_ACTION_UIDS] = _normalize_recovery_uid_fifo(completed)
+            sim.set_rules_state(self.name, {**sim.get_rules_state(self.name), **recovery_state})
+            return
+
         if event.event_type != EXPLORE_EXECUTE_EVENT_TYPE:
             return
 
@@ -127,7 +299,60 @@ class ExplorationExecutionModule(RuleModule):
         completed.add(action_uid)
         state[self._STATE_SCHEDULED_ACTION_UIDS] = sorted(scheduled)
         state[self._STATE_COMPLETED_ACTION_UIDS] = sorted(completed)
-        sim.set_rules_state(self.name, state)
+        sim.set_rules_state(self.name, {**sim.get_rules_state(self.name), **state})
+
+
+    def _recovery_rules_state(self, sim: Simulation) -> dict[str, list[str]]:
+        state = sim.get_rules_state(self.name)
+        scheduled = _normalize_recovery_uid_fifo(state.get(self._STATE_RECOVERY_SCHEDULED_ACTION_UIDS, []))
+        completed = _normalize_recovery_uid_fifo(state.get(self._STATE_RECOVERY_COMPLETED_ACTION_UIDS, []))
+        return {
+            self._STATE_RECOVERY_SCHEDULED_ACTION_UIDS: scheduled,
+            self._STATE_RECOVERY_COMPLETED_ACTION_UIDS: completed,
+        }
+
+    def _is_safe_recovery_site(self, sim: Simulation, *, location: LocationRef) -> tuple[bool, str | None, str | None]:
+        for site in sim.state.world.sites.values():
+            site_location = site.location
+            if (
+                site_location.get("space_id") == location.space_id
+                and site_location.get("coord") == location.coord
+            ):
+                safe = site.site_type in SAFE_SITE_TYPES or SAFE_SITE_TAG in site.tags
+                return safe, site.site_id, site.site_type
+        return False, None, None
+
+    def _schedule_recovery_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        entity_id: str | None,
+        action_uid: str,
+        outcome: str,
+        reason: str,
+        location: LocationRef | None,
+        site_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        params: dict[str, Any] = {
+            "tick": tick,
+            "entity_id": entity_id,
+            "action_uid": action_uid,
+            "outcome": outcome,
+            "reason": reason,
+        }
+        if site_id is not None:
+            params["site_id"] = site_id
+        if location is not None:
+            params["location"] = location.to_dict()
+        if details is not None:
+            params["details"] = copy.deepcopy(details)
+        sim.schedule_event_at(
+            tick=tick,
+            event_type=RECOVERY_OUTCOME_EVENT_TYPE,
+            params=params,
+        )
 
     def _rules_state(self, sim: Simulation) -> dict[str, Any]:
         state = sim.get_rules_state(self.name)
@@ -180,3 +405,20 @@ class ExplorationExecutionModule(RuleModule):
                 coord={"x": math.floor(entity.position_x), "y": math.floor(entity.position_y)},
             )
         return LocationRef(space_id=entity.space_id, topology_type=OVERWORLD_HEX_TOPOLOGY, coord=entity.hex_coord.to_dict())
+
+
+def _normalize_recovery_uid_fifo(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        raise ValueError("recovery action uid state must be a list")
+    iterable = values
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for uid in iterable:
+        if not isinstance(uid, str) or not uid or uid in seen:
+            continue
+        seen.add(uid)
+        ordered.append(uid)
+    if len(ordered) > MAX_RECOVERY_ACTION_UIDS:
+        ordered = ordered[-MAX_RECOVERY_ACTION_UIDS:]
+    return ordered

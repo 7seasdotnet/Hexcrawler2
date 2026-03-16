@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Keep local hostile pressure in the playable loop while continuing to move wound/combat policy into rule/domain modules (not simulation core) as the slice grows.
+- **Next action:** Validate the retreat→safe-site→recover rhythm in the playable loop and tune bounded recovery values without expanding into full medical simulation.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -36,7 +36,7 @@ Prefer implementation work in this set unless a justified dependency requires ot
 - minimal hostile local behavior,
 - fast brutal local combat resolution,
 - wound application/persistence,
-- extraction/return pressure with minimal supporting supplies/loot/recovery surfaces.
+- extraction/return pressure with minimal supporting supplies/loot/recovery surfaces, including safe-site recovery rest.
 
 ### Preserved but Not Immediate Critical Path
 These systems remain valid and preserved, but are **not immediate critical path** and should expand only when directly required by the playable slice:
@@ -73,6 +73,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 ## Supported Action Intent Types (Current)
 - Combat/tactical intents currently executed through the authoritative seam: `attack_intent`, `turn_intent` (local-role gated).
 - Provisional deterministic encounter action intents currently executed: `signal_intent`, `track_intent`.
+- Campaign recovery intent currently executed through rule-module command/event seam: `safe_recovery_intent` (campaign-role and safe-site gated).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -88,6 +89,6 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Hardened local-role extraction compatibility for legacy active encounters by deterministically deriving missing `return_exit_coord` from serialized actor location during rules-state normalization.
-- Kept the existing local encounter return authority path unchanged and explicitly verified repeat-end behavior cannot duplicate return mutations after successful extraction.
-- Added focused deterministic tests for legacy-context derivation, repeat-end idempotence, and stable rejection reasons/hash behavior for failed extraction attempts.
+- Added deterministic bounds/capping for safe-recovery UID ledgers (`recovery_scheduled_action_uids`, `recovery_completed_action_uids`) with FIFO eviction to preserve bounded serialized state.
+- Kept the campaign-role safe-site delayed recovery seam unchanged while tightening ledger normalization and validation behavior.
+- Added focused tests for ledger-cap eviction determinism and invalid recovery ledger type handling alongside the existing recovery-loop coverage.
