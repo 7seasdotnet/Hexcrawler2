@@ -193,3 +193,7 @@ If Codex fails to update STATUS.md, you reject the output.
 ## Encounter Authority Reminder (B3)
 - Canonical player encounter-flow authority contract is documented in `docs/ARCHITECTURE.md` under **6N) Player Encounter Flow Authority Contract (B3)**.
 - Implementation changes touching contact/offer/local entry/return must preserve that contract and keep `CampaignDangerModule` as the single per-player encounter-control owner for campaign-facing flow state.
+
+## Runtime Profile Discipline (C1)
+- Default playable development and verification must target the `core_playable` runtime profile.
+- Preserved second-order systems should remain available behind explicit non-default profiles (for example `experimental_world` and `soak_audit`) rather than being implicitly active in default play launches.
