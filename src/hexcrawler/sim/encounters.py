@@ -1092,12 +1092,25 @@ class LocalEncounterInstanceModule(RuleModule):
         elif entity_id is None or entity_id not in sim.state.entities:
             reason = "invalid_entity"
         else:
-            fallback_space_id = str(context.get("origin_space_id", context["from_space_id"]))
-            normalized_origin = self._normalize_origin_location_payload(
-                origin_space_id=fallback_space_id,
-                origin_location_payload=context.get("origin_location"),
-                legacy_coord=context.get("return_spawn_coord"),
+            captured_origin_space_id = (
+                str(event.params.get("origin_space_id"))
+                if isinstance(event.params.get("origin_space_id"), str) and event.params.get("origin_space_id")
+                else None
             )
+            fallback_space_id = captured_origin_space_id or str(context.get("origin_space_id", context["from_space_id"]))
+            captured_origin_location = event.params.get("origin_location") if isinstance(event.params.get("origin_location"), dict) else None
+            if captured_origin_location is not None:
+                normalized_origin = self._normalize_origin_location_payload(
+                    origin_space_id=fallback_space_id,
+                    origin_location_payload=captured_origin_location,
+                    legacy_coord=None,
+                )
+            else:
+                normalized_origin = self._normalize_origin_location_payload(
+                    origin_space_id=fallback_space_id,
+                    origin_location_payload=context.get("origin_location"),
+                    legacy_coord=context.get("return_spawn_coord"),
+                )
             to_space_id = str(normalized_origin.get("space_id", fallback_space_id)) if normalized_origin is not None else fallback_space_id
             to_space = sim.state.world.spaces.get(to_space_id)
             if to_space is None:

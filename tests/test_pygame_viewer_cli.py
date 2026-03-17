@@ -44,6 +44,8 @@ from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT, CampaignDangerModule
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
+    LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+    LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
@@ -53,6 +55,8 @@ from hexcrawler.sim.encounters import (
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
+from hexcrawler.sim.local_hostiles import HOSTILE_TEMPLATE_ID
+from hexcrawler.sim.movement import square_grid_cell_to_world_xy
 from hexcrawler.sim.world import (
     EvidenceRecord,
     HexCoord,
@@ -601,6 +605,84 @@ def test_viewer_runtime_pending_offer_decision_step_is_bounded() -> None:
     control = sim.get_rules_state(CampaignDangerModule.name).get("encounter_control_by_player", {}).get(PLAYER_ID, {})
     assert control.get("state") == "pending_offer"
     assert PENDING_OFFER_DECISION_TICK_CAP >= 3
+
+
+
+def test_viewer_runtime_local_contact_and_return_smoke_slice() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True, seed=91)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=True,
+        current_save_path="saves/session_save.json",
+        paused=True,
+    )
+    runtime = ViewerRuntimeController(state)
+
+    danger = sim.state.entities["danger:raider_patrol_alpha"]
+    player = sim.state.entities[PLAYER_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    runtime.controller.accept_encounter_offer()
+    advanced = runtime.resolve_pending_offer_decision()
+    assert advanced >= 1
+
+    begin_events = [
+        entry for entry in sim.get_event_trace() if entry.get("event_type") == LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE
+    ]
+    for _ in range(20):
+        if begin_events:
+            break
+        runtime.advance_ticks(1)
+        begin_events = [
+            entry for entry in sim.get_event_trace() if entry.get("event_type") == LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE
+        ]
+    assert begin_events
+    begin = begin_events[-1]["params"]
+    local_space_id = str(begin["to_space_id"])
+
+    hostile_id = next(
+        entity_id
+        for entity_id, entity in sorted(sim.state.entities.items())
+        if entity.space_id == local_space_id and entity.template_id == HOSTILE_TEMPLATE_ID
+    )
+    hostile = sim.state.entities[hostile_id]
+    player = sim.state.entities[PLAYER_ID]
+    hostile.position_x = player.position_x + 1.0
+    hostile.position_y = player.position_y
+    start_x = player.position_x
+
+    for _ in range(6):
+        runtime.controller.set_move_vector(1.0, 0.0)
+        runtime.advance_ticks(1)
+
+    assert sim.state.entities[PLAYER_ID].position_x > start_x
+    assert any(
+        row.get("applied") is True and row.get("target_id") == PLAYER_ID
+        for row in sim.state.combat_log
+    )
+
+    return_exit = begin["return_exit_coord"]
+    exit_x, exit_y = square_grid_cell_to_world_xy(return_exit["x"], return_exit["y"])
+    player = sim.state.entities[PLAYER_ID]
+    player.position_x = exit_x
+    player.position_y = exit_y
+    hostile.position_x = player.position_x + 4.0
+    hostile.position_y = player.position_y
+
+    expected_origin_coord = dict(begin["from_location"]["coord"])
+    runtime.controller.end_local_encounter()
+    runtime.advance_ticks(4)
+
+    return_events = [
+        entry for entry in sim.get_event_trace() if entry.get("event_type") == LOCAL_ENCOUNTER_RETURN_EVENT_TYPE
+    ]
+    assert return_events
+    assert return_events[-1]["params"]["applied"] is True
+    assert sim._entity_location_ref(sim.state.entities[PLAYER_ID]).coord == expected_origin_coord
+
 
 def test_viewer_runtime_controller_new_simulation_replaces_state_deterministically() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False, seed=42)

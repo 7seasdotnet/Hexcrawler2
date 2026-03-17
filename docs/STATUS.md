@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Execute an interactive viewer smoke pass (manual) for dynamic/static contact Fight/Flee UX polish now that automated full-suite + encounter smoke verification are green.
+- **Next action:** Run one final manual UX polish pass on local contact feel (pressure cadence tuning) now that deterministic viewer-runtime smoke and full-suite verification are green.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -90,11 +90,12 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_encounter_controller_smoke_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k local_contact_and_return_smoke_slice`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `python play.py --headless`
 - `python play.py`
 
 ## What changed in this commit
-- Closed the previous validation caveat by running the full repository suite successfully (`691 passed`) and confirming there is no deterministic deadlock at the prior ~52% progress point.
-- Confirmed encounter-flow smoke coverage for pending-offer Fight/Flee paths across dynamic/static sources remains green in targeted regression runs.
-- Kept architecture/runtime contracts unchanged: pending-offer readability pause remains runtime-level while decision consumption remains authoritative command/tick driven.
+- Added a viewer-runtime smoke regression that drives the real pygame viewer control path through campaign contact accept -> local hostile touch-pressure -> extraction/return and asserts no permanent movement lock plus correct origin restoration.
+- Kept the prior local-only fixes unchanged in architecture scope; this pass adds validation coverage only and does not reopen campaign encounter-controller design.
+- Re-ran targeted smoke checks and full repository verification successfully (`694 passed`).

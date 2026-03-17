@@ -645,3 +645,32 @@ def test_local_encounter_entry_stops_campaign_motion_and_survives_save_load() ->
     assert loaded_scout.move_input_x == 0.0
     assert loaded_scout.move_input_y == 0.0
     assert loaded_scout.target_position is None
+
+
+def test_local_encounter_return_prefers_captured_end_event_origin_over_mutated_context_fallback() -> None:
+    sim = _build_sim(seed=83)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    expected_origin = dict(begin["params"]["from_location"]["coord"])
+
+    _issue_end_intent(sim)
+
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+    active["origin_location"] = {
+        "space_id": CAMPAIGN_SPACE_ID,
+        "topology_type": SQUARE_GRID_TOPOLOGY,
+        "coord": {"x": 99, "y": 99},
+    }
+    active["return_spawn_coord"] = {"x": 98, "y": 98}
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["to_coord"] == expected_origin
