@@ -8,10 +8,10 @@ from hexcrawler.sim.movement import normalized_vector
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.signals import distance_between_locations
 from hexcrawler.sim.world import LOCAL_SPACE_ROLE
+from hexcrawler.sim.wounds import WOUND_INCAPACITATE_SEVERITY
 
 HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
 MAX_TRACKED_ATTACKERS = 512
-WOUND_INCAPACITATE_SEVERITY = 3
 LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS = 2
 
 

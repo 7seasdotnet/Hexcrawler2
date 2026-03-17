@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 WOUND_MOVE_PENALTY_PER_SEVERITY = 0.25
-WOUND_MOVE_MIN_MULTIPLIER = 0.0
-WOUND_INCAPACITATE_SEVERITY = 3
+WOUND_MOVE_MIN_MULTIPLIER = 0.2
+WOUND_INCAPACITATE_SEVERITY = 4
 
 
 def recover_one_light_wound(wounds: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -41,7 +41,7 @@ def movement_multiplier_from_wounds(wounds: list[dict[str, Any]]) -> float:
             severity_total += severity
 
     if severity_total >= WOUND_INCAPACITATE_SEVERITY:
-        return WOUND_MOVE_MIN_MULTIPLIER
+        return 0.0
 
     multiplier = 1.0 - (float(severity_total) * WOUND_MOVE_PENALTY_PER_SEVERITY)
     return max(WOUND_MOVE_MIN_MULTIPLIER, multiplier)

@@ -3,6 +3,7 @@ from pathlib import Path
 import hexcrawler.cli.pygame_viewer as viewer_module
 import pytest
 
+from hexcrawler.cli.runtime_profiles import CORE_PLAYABLE, EXPERIMENTAL_WORLD
 from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID,
     DebugFilterState,
@@ -1395,3 +1396,38 @@ def test_world_marker_placements_do_not_duplicate_local_hostile_marker_dot() -> 
     placements = _world_marker_placements(sim, (200.0, 200.0), zoom_scale=1.0)
 
     assert all(placement.marker.marker_id != "entity:hostile:test" for placement in placements)
+
+
+def test_viewer_runtime_controller_new_sim_uses_runtime_profile_bootstrap_parity() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", runtime_profile=EXPERIMENTAL_WORLD, seed=91)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+        runtime_profile=EXPERIMENTAL_WORLD,
+    )
+    runtime = ViewerRuntimeController(state)
+
+    replaced = runtime.new_simulation(seed=91)
+
+    assert replaced.get_rule_module(EncounterCheckModule.name) is not None
+
+
+def test_viewer_runtime_controller_load_uses_runtime_profile_bootstrap_parity(tmp_path: Path) -> None:
+    baseline = _build_viewer_simulation("content/examples/basic_map.json", runtime_profile=CORE_PLAYABLE, seed=77)
+    save_path = tmp_path / "runtime_profile_parity_load.json"
+    _save_viewer_simulation(baseline, str(save_path))
+
+    state = ViewerRuntimeState(
+        sim=_build_viewer_simulation("content/examples/basic_map.json", runtime_profile=EXPERIMENTAL_WORLD, seed=78),
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path=str(save_path),
+        runtime_profile=CORE_PLAYABLE,
+    )
+    runtime = ViewerRuntimeController(state)
+
+    loaded = runtime.load_simulation(str(save_path))
+
+    assert loaded.get_rule_module(EncounterCheckModule.name) is not None
