@@ -24,6 +24,7 @@ class LocalHostileBehaviorModule(RuleModule):
 
     name = "local_hostile_behavior"
     _STATE_LAST_ATTACK_TICK_BY_ENTITY = "last_attack_tick_by_entity"
+    _STATE_CONTACT_LATCH_BY_ENTITY = "contact_latch_by_entity"
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
@@ -31,6 +32,7 @@ class LocalHostileBehaviorModule(RuleModule):
     def on_tick_start(self, sim: Simulation, tick: int) -> None:
         state = self._rules_state(sim)
         last_attack_tick_by_entity = dict(state[self._STATE_LAST_ATTACK_TICK_BY_ENTITY])
+        contact_latch_by_entity = dict(state[self._STATE_CONTACT_LATCH_BY_ENTITY])
 
         player = sim.state.entities.get(DEFAULT_PLAYER_ENTITY_ID)
         if player is None:
@@ -57,6 +59,9 @@ class LocalHostileBehaviorModule(RuleModule):
                 # Hold hostile movement while in melee contact so command ordering
                 # cannot re-introduce same-cell shove loops before combat intent resolves.
                 self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)
+                latched = bool(contact_latch_by_entity.get(entity_id, False))
+                if latched:
+                    continue
                 last_attack_tick = last_attack_tick_by_entity.get(entity_id)
                 if isinstance(last_attack_tick, int) and (tick - last_attack_tick) < LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS:
                     continue
@@ -74,8 +79,10 @@ class LocalHostileBehaviorModule(RuleModule):
                     )
                 )
                 last_attack_tick_by_entity[entity_id] = tick
+                contact_latch_by_entity[entity_id] = True
                 continue
 
+            contact_latch_by_entity[entity_id] = False
             delta_x = player.position_x - entity.position_x
             delta_y = player.position_y - entity.position_y
             move_x, move_y = normalized_vector(delta_x, delta_y)
@@ -85,6 +92,11 @@ class LocalHostileBehaviorModule(RuleModule):
             key: int(value)
             for key, value in sorted(last_attack_tick_by_entity.items())[-MAX_TRACKED_ATTACKERS:]
             if isinstance(key, str) and key and isinstance(value, int)
+        }
+        state[self._STATE_CONTACT_LATCH_BY_ENTITY] = {
+            key: bool(value)
+            for key, value in sorted(contact_latch_by_entity.items())[-MAX_TRACKED_ATTACKERS:]
+            if isinstance(key, str) and key
         }
         sim.set_rules_state(self.name, state)
 
@@ -113,6 +125,10 @@ class LocalHostileBehaviorModule(RuleModule):
         raw_last_attack_tick_by_entity = state.get(self._STATE_LAST_ATTACK_TICK_BY_ENTITY, {})
         if not isinstance(raw_last_attack_tick_by_entity, dict):
             raise ValueError("local_hostile_behavior.last_attack_tick_by_entity must be an object")
+        raw_contact_latch_by_entity = state.get(self._STATE_CONTACT_LATCH_BY_ENTITY, {})
+        if not isinstance(raw_contact_latch_by_entity, dict):
+            raise ValueError("local_hostile_behavior.contact_latch_by_entity must be an object")
+
         normalized: dict[str, int] = {}
         for entity_id, tick_value in sorted(raw_last_attack_tick_by_entity.items()):
             if not isinstance(entity_id, str) or not entity_id:
@@ -122,4 +138,16 @@ class LocalHostileBehaviorModule(RuleModule):
             normalized[entity_id] = tick_value
         if len(normalized) > MAX_TRACKED_ATTACKERS:
             normalized = dict(list(normalized.items())[-MAX_TRACKED_ATTACKERS:])
-        return {self._STATE_LAST_ATTACK_TICK_BY_ENTITY: normalized}
+
+        normalized_latch: dict[str, bool] = {}
+        for entity_id, latched in sorted(raw_contact_latch_by_entity.items()):
+            if not isinstance(entity_id, str) or not entity_id:
+                continue
+            normalized_latch[entity_id] = bool(latched)
+        if len(normalized_latch) > MAX_TRACKED_ATTACKERS:
+            normalized_latch = dict(list(normalized_latch.items())[-MAX_TRACKED_ATTACKERS:])
+
+        return {
+            self._STATE_LAST_ATTACK_TICK_BY_ENTITY: normalized,
+            self._STATE_CONTACT_LATCH_BY_ENTITY: normalized_latch,
+        }

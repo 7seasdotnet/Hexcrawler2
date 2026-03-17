@@ -24,6 +24,8 @@ CAMPAIGN_SPACE_ROLE = "campaign"
 LOCAL_SPACE_ROLE = "local"
 SPACE_ROLES = {CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE}
 MAX_SIGNALS = 256
+MAX_TRACKS = 256
+MAX_SPAWN_DESCRIPTORS = 256
 MAX_OCCLUSION_EDGES = 2048
 MAX_CLAIM_OPPORTUNITIES = 256
 MAX_RUMORS = 512
@@ -2076,11 +2078,15 @@ class WorldState:
         if not isinstance(raw_tracks, list):
             raise ValueError("tracks must be a list")
         world.tracks = [dict(row) for row in raw_tracks]
+        if len(world.tracks) > MAX_TRACKS:
+            world.tracks = world.tracks[-MAX_TRACKS:]
 
         raw_spawn_descriptors = data.get("spawn_descriptors", [])
         if not isinstance(raw_spawn_descriptors, list):
             raise ValueError("spawn_descriptors must be a list")
         world.spawn_descriptors = [dict(row) for row in raw_spawn_descriptors]
+        if len(world.spawn_descriptors) > MAX_SPAWN_DESCRIPTORS:
+            world.spawn_descriptors = world.spawn_descriptors[-MAX_SPAWN_DESCRIPTORS:]
 
         raw_rumors = data.get("rumors", [])
         if not isinstance(raw_rumors, list):
@@ -2307,6 +2313,8 @@ class WorldState:
             if str(existing.get("signal_uid")) == signal_uid:
                 return False
         self.signals.append(dict(record))
+        if len(self.signals) > MAX_SIGNALS:
+            del self.signals[: len(self.signals) - MAX_SIGNALS]
         return True
 
     def append_signal_record(self, record: dict[str, Any]) -> None:
@@ -2369,10 +2377,14 @@ class WorldState:
             if str(existing.get("track_uid")) == track_uid:
                 return False
         self.tracks.append(dict(record))
+        if len(self.tracks) > MAX_TRACKS:
+            del self.tracks[: len(self.tracks) - MAX_TRACKS]
         return True
 
     def append_spawn_descriptor(self, record: dict[str, Any]) -> None:
         self.spawn_descriptors.append(dict(record))
+        if len(self.spawn_descriptors) > MAX_SPAWN_DESCRIPTORS:
+            del self.spawn_descriptors[: len(self.spawn_descriptors) - MAX_SPAWN_DESCRIPTORS]
 
     def append_rumor(self, record: RumorRecord | dict[str, Any]) -> None:
         normalized = record if isinstance(record, RumorRecord) else RumorRecord.from_dict(record)

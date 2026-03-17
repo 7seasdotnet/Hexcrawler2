@@ -1902,6 +1902,45 @@ def _draw_inspector_panel(
     return content_rect, wrapped_count
 
 
+def collect_soak_metrics(sim: Simulation) -> dict[str, int]:
+    """Read-only runtime growth counters for headless/viewer soak diagnostics.
+
+    Space roles: campaign + local (inspection only; no mutation).
+    """
+
+    local_state = sim.get_rules_state("local_encounter_instance")
+    active_local_spaces = 0
+    return_in_progress_spaces = 0
+    if isinstance(local_state, dict):
+        active_by_local_space = local_state.get("active_by_local_space")
+        if isinstance(active_by_local_space, dict):
+            active_local_spaces = sum(1 for row in active_by_local_space.values() if isinstance(row, dict) and bool(row.get("is_active", True)))
+        return_in_progress_by_local_space = local_state.get("return_in_progress_by_local_space")
+        if isinstance(return_in_progress_by_local_space, dict):
+            return_in_progress_spaces = sum(1 for value in return_in_progress_by_local_space.values() if bool(value))
+
+    campaign_danger_state = sim.get_rules_state("campaign_danger")
+    pending_offers = 0
+    if isinstance(campaign_danger_state, dict):
+        pending_offer_by_player = campaign_danger_state.get("pending_offer_by_player")
+        if isinstance(pending_offer_by_player, dict):
+            pending_offers = sum(1 for value in pending_offer_by_player.values() if isinstance(value, dict))
+
+    return {
+        "tick": int(sim.state.tick),
+        "pending_events": len(sim.pending_events()),
+        "event_trace": len(sim.state.event_trace),
+        "entities": len(sim.state.entities),
+        "signals": len(sim.state.world.signals),
+        "tracks": len(sim.state.world.tracks),
+        "spawn_descriptors": len(sim.state.world.spawn_descriptors),
+        "input_log": len(sim.input_log),
+        "active_local_spaces": int(active_local_spaces),
+        "return_in_progress_spaces": int(return_in_progress_spaces),
+        "pending_offers": int(pending_offers),
+    }
+
+
 def _debug_panel_cache_key(sim: Simulation, rumor_state: RumorPanelState, debug_filter_state: DebugFilterState) -> DebugPanelCacheKey:
     rumor_signature = json.dumps({
         "mode": rumor_state.mode,
