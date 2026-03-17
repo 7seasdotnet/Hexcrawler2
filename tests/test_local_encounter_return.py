@@ -737,3 +737,34 @@ def test_local_encounter_return_prefers_immutable_encounter_return_context_over_
     assert return_event["params"]["applied"] is True
     assert return_event["params"]["to_space_id"] == immutable_context["origin_space_id"]
     assert return_event["params"]["to_coord"] == immutable_context["origin_location"]["coord"]
+
+
+def test_local_encounter_return_legacy_origin_fields_used_only_when_immutable_context_absent() -> None:
+    sim = _build_sim(seed=65)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+    active.pop("encounter_return_context", None)
+    active["origin_space_id"] = CAMPAIGN_SPACE_ID
+    active["origin_location"] = {
+        "space_id": CAMPAIGN_SPACE_ID,
+        "topology_type": SQUARE_GRID_TOPOLOGY,
+        "coord": {"x": 11, "y": 22},
+    }
+    active["return_spawn_coord"] = {"x": 11, "y": 22}
+    active["origin_position"] = {"x": 999.0, "y": 999.0}
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["to_space_id"] == CAMPAIGN_SPACE_ID
+    assert return_event["params"]["to_coord"] == {"x": 11, "y": 22}

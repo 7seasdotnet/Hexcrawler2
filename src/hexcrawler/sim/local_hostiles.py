@@ -8,7 +8,7 @@ from hexcrawler.sim.movement import normalized_vector
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.signals import distance_between_locations
 from hexcrawler.sim.world import LOCAL_SPACE_ROLE
-from hexcrawler.sim.wounds import WOUND_INCAPACITATE_SEVERITY
+from hexcrawler.sim.wounds import is_incapacitated_from_wounds
 
 HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
 MAX_TRACKED_ATTACKERS = 512
@@ -48,7 +48,7 @@ class LocalHostileBehaviorModule(RuleModule):
                 continue
             if entity.space_id != player.space_id:
                 continue
-            if self._is_incapacitated(entity.wounds):
+            if is_incapacitated_from_wounds(entity.wounds):
                 self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)
                 continue
 
@@ -100,14 +100,6 @@ class LocalHostileBehaviorModule(RuleModule):
         }
         sim.set_rules_state(self.name, state)
 
-    @staticmethod
-    def _is_incapacitated(wounds: list[dict[str, Any]]) -> bool:
-        severity_total = 0
-        for wound in wounds:
-            severity = wound.get("severity") if isinstance(wound, dict) else None
-            if isinstance(severity, int) and severity > 0:
-                severity_total += severity
-        return severity_total >= WOUND_INCAPACITATE_SEVERITY
 
     @staticmethod
     def _append_move_intent(sim: Simulation, *, tick: int, entity_id: str, move_x: float, move_y: float) -> None:

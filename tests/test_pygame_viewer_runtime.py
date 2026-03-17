@@ -12,6 +12,7 @@ from hexcrawler.cli.pygame_viewer import (
     _drain_sim_accumulator,
     _focus_camera_on_selected,
     _single_player_offer_pause,
+    _selected_entity_lines,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.hash import simulation_hash, world_hash
@@ -175,3 +176,19 @@ def test_single_player_offer_pause_detects_pending_offer_state() -> None:
     }
     sim.set_rules_state("campaign_danger", state)
     assert _single_player_offer_pause(sim) is True
+
+
+def test_selected_entity_lines_show_explicit_incapacitated_state() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    player.wounds = [
+        {"severity": 1, "region": "torso"},
+        {"severity": 1, "region": "leg"},
+        {"severity": 1, "region": "arm"},
+        {"severity": 1, "region": "head"},
+    ]
+
+    lines = _selected_entity_lines(sim, PLAYER_ID, follow_status=FOLLOW_STATUS_OFF)
+
+    assert any("Incapacitated: YES" in line for line in lines)
+    assert any("severity_total=4" in line for line in lines)

@@ -1,4 +1,9 @@
-from hexcrawler.sim.wounds import movement_multiplier_from_wounds
+from hexcrawler.sim.wounds import (
+    WOUND_INCAPACITATE_SEVERITY,
+    is_incapacitated_from_wounds,
+    movement_multiplier_from_wounds,
+    wound_severity_total,
+)
 
 
 def test_movement_multiplier_from_wounds_default_and_bounds() -> None:
@@ -22,3 +27,10 @@ def test_movement_multiplier_allows_floor_until_explicit_incapacitation() -> Non
     assert movement_multiplier_from_wounds([{"severity": 2}]) == 0.5
     assert movement_multiplier_from_wounds([{"severity": 3}]) == 0.25
     assert movement_multiplier_from_wounds([{"severity": 4}]) == 0.0
+
+
+def test_wound_severity_total_and_incapacitation_threshold() -> None:
+    wounds = [{"severity": 2}, {"severity": 1}, {"severity": 1}]
+    assert wound_severity_total(wounds) == WOUND_INCAPACITATE_SEVERITY
+    assert is_incapacitated_from_wounds(wounds) is True
+    assert is_incapacitated_from_wounds(wounds, threshold=WOUND_INCAPACITATE_SEVERITY + 1) is False
