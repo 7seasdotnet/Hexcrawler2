@@ -289,3 +289,33 @@ def test_local_contact_reengage_after_separation_emits_next_attack() -> None:
 
     second_count = len([row for row in sim.state.combat_log if row.get("applied") is True])
     assert second_count >= 2
+
+
+def test_local_player_mobility_floor_applies_until_explicit_incapacitation() -> None:
+    sim = _build_handoff_sim(seed=408)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    player.wounds = [
+        {"severity": 1, "region": "torso"},
+        {"severity": 1, "region": "leg"},
+        {"severity": 1, "region": "arm"},
+    ]
+    assert movement_multiplier_from_wounds(player.wounds) == 0.25
+
+    start_x = player.position_x
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type="set_move_vector",
+            params={"x": 1.0, "y": 0.0},
+        )
+    )
+    sim.advance_ticks(1)
+
+    assert sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_x > start_x
+
+    player.wounds.append({"severity": 1, "region": "head"})
+    assert movement_multiplier_from_wounds(player.wounds) == 0.0

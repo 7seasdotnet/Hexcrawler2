@@ -199,6 +199,7 @@ def test_local_encounter_return_rejects_invalid_origin_location_shape() -> None:
     local_space_id = begin["params"]["to_space_id"]
     rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
     active = rules_state["active_by_local_space"][local_space_id]
+    active.pop("encounter_return_context", None)
     active["origin_space_id"] = "overworld"
     active["origin_location"] = {
         "space_id": "overworld",
@@ -227,6 +228,7 @@ def test_local_encounter_return_migrates_legacy_origin_coord_shape() -> None:
     local_space_id = begin["params"]["to_space_id"]
     rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
     active = rules_state["active_by_local_space"][local_space_id]
+    active.pop("encounter_return_context", None)
     active["origin_space_id"] = "overworld"
     active["origin_location"] = {"space_id": "overworld", "coord": {"q": 0, "r": 0}}
     rules_state["active_by_local_space"][local_space_id] = active
@@ -705,3 +707,33 @@ def test_local_encounter_return_prefers_captured_origin_position_over_mutated_co
     return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
     assert return_event["params"]["applied"] is True
     assert return_event["params"]["to_coord"] == expected_origin_coord
+
+
+def test_local_encounter_return_prefers_immutable_encounter_return_context_over_legacy_fields() -> None:
+    sim = _build_sim(seed=64)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+
+    immutable_context = dict(active["encounter_return_context"])
+    active["origin_space_id"] = "overworld"
+    active["origin_location"] = {
+        "space_id": "overworld",
+        "topology_type": OVERWORLD_HEX_TOPOLOGY,
+        "coord": {"q": 5, "r": 5},
+    }
+    active["return_spawn_coord"] = {"q": 5, "r": 5}
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["to_space_id"] == immutable_context["origin_space_id"]
+    assert return_event["params"]["to_coord"] == immutable_context["origin_location"]["coord"]

@@ -347,6 +347,7 @@ class ViewerRuntimeState:
     map_path: str
     with_encounters: bool
     current_save_path: str
+    runtime_profile: RuntimeProfile | None = None
     paused: bool = False
     last_loaded_identity: str | None = None
 
@@ -363,6 +364,11 @@ class ViewerRuntimeController:
     def sim(self) -> Simulation:
         return self.state.sim
 
+    def _resolved_runtime_profile(self) -> RuntimeProfile | None:
+        if self.state.runtime_profile is not None:
+            return self.state.runtime_profile
+        return None
+
     def replace_simulation(self, sim: Simulation, *, identity: str | None = None) -> None:
         self.state.sim = sim
         self.controller.sim = sim
@@ -372,13 +378,21 @@ class ViewerRuntimeController:
     def new_simulation(self, *, map_path: str | None = None, seed: int | None = None) -> Simulation:
         next_map = map_path if map_path is not None else self.state.map_path
         next_seed = self.state.sim.seed if seed is None else int(seed)
-        sim = _build_viewer_simulation(next_map, with_encounters=self.state.with_encounters, seed=next_seed)
+        resolved_profile = self._resolved_runtime_profile()
+        if resolved_profile is None:
+            sim = _build_viewer_simulation(next_map, with_encounters=self.state.with_encounters, seed=next_seed)
+        else:
+            sim = _build_viewer_simulation(next_map, runtime_profile=resolved_profile, seed=next_seed)
         self.state.map_path = next_map
         self.replace_simulation(sim, identity=f"map:{Path(next_map).name}")
         return sim
 
     def load_simulation(self, path: str) -> Simulation:
-        sim = _load_viewer_simulation(path, with_encounters=self.state.with_encounters)
+        resolved_profile = self._resolved_runtime_profile()
+        if resolved_profile is None:
+            sim = _load_viewer_simulation(path, with_encounters=self.state.with_encounters)
+        else:
+            sim = _load_viewer_simulation(path, runtime_profile=resolved_profile)
         self.replace_simulation(sim, identity=f"save:{Path(path).name}")
         self.state.current_save_path = path
         return sim
@@ -2676,6 +2690,7 @@ def run_pygame_viewer(
         map_path=map_path,
         with_encounters=(resolved_profile != CORE_PLAYABLE) if with_encounters is None else with_encounters,
         current_save_path=load_save or save_path,
+        runtime_profile=resolved_profile,
         last_loaded_identity=f"save:{Path(load_save).name}" if load_save else f"map:{Path(map_path).name}",
     )
     runtime_controller = ViewerRuntimeController(runtime_state, entity_id=PLAYER_ID)

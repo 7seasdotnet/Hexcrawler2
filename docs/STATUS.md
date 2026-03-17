@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual non-headless playtest passes across all three runtime profiles (`core_playable`, `experimental_world`, `soak_audit`) and confirm the stricter core profile still covers the full campaign→local→return loop.
+- **Next action:** Run a manual local encounter feel pass in `core_playable` to tune contact pressure now that movement floor/incapacitation and immutable return-context behavior are enforced.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -100,9 +100,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Tightened `core_playable` composition to keep noncritical interaction/signal/rumor-depth systems quarantined by default while preserving the playable loop spine.
-- Made `soak_audit` a distinct bounded runtime profile (not a simple alias of `experimental_world`) and kept explicit opt-in selection via `--runtime-profile`.
-- Added targeted profile-difference tests and refreshed architecture/status documentation to reflect stricter default composition discipline.
+- Fixed F4/new-sim bootstrap parity so viewer reset/load paths can use the same `runtime_profile` composition path as normal startup, preserving `core_playable` danger/local systems instead of silently dropping to a partial bootstrap path.
+- Fixed local-role pressure immobility by adding a non-zero wound movement floor and explicit incapacitation threshold gating (`severity_total >= 4`), so ordinary contact pressure slows but does not silently zero-lock movement.
+- Hardened local encounter return to consume one immutable captured `encounter_return_context` (serialized in encounter state), with legacy fallback only when immutable context is absent; added focused regression tests for profile parity, local mobility floor, and return-context authority.
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).

@@ -879,6 +879,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 "from_location": copy.deepcopy(from_location_payload),
                 "origin_location": copy.deepcopy(origin_location),
                 "origin_position": copy.deepcopy(origin_position),
+                "encounter_return_context": {
+                    "origin_space_id": from_space_id,
+                    "origin_location": copy.deepcopy(origin_location),
+                    "origin_position": copy.deepcopy(origin_position),
+                },
                 "return_spawn_coord": copy.deepcopy(from_location_payload.get("coord", {})),
                 "return_exit_coord": copy.deepcopy(to_spawn_coord),
                 "encounter_participant_entity_ids": [
@@ -1093,25 +1098,28 @@ class LocalEncounterInstanceModule(RuleModule):
         elif entity_id is None or entity_id not in sim.state.entities:
             reason = "invalid_entity"
         else:
-            captured_origin_space_id = (
-                str(event.params.get("origin_space_id"))
-                if isinstance(event.params.get("origin_space_id"), str) and event.params.get("origin_space_id")
-                else None
-            )
-            fallback_space_id = captured_origin_space_id or str(context.get("origin_space_id", context["from_space_id"]))
-            captured_origin_location = event.params.get("origin_location") if isinstance(event.params.get("origin_location"), dict) else None
-            if captured_origin_location is not None:
-                normalized_origin = self._normalize_origin_location_payload(
-                    origin_space_id=fallback_space_id,
-                    origin_location_payload=captured_origin_location,
-                    legacy_coord=None,
-                )
-            else:
+            return_context = context.get("encounter_return_context") if isinstance(context.get("encounter_return_context"), dict) else None
+            if return_context is None:
+                fallback_space_id = str(context.get("origin_space_id", context["from_space_id"]))
                 normalized_origin = self._normalize_origin_location_payload(
                     origin_space_id=fallback_space_id,
                     origin_location_payload=context.get("origin_location"),
                     legacy_coord=context.get("return_spawn_coord"),
                 )
+                exact_origin_position = self._normalize_origin_position_payload(
+                    origin_position_payload=context.get("origin_position"),
+                )
+            else:
+                fallback_space_id = str(return_context.get("origin_space_id", context.get("origin_space_id", context["from_space_id"])))
+                normalized_origin = self._normalize_origin_location_payload(
+                    origin_space_id=fallback_space_id,
+                    origin_location_payload=return_context.get("origin_location"),
+                    legacy_coord=None,
+                )
+                exact_origin_position = self._normalize_origin_position_payload(
+                    origin_position_payload=return_context.get("origin_position"),
+                )
+
             to_space_id = str(normalized_origin.get("space_id", fallback_space_id)) if normalized_origin is not None else fallback_space_id
             to_space = sim.state.world.spaces.get(to_space_id)
             if to_space is None:
@@ -1131,10 +1139,6 @@ class LocalEncounterInstanceModule(RuleModule):
                     reason = "invalid_origin_location_for_space"
                 else:
                     entity = sim.state.entities[entity_id]
-                    captured_origin_position = event.params.get("origin_position")
-                    exact_origin_position = self._normalize_origin_position_payload(
-                        origin_position_payload=captured_origin_position,
-                    )
                     if exact_origin_position is None:
                         exact_origin_position = self._normalize_origin_position_payload(
                             origin_position_payload=context.get("origin_position"),
@@ -1421,6 +1425,24 @@ class LocalEncounterInstanceModule(RuleModule):
                 legacy_coord=return_spawn_coord,
             )
             origin_position = self._normalize_origin_position_payload(context.get("origin_position"))
+            raw_return_context = context.get("encounter_return_context")
+            if isinstance(raw_return_context, dict):
+                return_context_space_id = str(raw_return_context.get("origin_space_id", origin_space_id))
+                return_context_location = self._normalize_origin_location_payload(
+                    origin_space_id=return_context_space_id,
+                    origin_location_payload=raw_return_context.get("origin_location"),
+                    legacy_coord=None,
+                )
+                return_context_position = self._normalize_origin_position_payload(raw_return_context.get("origin_position"))
+            else:
+                return_context_space_id = str(origin_space_id)
+                return_context_location = copy.deepcopy(origin_location)
+                return_context_position = copy.deepcopy(origin_position)
+
+            if return_context_location is None:
+                return_context_location = copy.deepcopy(origin_location)
+                return_context_space_id = str(origin_space_id)
+
             return_exit_coord = self._normalize_local_square_coord_payload(context.get("return_exit_coord"))
             if return_exit_coord is None:
                 entity_id = context.get("entity_id")
@@ -1446,6 +1468,11 @@ class LocalEncounterInstanceModule(RuleModule):
                 "from_location": copy.deepcopy(from_location),
                 "origin_location": copy.deepcopy(origin_location),
                 "origin_position": copy.deepcopy(origin_position),
+                "encounter_return_context": {
+                    "origin_space_id": return_context_space_id,
+                    "origin_location": copy.deepcopy(return_context_location),
+                    "origin_position": copy.deepcopy(return_context_position),
+                },
                 "return_spawn_coord": copy.deepcopy(return_spawn_coord),
                 "return_exit_coord": copy.deepcopy(return_exit_coord),
                 "encounter_participant_entity_ids": [
