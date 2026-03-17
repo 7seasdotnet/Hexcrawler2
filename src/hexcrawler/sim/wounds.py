@@ -7,6 +7,29 @@ WOUND_MOVE_MIN_MULTIPLIER = 0.2
 WOUND_INCAPACITATE_SEVERITY = 4
 
 
+def wound_severity_total(wounds: list[dict[str, Any]]) -> int:
+    """Return deterministic aggregate wound severity from serialized wound rows."""
+
+    severity_total = 0
+    for wound in wounds:
+        if not isinstance(wound, dict):
+            continue
+        severity = wound.get("severity")
+        if isinstance(severity, int) and severity > 0:
+            severity_total += severity
+    return severity_total
+
+
+def is_incapacitated_from_wounds(
+    wounds: list[dict[str, Any]],
+    *,
+    threshold: int = WOUND_INCAPACITATE_SEVERITY,
+) -> bool:
+    """Return true when wounds cross the explicit incapacitation threshold."""
+
+    return wound_severity_total(wounds) >= threshold
+
+
 def recover_one_light_wound(wounds: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Return a copy of ``wounds`` with at most one light wound removed.
 
@@ -32,14 +55,7 @@ def movement_multiplier_from_wounds(wounds: list[dict[str, Any]]) -> float:
     - local: applies during local-role tactical movement resolution.
     """
 
-    severity_total = 0
-    for wound in wounds:
-        if not isinstance(wound, dict):
-            continue
-        severity = wound.get("severity")
-        if isinstance(severity, int) and severity > 0:
-            severity_total += severity
-
+    severity_total = wound_severity_total(wounds)
     if severity_total >= WOUND_INCAPACITATE_SEVERITY:
         return 0.0
 

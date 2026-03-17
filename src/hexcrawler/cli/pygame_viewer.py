@@ -50,6 +50,7 @@ from hexcrawler.sim.movement import (
     world_xy_to_square_grid_cell,
 )
 from hexcrawler.sim.world import LOCAL_SPACE_ROLE, HexCoord
+from hexcrawler.sim.wounds import WOUND_INCAPACITATE_SEVERITY, is_incapacitated_from_wounds, wound_severity_total
 
 HEX_SIZE = 28
 GRID_RADIUS = 8
@@ -1554,6 +1555,10 @@ def _draw_hud(
         f"runtime={'paused' if runtime_state.paused else 'running'}",
         f"follow status={follow_state.status}",
     ]
+    if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
+        severity_total = wound_severity_total(entity.wounds)
+        if is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
+            lines.append(f"LOCAL STATUS: INCAPACITATED (severity={severity_total} threshold={WOUND_INCAPACITATE_SEVERITY})")
     if status_message:
         lines.append(f"status: {status_message}")
     if hover_message:
@@ -2401,11 +2406,16 @@ def _selected_entity_lines(
 
     recent_relevant_events = _selected_entity_recent_trace_rows(sim, selected_entity_id)
 
+    severity_total = wound_severity_total(entity.wounds)
+    incapacitated = is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+
     lines = [
         "SELECTED ENTITY",
         f"Entity ID: {entity.entity_id}",
         f"Space ID: {entity.space_id}",
         f"Space role: {space_role}",
+        f"Wounds: count={len(entity.wounds)} severity_total={severity_total}",
+        f"Incapacitated: {'YES' if incapacitated else 'NO'} (threshold={WOUND_INCAPACITATE_SEVERITY})",
         f"Faction: {faction_id if faction_id else '-'}",
         f"Role: {role_value if role_value else (entity.template_id if entity.template_id else '-')}",
         f"Location: {_entity_location_text(sim, entity)}",

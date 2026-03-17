@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual local encounter feel pass in `core_playable` to tune contact pressure now that movement floor/incapacitation and immutable return-context behavior are enforced.
+- **Next action:** Tune local hostile pressure pacing in `core_playable` now that incapacitation is explicit/inspectable and dynamic return authority has been confirmed by full-suite + viewer smoke coverage.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -100,9 +100,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Fixed F4/new-sim bootstrap parity so viewer reset/load paths can use the same `runtime_profile` composition path as normal startup, preserving `core_playable` danger/local systems instead of silently dropping to a partial bootstrap path.
-- Fixed local-role pressure immobility by adding a non-zero wound movement floor and explicit incapacitation threshold gating (`severity_total >= 4`), so ordinary contact pressure slows but does not silently zero-lock movement.
-- Hardened local encounter return to consume one immutable captured `encounter_return_context` (serialized in encounter state), with legacy fallback only when immutable context is absent; added focused regression tests for profile parity, local mobility floor, and return-context authority.
+- Kept explicit local incapacitation visibility and shared wound helper usage, while restoring local reward-token incapacitation to its dedicated threshold (`LOCAL_REWARD_INCAPACITATE_SEVERITY=3`) so reward-turn-in progression remains compatible with existing loop tests.
+- Preserved hard immutable return-context authority for normal local return flow, with legacy mutable fields used only when immutable context is absent.
+- Verified reliability closure with targeted viewer smoke + dynamic/patrol return coverage and a full-suite pass (`PYTHONPATH=src pytest -q`).
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).

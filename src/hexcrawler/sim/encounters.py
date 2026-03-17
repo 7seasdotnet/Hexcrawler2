@@ -16,6 +16,7 @@ from hexcrawler.sim.periodic import PeriodicScheduler
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.signals import distance_between_locations
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, MAX_CLAIM_OPPORTUNITIES, RUMOR_KINDS, AnchorRecord, DoorRecord, HexCoord, InteractableRecord, RumorRecord, SpaceState
+from hexcrawler.sim.wounds import is_incapacitated_from_wounds
 
 ENCOUNTER_CHECK_EVENT_TYPE = "encounter_check"
 ENCOUNTER_ROLL_EVENT_TYPE = "encounter_roll"
@@ -1110,7 +1111,7 @@ class LocalEncounterInstanceModule(RuleModule):
                     origin_position_payload=context.get("origin_position"),
                 )
             else:
-                fallback_space_id = str(return_context.get("origin_space_id", context.get("origin_space_id", context["from_space_id"])))
+                fallback_space_id = str(return_context.get("origin_space_id", context["from_space_id"]))
                 normalized_origin = self._normalize_origin_location_payload(
                     origin_space_id=fallback_space_id,
                     origin_location_payload=return_context.get("origin_location"),
@@ -1364,20 +1365,10 @@ class LocalEncounterInstanceModule(RuleModule):
                 continue
             if entity.template_id != LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID:
                 continue
-            if LocalEncounterInstanceModule._is_incapacitated(entity.wounds):
+            if is_incapacitated_from_wounds(entity.wounds, threshold=LOCAL_REWARD_INCAPACITATE_SEVERITY):
                 count += 1
         return count
 
-    @staticmethod
-    def _is_incapacitated(wounds: list[dict[str, Any]]) -> bool:
-        severity_total = 0
-        for wound in wounds:
-            if not isinstance(wound, dict):
-                continue
-            severity = wound.get("severity")
-            if isinstance(severity, int) and severity > 0:
-                severity_total += severity
-        return severity_total >= LOCAL_REWARD_INCAPACITATE_SEVERITY
 
     def _rules_state(self, sim: Simulation) -> dict[str, Any]:
         state = sim.get_rules_state(self.name)
