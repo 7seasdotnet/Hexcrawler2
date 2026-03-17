@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Tune local hostile pressure pacing in `core_playable` now that incapacitation is explicit/inspectable and dynamic return authority has been confirmed by full-suite + viewer smoke coverage.
+- **Next action:** Run another short balance pass on campaign contact cadence vs local hostile pressure now that `core_playable` HUD/inspector loop legibility surfaces are explicit (condition/extraction/safe-site/recovery/inventory/offer state).
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -86,6 +86,8 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py tests/test_pygame_viewer_cli.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py tests/test_reward_turn_in_loop_p5.py`
+- `PYTHONPATH=src python - <<'PY' ... core_playable scripted smoke (patrol contact -> Fight -> local pressure -> return) ... PY`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_runtime.py`
@@ -100,9 +102,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Kept explicit local incapacitation visibility and shared wound helper usage, while restoring local reward-token incapacitation to its dedicated threshold (`LOCAL_REWARD_INCAPACITATE_SEVERITY=3`) so reward-turn-in progression remains compatible with existing loop tests.
-- Preserved hard immutable return-context authority for normal local return flow, with legacy mutable fields used only when immutable context is absent.
-- Verified reliability closure with targeted viewer smoke + dynamic/patrol return coverage and a full-suite pass (`PYTHONPATH=src pytest -q`).
+- Completed a **core_playable tuning + viewer legibility pass**: local hostile same-contact pressure now uses deterministic cooldown pacing (without hidden latch freeze behavior), preserving explicit incapacitation outcomes.
+- Added compact player-loop legibility surfaces in the pygame viewer HUD/inspector for encounter offer source/title, condition (mobile/slowed/incapacitated), wound threshold/movement multiplier, extraction visibility/state, safe-site status, recovery/turn-in readiness, and proof_token/rations counts.
+- Added targeted tests for local incapacitation pressure determinism and viewer loop-state readability, revalidated focused slices + full suite (`PYTHONPATH=src pytest -q`), and completed a direct `core_playable` scripted smoke covering patrol contact -> Fight -> local pressure -> explicit condition/extraction readability -> authoritative return.
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).

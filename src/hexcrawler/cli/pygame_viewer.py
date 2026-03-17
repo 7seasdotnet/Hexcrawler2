@@ -38,7 +38,14 @@ from hexcrawler.sim.campaign_danger import (
     CampaignDangerModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.exploration import (
+    EXPLORATION_OUTCOME_EVENT_TYPE,
+    RECOVERY_OUTCOME_EVENT_TYPE,
+    REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
+    REWARD_TOKEN_ITEM_ID,
+    SAFE_RECOVERY_INTENT_COMMAND_TYPE,
+    TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
+)
 from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
@@ -50,7 +57,12 @@ from hexcrawler.sim.movement import (
     world_xy_to_square_grid_cell,
 )
 from hexcrawler.sim.world import LOCAL_SPACE_ROLE, HexCoord
-from hexcrawler.sim.wounds import WOUND_INCAPACITATE_SEVERITY, is_incapacitated_from_wounds, wound_severity_total
+from hexcrawler.sim.wounds import (
+    WOUND_INCAPACITATE_SEVERITY,
+    is_incapacitated_from_wounds,
+    movement_multiplier_from_wounds,
+    wound_severity_total,
+)
 
 HEX_SIZE = 28
 GRID_RADIUS = 8
@@ -1531,6 +1543,58 @@ def _draw_top_control_bar(
     screen.blit(font.render(right_label, True, (220, 220, 225)), (480, 8))
 
 
+def _find_safe_site_status(sim: Simulation, entity: EntityState) -> tuple[bool, str | None, str | None]:
+    active_space = sim.state.world.spaces.get(entity.space_id)
+    if active_space is None or str(getattr(active_space, "role", "")) != "campaign":
+        return False, None, None
+
+    location = _entity_location_text(sim, entity)
+    for site in sim.state.world.sites.values():
+        site_location = site.location
+        if site_location.get("space_id") != entity.space_id:
+            continue
+        coord = site_location.get("coord")
+        if not isinstance(coord, dict):
+            continue
+        if active_space.topology_type == SQUARE_GRID_TOPOLOGY:
+            here = world_xy_to_square_grid_cell(entity.position_x, entity.position_y)
+            if coord.get("x") != here.get("x") or coord.get("y") != here.get("y"):
+                continue
+        else:
+            if coord.get("q") != entity.hex_coord.q or coord.get("r") != entity.hex_coord.r:
+                continue
+        is_safe = site.site_type == "town" or ("safe" in site.tags)
+        return is_safe, site.site_id, site.site_type
+    return False, None, None
+
+
+def _inventory_counts_for_entity(sim: Simulation, entity: EntityState) -> tuple[int, int]:
+    container_id = entity.inventory_container_id
+    if container_id is None:
+        return 0, 0
+    container = sim.state.world.containers.get(container_id)
+    if container is None:
+        return 0, 0
+    items = container.items
+    proof = int(items.get(REWARD_TOKEN_ITEM_ID, 0)) if isinstance(items.get(REWARD_TOKEN_ITEM_ID, 0), int) else 0
+    ration_raw = items.get("rations", 0)
+    rations = int(ration_raw) if isinstance(ration_raw, int) else 0
+    return max(0, proof), max(0, rations)
+
+
+def _last_event_params(sim: Simulation, event_type: str, *, entity_id: str) -> dict[str, Any] | None:
+    for entry in reversed(sim.get_event_trace()):
+        if entry.get("event_type") != event_type:
+            continue
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            continue
+        if params.get("entity_id") != entity_id:
+            continue
+        return params
+    return None
+
+
 def _draw_hud(
     screen: pygame.Surface,
     sim: Simulation,
@@ -1548,17 +1612,61 @@ def _draw_hud(
     else:
         coord_text = f"q={entity.hex_coord.q},r={entity.hex_coord.r}"
     context_line = f"space={entity.space_id} | {coord_text}"
+
+    severity_total = wound_severity_total(entity.wounds)
+    movement_multiplier = movement_multiplier_from_wounds(entity.wounds)
+    incapacitated = is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+    condition = "incapacitated" if incapacitated else ("slowed" if movement_multiplier < 1.0 else "mobile")
+
+    pending_offer = _pending_encounter_offer(sim)
+    local_context = _get_return_context_for_space(sim, entity.space_id)
+    extraction_ready = local_context is not None and not _is_return_in_progress(sim, entity.space_id)
+
+    proof_tokens, rations = _inventory_counts_for_entity(sim, entity)
+    at_safe_site, safe_site_id, safe_site_type = _find_safe_site_status(sim, entity)
+    recovery_possible = at_safe_site and any(isinstance(w, dict) and w.get("severity") == 1 for w in entity.wounds)
+
+    recovery_outcome = _last_event_params(sim, RECOVERY_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
+    reward_outcome = _last_event_params(sim, REWARD_TURN_IN_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
+
     lines = [
         context_line,
         "WASD move | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
         "F7 focus selected entity | F12 toggle follow-selected",
-        f"runtime={'paused' if runtime_state.paused else 'running'}",
+        f"runtime={'paused' if runtime_state.paused else 'running'} | runtime_profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
         f"follow status={follow_state.status}",
+        f"condition={condition} | wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY} | move_mult={movement_multiplier:.2f}",
     ]
+
+    if pending_offer is not None:
+        lines.append(
+            f"encounter_offer=PENDING source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
+        )
+
     if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
-        severity_total = wound_severity_total(entity.wounds)
-        if is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
-            lines.append(f"LOCAL STATUS: INCAPACITATED (severity={severity_total} threshold={WOUND_INCAPACITATE_SEVERITY})")
+        lines.append(f"local_hostile_pressure=ACTIVE | extraction={'ready' if extraction_ready else 'blocked'}")
+        if local_context is not None:
+            return_exit_coord = local_context.get("return_exit_coord")
+            if isinstance(return_exit_coord, dict):
+                lines.append(f"extraction_marker=visible at ({return_exit_coord.get('x','?')},{return_exit_coord.get('y','?')})")
+        if _is_return_in_progress(sim, entity.space_id):
+            lines.append("return_state=processing")
+
+    safe_status = "yes" if at_safe_site else "no"
+    lines.append(f"safe_site={safe_status} site_id={safe_site_id or '-'} type={safe_site_type or '-'}")
+    lines.append(
+        f"recovery={'available' if recovery_possible else 'unavailable'} requires={SAFE_RECOVERY_INTENT_COMMAND_TYPE} light_wound=severity1 ration_required=no"
+    )
+    lines.append(
+        f"turn_in={'available' if (at_safe_site and proof_tokens > 0) else 'unavailable'} requires={TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE} proof_token>=1"
+    )
+    lines.append(f"inventory proof_token={proof_tokens} rations={rations}")
+
+    if recovery_outcome is not None:
+        lines.append(f"last_recovery outcome={recovery_outcome.get('outcome','?')} reason={recovery_outcome.get('reason','?')}")
+    if reward_outcome is not None:
+        lines.append(f"last_turn_in applied={reward_outcome.get('applied','?')} reason={reward_outcome.get('reason','?')}")
+
     if status_message:
         lines.append(f"status: {status_message}")
     if hover_message:
@@ -1667,6 +1775,8 @@ def _draw_encounter_offer_modal(
     screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
     action_hint = _truncate_text_to_pixel_width("Fight [F] or Flee [X]", font, panel.width - 18)
     screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 58))
+    waiting_hint = _truncate_text_to_pixel_width("Decision required: campaign flow paused until input.", font, panel.width - 18)
+    screen.blit(font.render(waiting_hint, True, (236, 196, 160)), (panel.x + 9, panel.y + 78))
 
     button_w = 110
     button_h = 34
@@ -2409,13 +2519,24 @@ def _selected_entity_lines(
     severity_total = wound_severity_total(entity.wounds)
     incapacitated = is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
 
+    movement_multiplier = movement_multiplier_from_wounds(entity.wounds)
+    condition_label = "incapacitated" if incapacitated else ("slowed" if movement_multiplier < 1.0 else "mobile")
+    proof_tokens, rations = _inventory_counts_for_entity(sim, entity)
+    at_safe_site, safe_site_id, safe_site_type = _find_safe_site_status(sim, entity)
+    return_context = _get_return_context_for_space(sim, entity.space_id)
+
     lines = [
         "SELECTED ENTITY",
         f"Entity ID: {entity.entity_id}",
         f"Space ID: {entity.space_id}",
         f"Space role: {space_role}",
+        f"Condition: {condition_label}",
         f"Wounds: count={len(entity.wounds)} severity_total={severity_total}",
         f"Incapacitated: {'YES' if incapacitated else 'NO'} (threshold={WOUND_INCAPACITATE_SEVERITY})",
+        f"Movement multiplier: {movement_multiplier:.2f}",
+        f"Extraction context: {'present' if return_context is not None else 'none'}",
+        f"Safe site: {'yes' if at_safe_site else 'no'} ({safe_site_id if safe_site_id else '-'}:{safe_site_type if safe_site_type else '-'})",
+        f"Inventory: proof_token={proof_tokens} rations={rations}",
         f"Faction: {faction_id if faction_id else '-'}",
         f"Role: {role_value if role_value else (entity.template_id if entity.template_id else '-')}",
         f"Location: {_entity_location_text(sim, entity)}",

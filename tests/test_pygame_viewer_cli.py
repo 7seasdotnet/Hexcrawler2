@@ -863,6 +863,60 @@ def test_selected_entity_lines_include_minimal_observability_fields() -> None:
     assert any("Target location: overworld_hex:2,1" in line for line in lines)
 
 
+
+
+def test_selected_entity_lines_include_loop_legibility_fields() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    scout = sim.state.entities[PLAYER_ID]
+    scout.wounds = [{"severity": 1, "region": "torso"}]
+    container_id = scout.inventory_container_id
+    assert container_id is not None
+    sim.state.world.containers[container_id].items["proof_token"] = 2
+    sim.state.world.containers[container_id].items["rations"] = 3
+
+    sim.state.world.sites["town:test"] = SiteRecord(
+        site_id="town:test",
+        site_type="town",
+        location={"space_id": scout.space_id, "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": scout.hex_coord.to_dict()},
+        tags=["safe"],
+    )
+
+    lines = _selected_entity_lines(sim, PLAYER_ID)
+
+    assert any("Condition: slowed" in line for line in lines)
+    assert any("Movement multiplier:" in line for line in lines)
+    assert any("Safe site: yes" in line for line in lines)
+    assert any("Inventory: proof_token=2 rations=3" in line for line in lines)
+
+
+def test_pending_offer_modal_uses_source_and_title_fields() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=True)
+    state = dict(sim.get_rules_state(CampaignDangerModule.name))
+    state["pending_offer_by_player"] = {
+        PLAYER_ID: {
+            "player_entity_id": PLAYER_ID,
+            "danger_entity_id": "danger:raider_patrol_alpha",
+            "source_label": "raider patrol alpha",
+            "encounter_label": "ambush at the creek",
+            "context": "travel",
+            "trigger": "contact",
+            "category": "hostile",
+            "table_id": "enc_table_primary",
+            "entry_id": "wolves_1",
+            "suggested_local_template_id": "local_square_test",
+            "tick": sim.state.tick,
+            "roll": 12,
+            "tags": ["hostile"],
+            "location": {"space_id": "overworld", "topology_type": OVERWORLD_HEX_TOPOLOGY, "coord": {"q": 0, "r": 0}},
+        }
+    }
+    sim.set_rules_state(CampaignDangerModule.name, state)
+
+    offer = viewer_module._pending_encounter_offer(sim)
+    assert offer is not None
+    assert offer["source_label"] == "raider patrol alpha"
+    assert offer["encounter_label"] == "ambush at the creek"
+
 def test_selection_commands_do_not_mutate_world_state_until_sim_step() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
