@@ -214,3 +214,43 @@ def test_local_contact_continues_resolving_without_permanent_move_lock() -> None
         if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("applied") is True
     ]
     assert len(applied_melee) >= 2
+
+
+def test_local_contact_attack_cooldown_allows_player_reposition_between_hits() -> None:
+    sim = _build_handoff_sim(seed=406)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
+    local_space_id = begin["to_space_id"]
+    hostile_id = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == HOSTILE_TEMPLATE_ID
+    )[0]
+    hostile = sim.state.entities[hostile_id]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+
+    hostile.position_x = player.position_x + 1.0
+    hostile.position_y = player.position_y
+    start_x = player.position_x
+
+    for _ in range(6):
+        sim.append_command(
+            SimCommand(
+                tick=sim.state.tick,
+                entity_id=DEFAULT_PLAYER_ENTITY_ID,
+                command_type="set_move_vector",
+                params={"x": 1.0, "y": 0.0},
+            )
+        )
+        sim.advance_ticks(1)
+
+    assert sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_x > start_x
+
+    applied_melee = [
+        row
+        for row in sim.state.combat_log
+        if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("applied") is True
+    ]
+    assert applied_melee

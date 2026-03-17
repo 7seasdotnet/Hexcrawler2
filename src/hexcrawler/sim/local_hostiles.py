@@ -12,6 +12,7 @@ from hexcrawler.sim.world import LOCAL_SPACE_ROLE
 HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
 MAX_TRACKED_ATTACKERS = 512
 WOUND_INCAPACITATE_SEVERITY = 3
+LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS = 2
 
 
 class LocalHostileBehaviorModule(RuleModule):
@@ -56,7 +57,8 @@ class LocalHostileBehaviorModule(RuleModule):
                 # Hold hostile movement while in melee contact so command ordering
                 # cannot re-introduce same-cell shove loops before combat intent resolves.
                 self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)
-                if last_attack_tick_by_entity.get(entity_id) == tick:
+                last_attack_tick = last_attack_tick_by_entity.get(entity_id)
+                if isinstance(last_attack_tick, int) and (tick - last_attack_tick) < LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS:
                     continue
                 sim.append_command(
                     SimCommand(
