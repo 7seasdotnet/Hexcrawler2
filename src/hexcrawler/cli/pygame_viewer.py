@@ -12,8 +12,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hexcrawler.content.encounters import DEFAULT_ENCOUNTER_TABLE_PATH, load_encounter_table_json
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
+from hexcrawler.cli.runtime_profiles import (
+    CORE_PLAYABLE,
+    DEFAULT_RUNTIME_PROFILE,
+    EXPERIMENTAL_WORLD,
+    RUNTIME_PROFILE_CHOICES,
+    SOAK_AUDIT,
+    RuntimeProfile,
+    configure_runtime_profile,
+    configure_non_encounter_viewer_modules,
+)
 from hexcrawler.sim.core import HEX_TOPOLOGY_TYPES, EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
@@ -21,32 +30,17 @@ from hexcrawler.sim.encounters import (
     LIST_RUMORS_OUTCOME_KIND,
     SELECT_RUMORS_INTENT,
     SELECT_RUMORS_OUTCOME_KIND,
-    EncounterActionExecutionModule,
-    EncounterActionModule,
-    EncounterCheckModule,
-    LocalEncounterRequestModule,
     LocalEncounterInstanceModule,
-    EncounterSelectionModule,
-    RumorPipelineModule,
-    RumorDecayModule,
-    RumorQueryModule,
-    SiteEcologyModule,
-    SpawnMaterializationModule,
 )
-from hexcrawler.sim.groups import GroupMovementModule
 from hexcrawler.sim.campaign_danger import (
     ACCEPT_ENCOUNTER_OFFER_INTENT,
     FLEE_ENCOUNTER_OFFER_INTENT,
     CampaignDangerModule,
 )
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.local_hostiles import LocalHostileBehaviorModule
-from hexcrawler.sim.combat import CombatExecutionModule
-from hexcrawler.sim.entity_stats import EntityStatsExecutionModule
-from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE, ExplorationExecutionModule
-from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE, InteractionExecutionModule
-from hexcrawler.sim.signals import SignalPropagationModule
-from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE, SupplyConsumptionModule
+from hexcrawler.sim.exploration import EXPLORATION_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import (
     axial_to_world_xy,
@@ -2512,9 +2506,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to world map JSON template.",
     )
     parser.add_argument(
-        "--with-encounters",
-        action="store_true",
-        help="Enable encounter module registration for encounter debug data.",
+        "--runtime-profile",
+        choices=RUNTIME_PROFILE_CHOICES,
+        default=DEFAULT_RUNTIME_PROFILE,
+        help="Runtime module composition profile.",
     )
     parser.add_argument(
         "--headless",
@@ -2564,90 +2559,57 @@ def _ensure_pygame_imported() -> Any:
 
 
 
-def _register_supply_module(sim: Simulation) -> None:
-    if sim.get_rule_module(SupplyConsumptionModule.name) is not None:
+def _resolve_runtime_profile(
+    *,
+    runtime_profile: RuntimeProfile,
+    with_encounters: bool | None,
+) -> RuntimeProfile:
+    if with_encounters is None:
+        return runtime_profile
+    return EXPERIMENTAL_WORLD if with_encounters else CORE_PLAYABLE
+
+
+def _configure_simulation_modules(
+    sim: Simulation,
+    *,
+    runtime_profile: RuntimeProfile,
+    with_encounters: bool | None,
+) -> None:
+    if with_encounters is None:
+        configure_runtime_profile(sim, runtime_profile)
         return
-    sim.register_rule_module(SupplyConsumptionModule())
-
-
-
-
-def _register_combat_module(sim: Simulation) -> None:
-    if sim.get_rule_module(CombatExecutionModule.name) is not None:
+    if with_encounters:
+        configure_runtime_profile(sim, EXPERIMENTAL_WORLD)
         return
-    sim.register_rule_module(CombatExecutionModule())
-
-def _register_entity_stats_module(sim: Simulation) -> None:
-    if sim.get_rule_module(EntityStatsExecutionModule.name) is not None:
-        return
-    sim.register_rule_module(EntityStatsExecutionModule())
-
-def _register_exploration_module(sim: Simulation) -> None:
-    if sim.get_rule_module(ExplorationExecutionModule.name) is not None:
-        return
-    sim.register_rule_module(ExplorationExecutionModule())
+    configure_non_encounter_viewer_modules(sim)
 
 
-def _register_interaction_module(sim: Simulation) -> None:
-    if sim.get_rule_module(InteractionExecutionModule.name) is not None:
-        return
-    sim.register_rule_module(InteractionExecutionModule())
-
-
-def _register_signal_module(sim: Simulation) -> None:
-    if sim.get_rule_module(SignalPropagationModule.name) is not None:
-        return
-    sim.register_rule_module(SignalPropagationModule())
-
-
-def _register_encounter_modules(sim: Simulation) -> None:
-    if sim.get_rule_module(EncounterCheckModule.name) is not None:
-        return
-    sim.register_rule_module(EncounterCheckModule())
-    sim.register_rule_module(EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
-    sim.register_rule_module(EncounterActionModule())
-    sim.register_rule_module(EncounterActionExecutionModule())
-    sim.register_rule_module(LocalEncounterRequestModule())
-    sim.register_rule_module(LocalEncounterInstanceModule())
-    sim.register_rule_module(LocalHostileBehaviorModule())
-    sim.register_rule_module(CampaignDangerModule())
-    sim.register_rule_module(SiteEcologyModule())
-    sim.register_rule_module(RumorPipelineModule())
-    sim.register_rule_module(RumorDecayModule())
-    sim.register_rule_module(RumorQueryModule())
-    sim.register_rule_module(SpawnMaterializationModule())
-    sim.register_rule_module(GroupMovementModule())
-
-
-def _build_viewer_simulation(map_path: str, *, with_encounters: bool, seed: int = 7) -> Simulation:
+def _build_viewer_simulation(
+    map_path: str,
+    *,
+    runtime_profile: RuntimeProfile = DEFAULT_RUNTIME_PROFILE,
+    with_encounters: bool | None = None,
+    seed: int = 7,
+) -> Simulation:
     world = load_world_json(map_path)
     sim = Simulation(world=world, seed=seed)
-    if with_encounters:
-        _register_encounter_modules(sim)
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
-    _register_exploration_module(sim)
-    _register_interaction_module(sim)
-    _register_signal_module(sim)
-    _register_entity_stats_module(sim)
-    _register_combat_module(sim)
-    _register_supply_module(sim)
+    resolved_profile = _resolve_runtime_profile(runtime_profile=runtime_profile, with_encounters=with_encounters)
+    _configure_simulation_modules(sim, runtime_profile=resolved_profile, with_encounters=with_encounters)
     return sim
 
 
-def _load_viewer_simulation(save_path: str, *, with_encounters: bool) -> Simulation:
+def _load_viewer_simulation(
+    save_path: str,
+    *,
+    runtime_profile: RuntimeProfile = DEFAULT_RUNTIME_PROFILE,
+    with_encounters: bool | None = None,
+) -> Simulation:
     _, sim = load_game_json(save_path)
-    should_enable_encounters = with_encounters or EncounterCheckModule.name in sim.state.rules_state
-    if should_enable_encounters:
-        _register_encounter_modules(sim)
     if PLAYER_ID not in sim.state.entities:
         sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
-    _register_exploration_module(sim)
-    _register_interaction_module(sim)
-    _register_signal_module(sim)
-    _register_entity_stats_module(sim)
-    _register_combat_module(sim)
-    if SupplyConsumptionModule.name in sim.state.rules_state or PLAYER_ID in sim.state.entities:
-        _register_supply_module(sim)
+    resolved_profile = _resolve_runtime_profile(runtime_profile=runtime_profile, with_encounters=with_encounters)
+    _configure_simulation_modules(sim, runtime_profile=resolved_profile, with_encounters=with_encounters)
     print(
         "[hexcrawler.viewer] loaded "
         f"path={save_path} tick={sim.state.tick} "
@@ -2673,7 +2635,8 @@ def _save_viewer_simulation(sim: Simulation, save_path: str) -> None:
 def run_pygame_viewer(
     map_path: str = "content/examples/viewer_map.json",
     *,
-    with_encounters: bool = False,
+    runtime_profile: RuntimeProfile = DEFAULT_RUNTIME_PROFILE,
+    with_encounters: bool | None = None,
     headless: bool = False,
     load_save: str | None = None,
     save_path: str = "saves/session_save.json",
@@ -2695,10 +2658,13 @@ def run_pygame_viewer(
         )
         return 1
 
+    resolved_profile = _resolve_runtime_profile(runtime_profile=runtime_profile, with_encounters=with_encounters)
+    print(f"[hexcrawler.viewer] runtime_profile={resolved_profile}")
+
     try:
-        sim = _load_viewer_simulation(load_save, with_encounters=with_encounters) if load_save else _build_viewer_simulation(
+        sim = _load_viewer_simulation(load_save, runtime_profile=resolved_profile) if load_save else _build_viewer_simulation(
             map_path,
-            with_encounters=with_encounters,
+            runtime_profile=resolved_profile,
         )
     except Exception as exc:
         print(f"[hexcrawler.viewer] failed to initialize simulation: {exc}", file=sys.stderr)
@@ -2708,7 +2674,7 @@ def run_pygame_viewer(
     runtime_state = ViewerRuntimeState(
         sim=sim,
         map_path=map_path,
-        with_encounters=with_encounters,
+        with_encounters=(resolved_profile != CORE_PLAYABLE) if with_encounters is None else with_encounters,
         current_save_path=load_save or save_path,
         last_loaded_identity=f"save:{Path(load_save).name}" if load_save else f"map:{Path(map_path).name}",
     )
@@ -3284,7 +3250,7 @@ def main(argv: list[str] | None = None) -> None:
     raise SystemExit(
         run_pygame_viewer(
             map_path=args.map_path,
-            with_encounters=args.with_encounters,
+            runtime_profile=args.runtime_profile,
             headless=headless,
             load_save=args.load_save,
             save_path=args.save_path,

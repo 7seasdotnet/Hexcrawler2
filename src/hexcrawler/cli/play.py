@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from hexcrawler.cli.pygame_viewer import run_pygame_viewer
+from hexcrawler.cli.runtime_profiles import DEFAULT_RUNTIME_PROFILE, RUNTIME_PROFILE_CHOICES
 from hexcrawler.content.io import load_world_json, save_game_json
 from hexcrawler.sim.core import Simulation
 
@@ -19,6 +20,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--load-save", default=DEFAULT_SAVE_PATH, help="Path to canonical save JSON to load at startup.")
     parser.add_argument("--map-path", default=DEFAULT_MAP_PATH, help="Map path used if canonical save must be created.")
     parser.add_argument("--headless", action="store_true", help="Run startup path in headless mode.")
+    parser.add_argument(
+        "--runtime-profile",
+        choices=RUNTIME_PROFILE_CHOICES,
+        default=DEFAULT_RUNTIME_PROFILE,
+        help="Runtime module composition profile for viewer startup.",
+    )
     return parser
 
 
@@ -37,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _ensure_save_exists(map_path=args.map_path, save_path=args.load_save, seed=args.seed)
     return run_pygame_viewer(
         map_path=args.map_path,
-        with_encounters=True,
+        runtime_profile=args.runtime_profile,
         headless=args.headless,
         load_save=args.load_save,
         save_path=args.load_save,

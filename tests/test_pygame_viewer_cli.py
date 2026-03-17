@@ -69,21 +69,21 @@ from hexcrawler.sim.world import (
 )
 
 
-def test_viewer_parser_with_encounters_flag_defaults_to_disabled() -> None:
+def test_viewer_parser_runtime_profile_defaults_to_core_playable() -> None:
     parser = _build_parser()
     args = parser.parse_args([])
 
-    assert args.with_encounters is False
+    assert args.runtime_profile == "core_playable"
     assert args.map_path == "content/examples/viewer_map.json"
     assert args.save_path == "saves/session_save.json"
     assert args.load_save is None
 
 
-def test_viewer_parser_with_encounters_flag_can_be_enabled() -> None:
+def test_viewer_parser_runtime_profile_can_be_selected() -> None:
     parser = _build_parser()
-    args = parser.parse_args(["--with-encounters", "--save-path", "saves/dev.json", "--load-save", "saves/dev.json"])
+    args = parser.parse_args(["--runtime-profile", "experimental_world", "--save-path", "saves/dev.json", "--load-save", "saves/dev.json"])
 
-    assert args.with_encounters is True
+    assert args.runtime_profile == "experimental_world"
     assert args.save_path == "saves/dev.json"
     assert args.load_save == "saves/dev.json"
 

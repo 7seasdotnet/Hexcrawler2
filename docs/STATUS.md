@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Perform a full non-headless manual viewer pass for local contact feel and dynamic return landing now that automated viewer smoke + 20k-tick soak diagnostics are in place.
+- **Next action:** Run manual non-headless playtest passes across all three runtime profiles (`core_playable`, `experimental_world`, `soak_audit`) and confirm the stricter core profile still covers the full campaign→local→return loop.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -95,12 +95,19 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src python - <<'PY' ... collect_soak_metrics headless/viewer 20000-tick comparison ... PY`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `python play.py --headless`
+- `python play.py --headless --runtime-profile experimental_world`
+- `python play.py --headless --runtime-profile soak_audit`
 - `python play.py`
 
 ## What changed in this commit
-- Added a read-only soak observability helper (`collect_soak_metrics`) in the viewer runtime path so headless-vs-viewer growth can be compared on the same deterministic counters (`pending_events`, `event_trace`, entity/world record counts, active local/return ledgers, pending offers).
-- Added targeted soak audit regression tests that run bounded long-tick comparisons and verify capped record behavior still holds on both headless simulation and viewer-runtime diagnostic paths.
-- Re-ran viewer-contact smoke + full-suite verification, then executed a 20k-tick headless/viewer diagnostic run confirming capped growth (`signals/tracks/spawn_descriptors` all remain at 256) while showing remaining runtime overhead primarily on viewer-coupled state.
+- Tightened `core_playable` composition to keep noncritical interaction/signal/rumor-depth systems quarantined by default while preserving the playable loop spine.
+- Made `soak_audit` a distinct bounded runtime profile (not a simple alias of `experimental_world`) and kept explicit opt-in selection via `--runtime-profile`.
+- Added targeted profile-difference tests and refreshed architecture/status documentation to reflect stricter default composition discipline.
+
+## Runtime profile note (C1)
+- Default play now uses `core_playable` (narrow playable-loop module set).
+- Preserved second-order systems remain available via explicit opt-in: `--runtime-profile experimental_world`.
+- Soak/audit composition remains explicit, bounded, and distinct via `--runtime-profile soak_audit`.
 
 ## Soak/Performance Diagnosis (this pass)
 - **Main driver:** viewer/runtime overhead remains the dominant long-run slowdown source once caps are enforced, because viewer-coupled systems keep additional entities/events/encounter-control bookkeeping active; record containers are now bounded.

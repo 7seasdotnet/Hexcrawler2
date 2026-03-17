@@ -388,3 +388,12 @@ Before landing a new system, confirm:
 - **Phase Boundary (Hard):** No AI reaction, stealth modeling, probabilistic checks, combat branching, or presentation-side mutation paths are introduced by this contract.
 
 
+
+
+## 14) Runtime Composition Profiles Contract (C1)
+- **Purpose:** Keep default playable runtime composition narrow and stable while preserving non-critical systems behind explicit opt-in profiles.
+- **Contract:** Runtime composition is selected at bootstrap time via explicit profile selection (`core_playable`, `experimental_world`, `soak_audit`).
+- **Contract:** `core_playable` is the default profile for normal play launches and includes only systems needed for the current playable loop (`campaign` contact/offer flow, local handoff/hostiles, combat+wounds, extraction/return, minimal supporting supplies/recovery surfaces), while noncritical interaction/signal/rumor-depth systems stay opt-in.
+- **Contract:** `experimental_world` enables preserved second-order world systems; `soak_audit` is a distinct bounded diagnostic profile and not merely an alias of `experimental_world`. Both remain opt-in.
+- **Contract:** Runtime profile is launch/runtime configuration, not hash-covered simulation state; profile choice must not mutate canonical save semantics directly.
+- **Contract:** Viewer/UI remains read-only under all profiles; profile selection changes module bootstrap only.
