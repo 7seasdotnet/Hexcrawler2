@@ -188,7 +188,7 @@ def test_local_hostile_behavior_role_gated_outside_local_spaces() -> None:
     assert not any(command.command_type == ATTACK_INTENT_COMMAND_TYPE for command in sim.input_log)
 
 
-def test_local_contact_continues_resolving_without_permanent_move_lock() -> None:
+def test_local_contact_latch_blocks_infinite_same_contact_hit_loop() -> None:
     sim = _build_handoff_sim(seed=405)
     _schedule_request(sim)
     sim.advance_ticks(3)
@@ -206,14 +206,15 @@ def test_local_contact_continues_resolving_without_permanent_move_lock() -> None
     hostile.position_x = player.position_x + 1.0
     hostile.position_y = player.position_y
 
-    sim.advance_ticks(6)
+    sim.advance_ticks(60)
 
     applied_melee = [
         row
         for row in sim.state.combat_log
         if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("applied") is True
     ]
-    assert len(applied_melee) >= 2
+    assert len(applied_melee) == 1
+    assert len(sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].wounds) == 1
 
 
 def test_local_contact_attack_cooldown_allows_player_reposition_between_hits() -> None:
@@ -254,3 +255,37 @@ def test_local_contact_attack_cooldown_allows_player_reposition_between_hits() -
         if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("applied") is True
     ]
     assert applied_melee
+
+
+def test_local_contact_reengage_after_separation_emits_next_attack() -> None:
+    sim = _build_handoff_sim(seed=407)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
+    local_space_id = begin["to_space_id"]
+    hostile_id = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == HOSTILE_TEMPLATE_ID
+    )[0]
+    hostile = sim.state.entities[hostile_id]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+
+    hostile.position_x = player.position_x + 1.0
+    hostile.position_y = player.position_y
+    sim.advance_ticks(5)
+
+    first_count = len([row for row in sim.state.combat_log if row.get("applied") is True])
+    assert first_count == 1
+
+    hostile.position_x = player.position_x + 4.0
+    hostile.position_y = player.position_y
+    sim.advance_ticks(2)
+
+    hostile.position_x = player.position_x + 1.0
+    hostile.position_y = player.position_y
+    sim.advance_ticks(4)
+
+    second_count = len([row for row in sim.state.combat_log if row.get("applied") is True])
+    assert second_count >= 2

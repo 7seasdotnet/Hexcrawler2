@@ -76,7 +76,7 @@ def _issue_end_intent(sim: Simulation) -> None:
 def test_local_encounter_return_happy_path() -> None:
     sim = _build_sim(seed=20)
     _schedule_request(sim)
-    sim.advance_ticks(3)
+    sim.advance_ticks(2)
 
     begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
     local_space_id = begin["params"]["to_space_id"]
@@ -657,6 +657,7 @@ def test_local_encounter_return_prefers_captured_end_event_origin_over_mutated_c
     expected_origin = dict(begin["params"]["from_location"]["coord"])
 
     _issue_end_intent(sim)
+    sim.advance_ticks(1)
 
     rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
     active = rules_state["active_by_local_space"][local_space_id]
@@ -674,3 +675,33 @@ def test_local_encounter_return_prefers_captured_end_event_origin_over_mutated_c
     return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
     assert return_event["params"]["applied"] is True
     assert return_event["params"]["to_coord"] == expected_origin
+
+
+def test_local_encounter_return_prefers_captured_origin_position_over_mutated_context() -> None:
+    sim = _build_sim(seed=95)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    expected_origin_coord = dict(begin["params"]["from_location"]["coord"])
+
+    _issue_end_intent(sim)
+    sim.advance_ticks(1)
+
+    rules_state = sim.get_rules_state(LocalEncounterInstanceModule.name)
+    active = rules_state["active_by_local_space"][local_space_id]
+    active["origin_position"] = {"x": 999.0, "y": 999.0}
+    active["origin_location"] = {
+        "space_id": CAMPAIGN_SPACE_ID,
+        "topology_type": SQUARE_GRID_TOPOLOGY,
+        "coord": {"x": 999, "y": 999},
+    }
+    rules_state["active_by_local_space"][local_space_id] = active
+    sim.set_rules_state(LocalEncounterInstanceModule.name, rules_state)
+
+    sim.advance_ticks(3)
+
+    return_event = _trace_by_type(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[0]
+    assert return_event["params"]["applied"] is True
+    assert return_event["params"]["to_coord"] == expected_origin_coord

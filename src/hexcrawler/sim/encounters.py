@@ -458,6 +458,7 @@ class LocalEncounterInstanceModule(RuleModule):
                             "from_space_id": str(active_context["from_space_id"]),
                             "origin_space_id": str(active_context.get("origin_space_id", active_context["from_space_id"])),
                             "origin_location": origin_location,
+                            "origin_position": copy.deepcopy(active_context.get("origin_position")),
                             "from_location": copy.deepcopy(active_context["from_location"]),
                             "site_key": copy.deepcopy(active_context.get("site_key")),
                             "tags": list(normalized_tags),
@@ -1130,9 +1131,14 @@ class LocalEncounterInstanceModule(RuleModule):
                     reason = "invalid_origin_location_for_space"
                 else:
                     entity = sim.state.entities[entity_id]
+                    captured_origin_position = event.params.get("origin_position")
                     exact_origin_position = self._normalize_origin_position_payload(
-                        origin_position_payload=context.get("origin_position"),
+                        origin_position_payload=captured_origin_position,
                     )
+                    if exact_origin_position is None:
+                        exact_origin_position = self._normalize_origin_position_payload(
+                            origin_position_payload=context.get("origin_position"),
+                        )
                     if (
                         exact_origin_position is not None
                         and sim._position_is_within_world(

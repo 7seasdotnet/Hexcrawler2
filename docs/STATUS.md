@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run one final manual UX polish pass on local contact feel (pressure cadence tuning) now that deterministic viewer-runtime smoke and full-suite verification are green.
+- **Next action:** Perform a full non-headless manual viewer pass for local contact feel and dynamic return landing now that automated viewer smoke + 20k-tick soak diagnostics are in place.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -91,11 +91,18 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_encounter_controller_smoke_slice.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k local_contact_and_return_smoke_slice`
+- `PYTHONPATH=src pytest -q tests/test_soak_bounds_slice.py tests/test_soak_audit_slice.py`
+- `PYTHONPATH=src python - <<'PY' ... collect_soak_metrics headless/viewer 20000-tick comparison ... PY`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
 - `python play.py --headless`
 - `python play.py`
 
 ## What changed in this commit
-- Added a viewer-runtime smoke regression that drives the real pygame viewer control path through campaign contact accept -> local hostile touch-pressure -> extraction/return and asserts no permanent movement lock plus correct origin restoration.
-- Kept the prior local-only fixes unchanged in architecture scope; this pass adds validation coverage only and does not reopen campaign encounter-controller design.
-- Re-ran targeted smoke checks and full repository verification successfully (`694 passed`).
+- Added a read-only soak observability helper (`collect_soak_metrics`) in the viewer runtime path so headless-vs-viewer growth can be compared on the same deterministic counters (`pending_events`, `event_trace`, entity/world record counts, active local/return ledgers, pending offers).
+- Added targeted soak audit regression tests that run bounded long-tick comparisons and verify capped record behavior still holds on both headless simulation and viewer-runtime diagnostic paths.
+- Re-ran viewer-contact smoke + full-suite verification, then executed a 20k-tick headless/viewer diagnostic run confirming capped growth (`signals/tracks/spawn_descriptors` all remain at 256) while showing remaining runtime overhead primarily on viewer-coupled state.
+
+## Soak/Performance Diagnosis (this pass)
+- **Main driver:** viewer/runtime overhead remains the dominant long-run slowdown source once caps are enforced, because viewer-coupled systems keep additional entities/events/encounter-control bookkeeping active; record containers are now bounded.
+- **Simulation-side status:** headless run stayed bounded with no active entities/events growth (20k-tick diagnostic: `signals=256`, `tracks=256`, `spawn_descriptors=256`, `entities=0`, `pending_events=0`).
+- **Viewer/runtime-side status:** 20k-tick diagnostic remained bounded on capped records but retained higher active-state load (`entities=258`, `event_trace=256`, `pending_events=6`, `pending_offers=1`), matching expected viewer+encounter module workload and confirming slowdown is now mostly runtime/viewer-coupled rather than unbounded container growth.
