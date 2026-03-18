@@ -78,6 +78,25 @@ INSPECTOR_MIN_WIDTH = 320
 SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
 PENDING_OFFER_DECISION_TICK_CAP = 12
+CALENDAR_MONTH_LENGTH_DAYS = 28
+CALENDAR_MONTHS: tuple[str, ...] = (
+    "Deepfrost",
+    "Thawrise",
+    "Seedwake",
+    "Highsun",
+    "Harvestfall",
+    "Longnight",
+)
+MOON_PHASES: tuple[str, ...] = (
+    "new",
+    "waxing crescent",
+    "first quarter",
+    "waxing gibbous",
+    "full",
+    "waning gibbous",
+    "last quarter",
+    "waning crescent",
+)
 
 TERRAIN_COLORS: dict[str, tuple[int, int, int]] = {
     "plains": (132, 168, 94),
@@ -229,6 +248,21 @@ class SimulationController:
                 entity_id=self.entity_id,
                 command_type="clear_selected_entity",
                 params={},
+            )
+        )
+
+    def attack_entity(self, target_entity_id: str) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type="attack_intent",
+                params={
+                    "attacker_id": self.entity_id,
+                    "target_id": target_entity_id,
+                    "mode": "melee",
+                    "tags": ["viewer_local_attack"],
+                },
             )
         )
 
@@ -1525,15 +1559,12 @@ def _draw_top_control_bar(
     pygame.draw.rect(screen, (28, 30, 40), bar_rect)
     pygame.draw.rect(screen, (95, 98, 110), bar_rect, 1)
 
-    ticks_per_day = sim.get_ticks_per_day()
-    day_display = sim.get_day_index() + 1
-    tick_in_day = sim.get_tick_in_day()
-    hours = (tick_in_day * 24) // ticks_per_day
-    minutes = ((tick_in_day * 24 * 60) // ticks_per_day) % 60
+    calendar = _calendar_presentation(sim)
     hash_suffix = simulation_hash(sim)[-8:]
     identity = runtime_state.last_loaded_identity or f"map:{Path(runtime_state.map_path).name}"
     metadata_text = (
-        f"tick={sim.state.tick} day={day_display} {hours:02d}:{minutes:02d} "
+        f"tick={sim.state.tick} day={calendar['day']} {calendar['hour']:02d}:{calendar['minute']:02d} "
+        f"{calendar['day_night']} moon={calendar['moon_phase']} "
         f"seed={sim.seed} src={identity} hash={hash_suffix} follow={follow_state.status}"
     )
     sections_text = "Controls: Simulation | Save/Load | Time | View | Debug"
@@ -1549,7 +1580,8 @@ def _find_safe_site_status(sim: Simulation, entity: EntityState) -> tuple[bool, 
         return False, None, None
 
     location = _entity_location_text(sim, entity)
-    for site in sim.state.world.sites.values():
+    first_matching_site: tuple[str, str] | None = None
+    for site in sorted(sim.state.world.sites.values(), key=lambda row: row.site_id):
         site_location = site.location
         if site_location.get("space_id") != entity.space_id:
             continue
@@ -1564,7 +1596,12 @@ def _find_safe_site_status(sim: Simulation, entity: EntityState) -> tuple[bool, 
             if coord.get("q") != entity.hex_coord.q or coord.get("r") != entity.hex_coord.r:
                 continue
         is_safe = site.site_type == "town" or ("safe" in site.tags)
-        return is_safe, site.site_id, site.site_type
+        if is_safe:
+            return True, site.site_id, site.site_type
+        if first_matching_site is None:
+            first_matching_site = (site.site_id, site.site_type)
+    if first_matching_site is not None:
+        return False, first_matching_site[0], first_matching_site[1]
     return False, None, None
 
 
@@ -1631,12 +1668,16 @@ def _draw_hud(
 
     lines = [
         context_line,
-        "WASD move | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
+        "WASD move | LMB select/attack-local | SPACE attack selected-local | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
         "F7 focus selected entity | F12 toggle follow-selected",
         f"runtime={'paused' if runtime_state.paused else 'running'} | runtime_profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
         f"follow status={follow_state.status}",
         f"condition={condition} | wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY} | move_mult={movement_multiplier:.2f}",
     ]
+    calendar = _calendar_presentation(sim)
+    lines.append(
+        f"time {calendar['hour']:02d}:{calendar['minute']:02d} | {calendar['day_night']} | date {calendar['month_name']} {calendar['day_of_month']} (day {calendar['day']}) | moon {calendar['moon_phase']}"
+    )
 
     if pending_offer is not None:
         lines.append(
@@ -1645,6 +1686,7 @@ def _draw_hud(
 
     if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
         lines.append(f"local_hostile_pressure=ACTIVE | extraction={'ready' if extraction_ready else 'blocked'}")
+        lines.append("local_attack=enabled (LMB hostile or SPACE on selected target)")
         if local_context is not None:
             return_exit_coord = local_context.get("return_exit_coord")
             if isinstance(return_exit_coord, dict):
@@ -2477,6 +2519,57 @@ def _selected_entity_for_click(
     return None
 
 
+def _calendar_presentation(sim: Simulation) -> dict[str, Any]:
+    ticks_per_day = max(1, int(sim.get_ticks_per_day()))
+    relative_ticks = int(sim.state.tick - sim.state.time.epoch_tick)
+    if relative_ticks < 0:
+        relative_ticks = 0
+    day_index = relative_ticks // ticks_per_day
+    tick_in_day = relative_ticks % ticks_per_day
+    hour = (tick_in_day * 24) // ticks_per_day
+    minute = ((tick_in_day * 24 * 60) // ticks_per_day) % 60
+    day_night = "day" if 6 <= hour < 18 else "night"
+    month_index = (day_index // CALENDAR_MONTH_LENGTH_DAYS) % len(CALENDAR_MONTHS)
+    day_of_month = (day_index % CALENDAR_MONTH_LENGTH_DAYS) + 1
+    lunar_segment = max(1, CALENDAR_MONTH_LENGTH_DAYS // len(MOON_PHASES))
+    moon_phase_index = min(len(MOON_PHASES) - 1, (day_index % CALENDAR_MONTH_LENGTH_DAYS) // lunar_segment)
+    return {
+        "day": day_index + 1,
+        "hour": int(hour),
+        "minute": int(minute),
+        "day_night": day_night,
+        "month_name": CALENDAR_MONTHS[month_index],
+        "day_of_month": int(day_of_month),
+        "moon_phase": MOON_PHASES[moon_phase_index],
+    }
+
+
+def _queue_local_attack_for_click(
+    sim: Simulation,
+    controller: SimulationController,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    zoom_scale: float = 1.0,
+    *,
+    radius_px: float = 12.0,
+) -> str | None:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return None
+    active_space = sim.state.world.spaces.get(player.space_id)
+    if active_space is None or str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
+        return None
+    target_entity_id = _selected_entity_for_click(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
+    if target_entity_id is None or target_entity_id == PLAYER_ID:
+        return None
+    target = sim.state.entities.get(target_entity_id)
+    if target is None or target.space_id != player.space_id:
+        return None
+    controller.attack_entity(target_entity_id)
+    controller.set_selected_entity(target_entity_id)
+    return f"attack queued -> {target_entity_id}"
+
+
 def _queue_selection_command_for_click(
     sim: Simulation,
     controller: SimulationController,
@@ -3144,6 +3237,21 @@ def run_pygame_viewer(
                         status_message = f"encounter offer fled (resolved in {advanced} ticks)"
                     else:
                         status_message = f"encounter offer flee pending after {advanced} ticks (cap reached)"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_SPACE:
+                player = sim.state.entities.get(PLAYER_ID)
+                selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+                if player is not None and selected_entity_id is not None:
+                    active_space = sim.state.world.spaces.get(player.space_id)
+                    target = sim.state.entities.get(selected_entity_id)
+                    if (
+                        active_space is not None
+                        and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE
+                        and target is not None
+                        and target.entity_id != PLAYER_ID
+                        and target.space_id == player.space_id
+                    ):
+                        controller.attack_entity(target.entity_id)
+                        status_message = f"attack queued -> {target.entity_id}"
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -3281,7 +3389,15 @@ def run_pygame_viewer(
                         else:
                             status_message = f"encounter offer flee pending after {advanced} ticks (cap reached)"
                         continue
-                status_message = _queue_selection_command_for_click(
+                attack_status = _queue_local_attack_for_click(
+                    sim,
+                    controller,
+                    event.pos,
+                    world_center,
+                    world_zoom_scale,
+                    radius_px=12.0,
+                )
+                status_message = attack_status or _queue_selection_command_for_click(
                     sim,
                     controller,
                     event.pos,

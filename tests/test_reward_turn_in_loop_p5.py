@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
+from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, CombatExecutionModule
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     END_LOCAL_ENCOUNTER_INTENT,
@@ -48,6 +49,7 @@ def _build_sim(seed: int = 123) -> Simulation:
     sim.add_entity(EntityState(entity_id="scout", position_x=x, position_y=y, space_id=CAMPAIGN_SPACE_ID))
     sim.register_rule_module(LocalEncounterRequestModule())
     sim.register_rule_module(LocalEncounterInstanceModule())
+    sim.register_rule_module(CombatExecutionModule())
     sim.register_rule_module(ExplorationExecutionModule())
     return sim
 
@@ -133,6 +135,55 @@ def test_local_success_grants_single_reward_token_and_persists_after_return() ->
 
     items = _player_items(sim)
     assert items.get("proof_token", 0) == 1
+
+
+def test_player_attack_intent_can_incapacitate_hostile_and_grant_reward_token() -> None:
+    sim = _build_sim(seed=31)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    local_space_id = begin["params"]["to_space_id"]
+    spawned = begin["params"]["spawned_entities"]
+    hostile_id = next(
+        row["entity_id"]
+        for row in spawned
+        if sim.state.entities[row["entity_id"]].template_id == LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID
+    )
+
+    player = sim.state.entities["scout"]
+    hostile = sim.state.entities[hostile_id]
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(1, 1)
+    hostile.position_x, hostile.position_y = square_grid_cell_to_world_xy(2, 1)
+    assert player.space_id == local_space_id
+    assert hostile.space_id == local_space_id
+
+    for offset in range(3):
+        sim.append_command(
+            SimCommand(
+                tick=sim.state.tick + offset,
+                entity_id="scout",
+                command_type=ATTACK_INTENT_COMMAND_TYPE,
+                params={
+                    "attacker_id": "scout",
+                    "target_id": hostile_id,
+                    "mode": "melee",
+                    "tags": ["test_player_attack_loop"],
+                },
+            )
+        )
+    sim.advance_ticks(4)
+    assert len(hostile.wounds) >= 3
+
+    exit_coord = begin["params"]["return_exit_coord"]
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(exit_coord["x"], exit_coord["y"])
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+
+    reward = _trace(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE)[-1]["params"]
+    assert reward["applied"] is True
+    assert reward["reason"] == "token_granted"
+    assert reward["details"]["incapacitated_hostiles"] >= 1
+    assert _player_items(sim).get("proof_token", 0) == 1
 
 
 

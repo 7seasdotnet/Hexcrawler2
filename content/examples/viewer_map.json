@@ -1404,6 +1404,25 @@
   ],
   "schema_version": 1,
   "sites": {
+    "home_greybridge": {
+      "description": "Greybridge is your known safe haven for recovery and resupply.",
+      "location": {
+        "coord": {
+          "q": 0,
+          "r": 0
+        },
+        "space_id": "overworld",
+        "topology_type": "overworld_hex"
+      },
+      "name": "Greybridge Home",
+      "site_id": "home_greybridge",
+      "site_type": "town",
+      "tags": [
+        "home",
+        "safe",
+        "town"
+      ]
+    },
     "demo_dungeon_entrance": {
       "description": "A weathered stone stair descends beneath cracked flagstones.",
       "entrance": {
@@ -2864,5 +2883,5 @@
     "radius": 6
   },
   "topology_type": "hex_disk",
-  "world_hash": "478a3d44bb5457b8566a7627d17a8718a1bd140f37fdc46837a17c7d3058bdce"
+  "world_hash": "eb32c8446d74f3912b714dd329201fbd4e8d13da99f81f0f9b71ea1a667d1599"
 }
