@@ -26,6 +26,9 @@ from hexcrawler.cli.pygame_viewer import (
     _slot_markers_for_hex,
     _load_viewer_simulation,
     _save_viewer_simulation,
+    _calendar_presentation,
+    _find_safe_site_status,
+    _queue_local_attack_for_click,
     _queue_selection_command_for_click,
     _selected_entity_for_click,
     _selected_entity_lines,
@@ -41,6 +44,7 @@ from hexcrawler.cli.pygame_viewer import (
     _debug_rows_by_section,
     _format_debug_trace_row,
 )
+from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT, CampaignDangerModule
 from hexcrawler.sim.encounters import (
@@ -68,6 +72,7 @@ from hexcrawler.sim.world import (
     SiteWorldState,
     SpaceState,
 )
+from hexcrawler.content.io import load_world_json
 
 
 def test_viewer_parser_runtime_profile_defaults_to_core_playable() -> None:
@@ -87,6 +92,27 @@ def test_viewer_parser_runtime_profile_can_be_selected() -> None:
     assert args.runtime_profile == "experimental_world"
     assert args.save_path == "saves/dev.json"
     assert args.load_save == "saves/dev.json"
+
+
+def test_core_playable_viewer_map_contains_visible_safe_home_town() -> None:
+    world = load_world_json("content/examples/viewer_map.json")
+    site = world.sites.get("home_greybridge")
+    assert site is not None
+    assert site.site_type == "town"
+    assert "safe" in site.tags
+    assert site.location.get("space_id") == "overworld"
+    assert site.name == "Greybridge Home"
+
+
+def test_safe_site_detection_resolves_home_town_for_player() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+
+    is_safe, site_id, site_type = _find_safe_site_status(sim, player)
+
+    assert is_safe is True
+    assert site_id == "home_greybridge"
+    assert site_type == "town"
 
 
 def test_viewer_simulation_registers_encounter_modules_only_when_enabled() -> None:
@@ -143,6 +169,88 @@ def test_simulation_controller_appends_selection_commands() -> None:
     assert sim.input_log[-2].params == {"selected_entity_id": PLAYER_ID}
     assert sim.input_log[-1].command_type == "clear_selected_entity"
     assert sim.input_log[-1].params == {}
+
+
+def test_simulation_controller_appends_attack_intent_command() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    controller.attack_entity("target")
+
+    assert sim.input_log[-1].command_type == ATTACK_INTENT_COMMAND_TYPE
+    assert sim.input_log[-1].entity_id == PLAYER_ID
+    assert sim.input_log[-1].params == {
+        "attacker_id": PLAYER_ID,
+        "target_id": "target",
+        "mode": "melee",
+        "tags": ["viewer_local_attack"],
+    }
+
+
+def test_queue_local_attack_for_click_routes_to_authoritative_attack_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    local_space_id = "local:test"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 6, "height": 6, "origin": {"x": 0, "y": 0}},
+    )
+    player_x, player_y = square_grid_cell_to_world_xy(1, 1)
+    sim.state.entities[PLAYER_ID].space_id = local_space_id
+    sim.state.entities[PLAYER_ID].position_x = player_x
+    sim.state.entities[PLAYER_ID].position_y = player_y
+
+    hostile_x, hostile_y = square_grid_cell_to_world_xy(2, 1)
+    sim.add_entity(
+        EntityState(
+            entity_id="hostile:test",
+            position_x=hostile_x,
+            position_y=hostile_y,
+            space_id=local_space_id,
+            template_id=HOSTILE_TEMPLATE_ID,
+        )
+    )
+
+    monkeypatch.setattr(viewer_module, "_selected_entity_for_click", lambda *args, **kwargs: "hostile:test")
+    status = _queue_local_attack_for_click(
+        sim,
+        controller,
+        pixel_pos=(0, 0),
+        center=(0.0, 0.0),
+        zoom_scale=1.0,
+    )
+
+    assert status == "attack queued -> hostile:test"
+    assert sim.input_log[-2].command_type == ATTACK_INTENT_COMMAND_TYPE
+    assert sim.input_log[-2].params["target_id"] == "hostile:test"
+    assert sim.input_log[-1].command_type == "set_selected_entity"
+    assert sim.input_log[-1].params["selected_entity_id"] == "hostile:test"
+
+
+def test_calendar_presentation_uses_master_tick_axis() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sim.state.time.ticks_per_day = 240
+    sim.state.time.epoch_tick = 0
+    sim.state.tick = 0
+
+    assert _calendar_presentation(sim) == {
+        "day": 1,
+        "hour": 0,
+        "minute": 0,
+        "day_night": "night",
+        "month_name": "Deepfrost",
+        "day_of_month": 1,
+        "moon_phase": "new",
+    }
+
+    sim.state.tick = 240
+    next_day = _calendar_presentation(sim)
+    assert next_day["day"] == 2
+    assert next_day["hour"] == 0
+    assert next_day["day_of_month"] == 2
+    assert next_day["month_name"] == "Deepfrost"
 
 
 def test_simulation_controller_appends_encounter_offer_commands() -> None:

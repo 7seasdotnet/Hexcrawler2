@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run another short balance pass on campaign contact cadence vs local hostile pressure now that `core_playable` HUD/inspector loop legibility surfaces are explicit (condition/extraction/safe-site/recovery/inventory/offer state).
+- **Next action:** Run a short interaction polish/balance pass on local attack readability (click vs selected-target SPACE attack prompts) and reward turn-in discoverability at home now that the first visible loop is complete.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -86,6 +86,8 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_reward_turn_in_loop_p5.py tests/test_calendar_time.py`
+- `PYTHONPATH=src python - <<'PY' ... core_playable visible-loop smoke (home visibility + local attack intent + hostile incapacitation + reward turn-in + calendar tie-to-tick) ... PY`
 - `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py tests/test_pygame_viewer_cli.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py tests/test_reward_turn_in_loop_p5.py`
 - `PYTHONPATH=src python - <<'PY' ... core_playable scripted smoke (patrol contact -> Fight -> local pressure -> return) ... PY`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py`
@@ -102,9 +104,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Completed a **core_playable tuning + viewer legibility pass**: local hostile same-contact pressure now uses deterministic cooldown pacing (without hidden latch freeze behavior), preserving explicit incapacitation outcomes.
-- Added compact player-loop legibility surfaces in the pygame viewer HUD/inspector for encounter offer source/title, condition (mobile/slowed/incapacitated), wound threshold/movement multiplier, extraction visibility/state, safe-site status, recovery/turn-in readiness, and proof_token/rations counts.
-- Added targeted tests for local incapacitation pressure determinism and viewer loop-state readability, revalidated focused slices + full suite (`PYTHONPATH=src pytest -q`), and completed a direct `core_playable` scripted smoke covering patrol contact -> Fight -> local pressure -> explicit condition/extraction readability -> authoritative return.
+- Completed the first **core_playable visible-loop milestone**: default viewer map now includes an explicit labeled safe home town (`home_greybridge`), and safe-site detection prefers safe sites when multiple co-located records exist.
+- Added one simple local-role player attack control path in the viewer (LMB hostile click and SPACE attack selected target), routed through authoritative `attack_intent` only, plus a small HUD instruction update for fight commitment clarity.
+- Added compact deterministic calendar/time presentation (time of day, day/night, date, moon phase) derived directly from the shared authoritative tick/day axis (single master clock; no display-side alternate day-length semantics), plus targeted tests for home visibility/safe detection, local attack command routing, player-driven hostile incapacitation reward grant, and calendar derivation; verified with focused tests, full suite, and a direct visible-loop smoke script.
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).
