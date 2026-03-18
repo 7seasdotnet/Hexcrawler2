@@ -28,6 +28,7 @@ from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     LIST_RUMORS_INTENT,
     LIST_RUMORS_OUTCOME_KIND,
+    LOCAL_ENCOUNTER_REWARD_EVENT_TYPE,
     SELECT_RUMORS_INTENT,
     SELECT_RUMORS_OUTCOME_KIND,
     LocalEncounterInstanceModule,
@@ -37,6 +38,7 @@ from hexcrawler.sim.campaign_danger import (
     FLEE_ENCOUNTER_OFFER_INTENT,
     CampaignDangerModule,
 )
+from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.exploration import (
     EXPLORATION_OUTCOME_EVENT_TYPE,
@@ -107,6 +109,8 @@ SITE_COLORS: dict[str, tuple[int, int, int]] = {
     "town": (80, 160, 255),
     "dungeon": (210, 85, 85),
 }
+HOME_SITE_IDS: tuple[str, ...] = ("home_greybridge",)
+HOME_SITE_LABEL = "GREYBRIDGE HOME"
 ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
 ENCOUNTER_DEBUG_TRACK_LIMIT = 10
 ENCOUNTER_DEBUG_SPAWN_LIMIT = 10
@@ -1202,15 +1206,16 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
         markers_by_cell.setdefault(cell, []).append(marker)
 
     for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
+        is_home_site = _is_home_site(site.site_id)
         add_marker(
             _marker_cell_from_location(site.location, active_location_topology),
             MarkerRecord(
-                priority=0,
+                priority=-2 if is_home_site else 0,
                 marker_id=f"site:{site.site_id}",
-                marker_kind="site",
-                color=SITE_COLORS.get(site.site_type, (245, 245, 120)),
-                radius=6,
-                label=_truncate_label(site.name if site.name else site.site_id, max_length=12),
+                marker_kind="home_site" if is_home_site else "site",
+                color=(255, 206, 84) if is_home_site else SITE_COLORS.get(site.site_type, (245, 245, 120)),
+                radius=9 if is_home_site else 6,
+                label=HOME_SITE_LABEL if is_home_site else _truncate_label(site.name if site.name else site.site_id, max_length=12),
             ),
         )
 
@@ -1531,6 +1536,7 @@ def _draw_entity(
 
 def _draw_spawned_entity(
     screen: pygame.Surface,
+    entity: EntityState,
     world_x: float,
     world_y: float,
     center: tuple[float, float],
@@ -1543,7 +1549,12 @@ def _draw_spawned_entity(
     size = HEX_SIZE * zoom_scale
     x = int(center[0] + world_x * size)
     y = int(center[1] + world_y * size)
-    pygame.draw.circle(screen, (140, 225, 255), (x, y), 5)
+    marker_color = (140, 225, 255)
+    if str(entity.template_id or "") == "encounter_hostile_v1":
+        marker_color = (214, 104, 98)
+        if is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
+            marker_color = (122, 124, 130)
+    pygame.draw.circle(screen, marker_color, (x, y), 5)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), 5, 1)
     screen.set_clip(old_clip)
 
@@ -1605,6 +1616,10 @@ def _find_safe_site_status(sim: Simulation, entity: EntityState) -> tuple[bool, 
     return False, None, None
 
 
+def _is_home_site(site_id: object) -> bool:
+    return isinstance(site_id, str) and site_id in HOME_SITE_IDS
+
+
 def _inventory_counts_for_entity(sim: Simulation, entity: EntityState) -> tuple[int, int]:
     container_id = entity.inventory_container_id
     if container_id is None:
@@ -1630,6 +1645,64 @@ def _last_event_params(sim: Simulation, event_type: str, *, entity_id: str) -> d
             continue
         return params
     return None
+
+
+def _last_combat_outcome_for_entity(sim: Simulation, *, entity_id: str) -> dict[str, Any] | None:
+    for entry in reversed(sim.get_event_trace()):
+        if entry.get("event_type") != COMBAT_OUTCOME_EVENT_TYPE:
+            continue
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            continue
+        if params.get("attacker_id") == entity_id or params.get("target_id") == entity_id:
+            return params
+    return None
+
+
+def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]:
+    lines: list[str] = []
+    reward_event = _last_event_params(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE, entity_id=entity.entity_id)
+    if reward_event is not None:
+        details = reward_event.get("details") if isinstance(reward_event.get("details"), dict) else {}
+        quantity = int(details.get("quantity", 0)) if isinstance(details.get("quantity"), int) else 0
+        incapacitated = int(details.get("incapacitated_hostiles", 0)) if isinstance(details.get("incapacitated_hostiles"), int) else 0
+        if bool(reward_event.get("applied")) and quantity > 0:
+            lines.append(f"reward_feedback=Proof Token +{quantity} (local neutralized={incapacitated})")
+        else:
+            lines.append(f"reward_feedback=No proof token ({reward_event.get('reason', 'unknown')})")
+
+    turn_in_event = _last_event_params(sim, REWARD_TURN_IN_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
+    if turn_in_event is not None:
+        details = turn_in_event.get("details") if isinstance(turn_in_event.get("details"), dict) else {}
+        granted_item = details.get("granted_item_id")
+        granted_quantity = details.get("granted_quantity")
+        if bool(turn_in_event.get("applied")) and granted_item == "rations" and isinstance(granted_quantity, int) and granted_quantity > 0:
+            lines.append(f"turn_in_feedback=Rations +{granted_quantity} (proof converted at home)")
+        else:
+            lines.append(f"turn_in_feedback=No ration gain ({turn_in_event.get('reason', 'unknown')})")
+
+    combat_event = _last_combat_outcome_for_entity(sim, entity_id=entity.entity_id)
+    if combat_event is not None:
+        applied = bool(combat_event.get("applied"))
+        attacker_id = combat_event.get("attacker_id")
+        target_id = combat_event.get("target_id")
+        if attacker_id == entity.entity_id:
+            target_label = str(target_id) if isinstance(target_id, str) and target_id else "cell_target"
+            neutralized = False
+            if isinstance(target_id, str):
+                target = sim.state.entities.get(target_id)
+                if target is not None:
+                    neutralized = is_incapacitated_from_wounds(target.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+            lines.append(
+                f"attack_feedback={'HIT' if applied else 'MISS'} target={target_label} "
+                f"reason={combat_event.get('reason', '?')} neutralized={'yes' if neutralized else 'no'}"
+            )
+        elif target_id == entity.entity_id:
+            lines.append(
+                f"incoming_feedback={'HIT' if applied else 'MISS'} "
+                f"by={attacker_id if isinstance(attacker_id, str) else '?'} reason={combat_event.get('reason', '?')}"
+            )
+    return lines
 
 
 def _draw_hud(
@@ -1696,6 +1769,8 @@ def _draw_hud(
 
     safe_status = "yes" if at_safe_site else "no"
     lines.append(f"safe_site={safe_status} site_id={safe_site_id or '-'} type={safe_site_type or '-'}")
+    if _is_home_site(safe_site_id):
+        lines.append("home_node=Greybridge (campaign safe site) services=recover+turn_in+prep_surface town_interior=not_implemented")
     lines.append(
         f"recovery={'available' if recovery_possible else 'unavailable'} requires={SAFE_RECOVERY_INTENT_COMMAND_TYPE} light_wound=severity1 ration_required=no"
     )
@@ -1708,6 +1783,7 @@ def _draw_hud(
         lines.append(f"last_recovery outcome={recovery_outcome.get('outcome','?')} reason={recovery_outcome.get('reason','?')}")
     if reward_outcome is not None:
         lines.append(f"last_turn_in applied={reward_outcome.get('applied','?')} reason={reward_outcome.get('reason','?')}")
+    lines.extend(_player_feedback_lines(sim, entity=entity))
 
     if status_message:
         lines.append(f"status: {status_message}")
@@ -2994,7 +3070,7 @@ def run_pygame_viewer(
                         items.append(ContextMenuItem(label=f"Select {marker.label}", action="select", payload=entity_id))
                         if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
                             items.append(ContextMenuItem(label=f"Deselect {marker.label}", action="clear_selection"))
-                    elif marker.marker_kind == "site":
+                    elif marker.marker_kind in {"site", "home_site"}:
                         site_id = _marker_payload_id(marker, expected_kind="site")
                         if site_id is None:
                             items.append(ContextMenuItem(label="marker_id malformed: site", action="noop"))
@@ -3003,6 +3079,11 @@ def run_pygame_viewer(
                         if site is not None and site.entrance is not None:
                             site_label = site.name if site.name else site.site_id
                             items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+                        elif site is not None and _is_home_site(site.site_id):
+                            items.append(ContextMenuItem(label="Greybridge: campaign home node", action="noop"))
+                            items.append(ContextMenuItem(label="- Recover (safe_recovery_intent)", action="noop"))
+                            items.append(ContextMenuItem(label="- Turn in Proof Token for Rations", action="noop"))
+                            items.append(ContextMenuItem(label="- Town interior not implemented yet", action="noop"))
                     elif marker.marker_kind == "door":
                         door_id = _marker_payload_id(marker, expected_kind="door")
                         if door_id is None:
@@ -3473,7 +3554,7 @@ def run_pygame_viewer(
             if entity_id == PLAYER_ID:
                 _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
             else:
-                _draw_spawned_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+                _draw_spawned_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
         _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
         _draw_hud(screen, sim, font, status_message, hover_message, runtime_state, layout.world_view, follow_state)
         if show_local_arena_overlay:
