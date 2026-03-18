@@ -28,6 +28,7 @@ from hexcrawler.cli.pygame_viewer import (
     _save_viewer_simulation,
     _calendar_presentation,
     _find_safe_site_status,
+    _player_feedback_lines,
     _queue_local_attack_for_click,
     _queue_selection_command_for_click,
     _selected_entity_for_click,
@@ -50,6 +51,7 @@ from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_E
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+    LOCAL_ENCOUNTER_REWARD_EVENT_TYPE,
     LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
     EncounterActionExecutionModule,
     EncounterActionModule,
@@ -102,6 +104,17 @@ def test_core_playable_viewer_map_contains_visible_safe_home_town() -> None:
     assert "safe" in site.tags
     assert site.location.get("space_id") == "overworld"
     assert site.name == "Greybridge Home"
+
+
+def test_world_markers_include_distinct_greybridge_home_marker() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+
+    markers = _world_marker_placements(sim, center=(640.0, 360.0), zoom_scale=1.0)
+    home_markers = [placement.marker for placement in markers if placement.marker.marker_kind == "home_site"]
+
+    assert home_markers
+    assert any(marker.label == "GREYBRIDGE HOME" for marker in home_markers)
+    assert all(marker.radius >= 9 for marker in home_markers)
 
 
 def test_safe_site_detection_resolves_home_town_for_player() -> None:
@@ -995,6 +1008,52 @@ def test_selected_entity_lines_include_loop_legibility_fields() -> None:
     assert any("Movement multiplier:" in line for line in lines)
     assert any("Safe site: yes" in line for line in lines)
     assert any("Inventory: proof_token=2 rations=3" in line for line in lines)
+
+
+def test_player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    scout = sim.state.entities[PLAYER_ID]
+    hostile = EntityState(entity_id="hostile:test", position_x=1.0, position_y=0.0, space_id=scout.space_id, template_id=HOSTILE_TEMPLATE_ID)
+    hostile.wounds = [{"severity": 4, "region": "torso"}]
+    sim.add_entity(hostile)
+
+    sim.schedule_event_at(
+        tick=sim.state.tick,
+        event_type=LOCAL_ENCOUNTER_REWARD_EVENT_TYPE,
+        params={
+            "entity_id": PLAYER_ID,
+            "applied": True,
+            "reason": "token_granted",
+            "details": {"quantity": 1, "incapacitated_hostiles": 1},
+        },
+    )
+    sim.schedule_event_at(
+        tick=sim.state.tick,
+        event_type="reward_turn_in_outcome",
+        params={
+            "entity_id": PLAYER_ID,
+            "applied": True,
+            "reason": "reward_turned_in",
+            "details": {"granted_item_id": "rations", "granted_quantity": 1},
+        },
+    )
+    sim.schedule_event_at(
+        tick=sim.state.tick,
+        event_type="combat_outcome",
+        params={
+            "attacker_id": PLAYER_ID,
+            "target_id": hostile.entity_id,
+            "applied": True,
+            "reason": "resolved",
+        },
+    )
+    sim.advance_ticks(1)
+
+    lines = _player_feedback_lines(sim, entity=scout)
+
+    assert any("Proof Token +1" in line for line in lines)
+    assert any("Rations +1" in line for line in lines)
+    assert any("attack_feedback=HIT" in line and "neutralized=yes" in line for line in lines)
 
 
 def test_pending_offer_modal_uses_source_and_title_fields() -> None:

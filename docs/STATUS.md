@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a short interaction polish/balance pass on local attack readability (click vs selected-target SPACE attack prompts) and reward turn-in discoverability at home now that the first visible loop is complete.
+- **Next action:** Validate this pass in a short gameplay smoke and then tune only small readability constants (HUD line density + local hostile pressure cadence) if needed without broadening scope.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,9 +104,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Completed the first **core_playable visible-loop milestone**: default viewer map now includes an explicit labeled safe home town (`home_greybridge`), and safe-site detection prefers safe sites when multiple co-located records exist.
-- Added one simple local-role player attack control path in the viewer (LMB hostile click and SPACE attack selected target), routed through authoritative `attack_intent` only, plus a small HUD instruction update for fight commitment clarity.
-- Added compact deterministic calendar/time presentation (time of day, day/night, date, moon phase) derived directly from the shared authoritative tick/day axis (single master clock; no display-side alternate day-length semantics), plus targeted tests for home visibility/safe detection, local attack command routing, player-driven hostile incapacitation reward grant, and calendar derivation; verified with focused tests, full suite, and a direct visible-loop smoke script.
+- Improved **core_playable Greybridge/home legibility**: campaign map now renders `home_greybridge` with a distinct high-priority home marker/label and explicit home-node service messaging (recovery + proof turn-in) that clearly states town interior is not implemented yet.
+- Improved reward loop feedback in viewer HUD/inspector surfaces: explicit proof-token gain and ration turn-in feedback lines are surfaced from authoritative events, while proof/ration counts and home turn-in availability remain continuously visible.
+- Improved local combat readability foundations without adding a second combat path: local hostile markers now visibly differentiate active vs incapacitated hostiles, and last attack outcomes show hit/miss + neutralization status through the existing authoritative `attack_intent` flow.
+
+## Core-playable clarity note (this pass)
+- Greybridge/home visibility, reward gain/use feedback, and local combat readability were improved in the default `core_playable` runtime path.
+- Enterable town interiors and broader editor/town workflows remain a later milestone and were intentionally left out of this pass.
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).
