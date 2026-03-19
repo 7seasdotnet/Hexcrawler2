@@ -135,8 +135,8 @@ def test_local_hostile_pressure_reaches_explicit_incapacitation_deterministicall
         hostile.position_x = player.position_x + 1.0
         hostile.position_y = player.position_y
 
-    sim_a.advance_ticks(20)
-    sim_b.advance_ticks(20)
+    sim_a.advance_ticks(40)
+    sim_b.advance_ticks(40)
 
     wounds_a = sim_a.state.entities[DEFAULT_PLAYER_ENTITY_ID].wounds
     wounds_b = sim_b.state.entities[DEFAULT_PLAYER_ENTITY_ID].wounds

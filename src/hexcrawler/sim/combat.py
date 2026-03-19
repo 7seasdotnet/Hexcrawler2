@@ -4,7 +4,7 @@ import copy
 import json
 from typing import Any
 
-from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_WOUNDS, SimCommand, Simulation, _normalize_facing_token
+from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_WOUNDS, SimCommand, SimEvent, Simulation, _normalize_facing_token
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
@@ -15,8 +15,12 @@ ATTACK_INTENT_COMMAND_TYPE = "attack_intent"
 TURN_INTENT_COMMAND_TYPE = "turn_intent"
 COMBAT_OUTCOME_EVENT_TYPE = "combat_outcome"
 TURN_OUTCOME_EVENT_TYPE = "turn_outcome"
+ATTACK_RESOLVE_EVENT_TYPE = "attack_resolve"
 DEFAULT_CALLED_REGION = "torso"
-PLACEHOLDER_COOLDOWN_TICKS = 1
+MELEE_WINDUP_TICKS = 2
+MELEE_ACTIVE_WINDOW_TICKS = 1
+MELEE_RECOVERY_TICKS = 3
+MELEE_TOTAL_COMMIT_TICKS = MELEE_WINDUP_TICKS + MELEE_ACTIVE_WINDOW_TICKS + MELEE_RECOVERY_TICKS
 DEFAULT_WOUND_SEVERITY = 1
 
 
@@ -146,17 +150,28 @@ class CombatExecutionModule(RuleModule):
 
                         if reason == "resolved":
                             applied = True
-                            attacker.cooldown_until_tick = int(command.tick) + PLACEHOLDER_COOLDOWN_TICKS
+                            attacker.cooldown_until_tick = int(command.tick) + MELEE_TOTAL_COMMIT_TICKS
+                            resolve_tick = int(command.tick) + MELEE_WINDUP_TICKS
+                            sim.schedule_event_at(
+                                tick=resolve_tick,
+                                event_type=ATTACK_RESOLVE_EVENT_TYPE,
+                                params={
+                                    "tick": int(command.tick),
+                                    "resolve_tick": resolve_tick,
+                                    "action_uid": f"{command.tick}:{command_index}",
+                                    "attacker_id": attacker_id,
+                                    "target_id": resolved_target_id,
+                                    "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
+                                    "mode": mode,
+                                    "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+                                    "called_region": called_region,
+                                    "tags": list(tags),
+                                    "attacker_facing": int(attacker.facing),
+                                },
+                            )
 
-        affected = self._build_affected_outcomes(
-            sim=sim,
-            resolved_target_id=resolved_target_id,
-            called_region=called_region,
-            applied=applied,
-            reason=reason,
-        )
-
-        outcome = {
+        if not applied:
+            outcome = {
                 "tick": int(command.tick),
                 "intent": ATTACK_INTENT_COMMAND_TYPE,
                 "action_uid": f"{command.tick}:{command_index}",
@@ -166,24 +181,106 @@ class CombatExecutionModule(RuleModule):
                 "mode": mode if isinstance(mode, str) else None,
                 "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
                 "called_region": called_region,
-                "region_hit": called_region if applied else None,
-                "applied": applied,
+                "region_hit": None,
+                "applied": False,
                 "reason": reason,
+                "strike_phase": "rejected",
                 "wound_deltas": [],
                 "roll_trace": [],
                 "tags": list(tags),
             }
+            sim.append_combat_outcome(outcome)
+        return True
+
+    def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
+        if event.event_type != ATTACK_RESOLVE_EVENT_TYPE:
+            return
+        attacker_id = event.params.get("attacker_id")
+        target_id = event.params.get("target_id")
+        target_cell = event.params.get("target_cell")
+        called_region = event.params.get("called_region")
+        tags = event.params.get("tags")
+        mode = event.params.get("mode")
+        weapon_ref = event.params.get("weapon_ref")
+
+        reason = "resolved"
+        applied = False
+        resolved_target_id = target_id if isinstance(target_id, str) else None
+
+        if not isinstance(attacker_id, str) or attacker_id not in sim.state.entities:
+            reason = "invalid_attacker"
+        elif not isinstance(target_cell, dict):
+            reason = "invalid_target"
+        elif resolved_target_id is None or resolved_target_id not in sim.state.entities:
+            reason = "invalid_target"
+        else:
+            attacker = sim.state.entities[attacker_id]
+            if self._is_campaign_space_entity(sim, attacker_id):
+                reason = "tactical_not_allowed_in_campaign_space"
+            else:
+                current_target_coord = self._entity_coord(sim, resolved_target_id)
+                if current_target_coord is None:
+                    reason = "invalid_target"
+                elif attacker.space_id != str(target_cell.get("space_id", "")):
+                    reason = "space_mismatch"
+                elif current_target_coord != target_cell.get("coord"):
+                    reason = "target_moved"
+                elif not self._mode_is_melee(str(mode)):
+                    reason = "invalid_mode"
+                else:
+                    arc_reason = self._validate_melee_arc_admissibility(
+                        sim=sim,
+                        attacker_id=attacker_id,
+                        target_id=resolved_target_id,
+                    )
+                    reason = arc_reason or "resolved"
+                    if reason == "resolved":
+                        applied = True
+
+        if not isinstance(called_region, str) or not called_region:
+            called_region = DEFAULT_CALLED_REGION
+        normalized_tags = list(tags) if isinstance(tags, list) and all(isinstance(tag, str) for tag in tags) else []
+        affected = self._build_affected_outcomes(
+            sim=sim,
+            resolved_target_id=resolved_target_id,
+            called_region=called_region,
+            applied=applied,
+            reason=reason,
+        )
         if affected:
             self._apply_wounds_from_affected(
                 sim=sim,
-                tick=int(command.tick),
-                attacker_id=outcome["attacker_id"],
-                called_region=outcome["called_region"],
+                tick=int(event.tick),
+                attacker_id=attacker_id if isinstance(attacker_id, str) else None,
+                called_region=called_region,
                 affected=affected,
             )
+        outcome = {
+            "tick": int(event.tick),
+            "intent": ATTACK_INTENT_COMMAND_TYPE,
+            "action_uid": event.params.get("action_uid"),
+            "attacker_id": attacker_id if isinstance(attacker_id, str) else None,
+            "target_id": resolved_target_id,
+            "target_cell": copy.deepcopy(target_cell) if isinstance(target_cell, dict) else None,
+            "mode": mode if isinstance(mode, str) else None,
+            "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+            "called_region": called_region,
+            "region_hit": called_region if applied else None,
+            "applied": applied,
+            "reason": reason,
+            "strike_phase": "active" if applied else "active_miss",
+            "wound_deltas": [],
+            "roll_trace": [],
+            "tags": normalized_tags,
+            "recovery_until_tick": (
+                sim.state.entities[attacker_id].cooldown_until_tick
+                if isinstance(attacker_id, str) and attacker_id in sim.state.entities
+                else None
+            ),
+        }
+        if affected:
             outcome["affected"] = affected
         sim.append_combat_outcome(outcome)
-        return True
 
     @staticmethod
     def _append_wound_with_fifo_cap(entity_wounds: list[dict[str, Any]], wound: dict[str, Any]) -> None:

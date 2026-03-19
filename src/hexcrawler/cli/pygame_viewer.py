@@ -135,6 +135,9 @@ LOCAL_VIEWPORT_FILL_RATIO = 0.72
 HOME_PANEL_WIDTH = 560
 HOME_PANEL_MIN_HEIGHT = 260
 HOME_PANEL_BUTTON_HEIGHT = 34
+HOME_MARKER_RADIUS = 18
+HOME_MARKER_RING_RADIUS = 28
+HOME_MARKER_RING_WIDTH = 3
 
 MARKER_SCATTER_RADIUS_MIN = 8.0
 MARKER_SCATTER_RADIUS_MAX = 18.0
@@ -1251,8 +1254,8 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
                 priority=-2 if is_home_site else 0,
                 marker_id=f"site:{site.site_id}",
                 marker_kind="home_site" if is_home_site else "site",
-                color=(255, 206, 84) if is_home_site else SITE_COLORS.get(site.site_type, (245, 245, 120)),
-                radius=12 if is_home_site else 6,
+                color=(255, 220, 96) if is_home_site else SITE_COLORS.get(site.site_type, (245, 245, 120)),
+                radius=HOME_MARKER_RADIUS if is_home_site else 6,
                 label=HOME_SITE_LABEL if is_home_site else _truncate_label(site.name if site.name else site.site_id, max_length=12),
             ),
         )
@@ -1497,10 +1500,19 @@ def _draw_world_markers(
     zoom_scale: float = 1.0,
 ) -> None:
     for placement in _world_marker_placements(sim, center, zoom_scale):
+        if placement.marker.marker_kind == "home_site":
+            pygame.draw.circle(screen, (255, 248, 180), (placement.x, placement.y), HOME_MARKER_RING_RADIUS, HOME_MARKER_RING_WIDTH)
+            pygame.draw.circle(screen, (36, 28, 12), (placement.x, placement.y), HOME_MARKER_RING_RADIUS + 1, 1)
         pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
         pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
         label_surface = font.render(placement.marker.label, True, (248, 250, 255))
         outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
+        if placement.marker.marker_kind == "home_site":
+            label_box = label_surface.get_rect()
+            label_box.topleft = (placement.x + 10, placement.y - 10)
+            padded = pygame.Rect(label_box.left - 4, label_box.top - 2, label_box.width + 8, label_box.height + 4)
+            pygame.draw.rect(screen, (32, 34, 40), padded, border_radius=4)
+            pygame.draw.rect(screen, (255, 220, 96), padded, 1, border_radius=4)
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
         screen.blit(label_surface, (placement.x + 8, placement.y - 8))
@@ -1743,9 +1755,16 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
                 target = sim.state.entities.get(target_id)
                 if target is not None:
                     neutralized = is_incapacitated_from_wounds(target.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+            reason = str(combat_event.get("reason", "?"))
+            if reason == "windup_started":
+                resolve_tick = combat_event.get("resolve_tick")
+                lines.append(
+                    f"attack_feedback=COMMIT target={target_label} phase=windup resolve_tick={resolve_tick if isinstance(resolve_tick, int) else '?'}"
+                )
+                return lines
             lines.append(
                 f"attack_feedback={'HIT' if applied else 'MISS'} target={target_label} "
-                f"reason={combat_event.get('reason', '?')} neutralized={'yes' if neutralized else 'no'}"
+                f"reason={reason} neutralized={'yes' if neutralized else 'no'}"
             )
         elif target_id == entity.entity_id:
             lines.append(
@@ -1888,7 +1907,7 @@ def _draw_hud(
 
     lines = [
         context_line,
-        "WASD move | LMB select/attack-local | SPACE attack selected-local | ENTER home panel at Greybridge | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
+        "WASD move | LMB select/attack-local | SPACE attack selected-local | ENTER/E home panel at Greybridge | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
         "F7 focus selected entity | F12 toggle follow-selected",
         f"runtime={'paused' if runtime_state.paused else 'running'} | runtime_profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
         f"follow status={follow_state.status}",
@@ -3548,7 +3567,7 @@ def run_pygame_viewer(
                     ):
                         controller.attack_entity(target.entity_id)
                         status_message = f"attack queued -> {target.entity_id}"
-            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_RETURN:
+            elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_RETURN, pygame_module.K_e):
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None:
                     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, player)
