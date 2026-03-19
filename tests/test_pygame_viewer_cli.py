@@ -120,7 +120,8 @@ def test_world_markers_include_distinct_greybridge_home_marker() -> None:
 
     assert home_markers
     assert any(marker.label == "GREYBRIDGE HOME" for marker in home_markers)
-    assert all(marker.radius >= 9 for marker in home_markers)
+    assert all(marker.radius >= 18 for marker in home_markers)
+    assert all(marker.color == (255, 220, 96) for marker in home_markers)
 
 
 def test_greybridge_home_marker_is_anchored_at_hex_center() -> None:

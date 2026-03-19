@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a quick `core_playable` smoke focused on Greybridge enter/use-home panel legibility and confirm no extra combat/UI scope creep before any further tuning.
+- **Next action:** Run a manual `python play.py` smoke to validate Greybridge Enter/E home-panel flow and committed melee strike readability in the live local encounter loop.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,13 +104,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Improved **Greybridge/home usability in `core_playable`**: `home_greybridge` is now anchored at home-hex center with a larger persistent marker/label, and players can explicitly open a minimal enter/use home panel (Recover / Turn in Proof / Leave) via marker click, context action, or Enter while at home.
-- Improved menu/readability + reward clarity: context menu now wraps long rows with dynamic item heights; home and HUD surfaces clearly expose proof/ration counts, recover/turn-in availability reasons, explicit proof-token gain, and explicit ration gain feedback.
-- Improved local combat feel/readability foundations without changing authority seams: local hostile rendering is clearer (active vs incapacitated), and attack feedback remains routed through the single authoritative `attack_intent` path with direct hit/miss/neutralized messaging.
+- Improved **Greybridge/home usability in `core_playable`**: Greybridge now renders as a centered high-contrast home marker with a persistent halo/label treatment, and the home panel can be opened from the home hex with either **Enter or E** (plus marker/context routes), keeping it the canonical minimal home interaction surface.
+- Improved reward turn-in clarity on the same home panel/HUD surfaces: condition + proof/ration counts + recover/turn-in availability reasons remain explicit, with clear feedback for proof-token gain and ration gain.
+- Added a **committed melee strike foundation** on the existing authoritative `attack_intent` seam: attack now snapshots target/cell at commit time, resolves after deterministic windup ticks, enforces a deterministic recovery cooldown gate, and emits clear hit/miss reasons (including moved-target misses) without introducing a second combat path.
 
 ## Core-playable clarity note (this pass)
 - Greybridge is now a **minimal usable home node** in the default `core_playable` path via an explicit service panel (Recover, Turn in Proof, Leave) without requiring a full interior.
-- Full town interior/editor workflows remain later scope, and combat work here is foundational/readability-focused only (not a full redesign).
+- Full town interior/editor workflows remain later scope, and combat work here is a committed-melee foundation pass only (not a broad redesign and no projectile/ranged path added).
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).
