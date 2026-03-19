@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hexcrawler.cli.play import DEFAULT_SAVE_PATH, main
+from hexcrawler.cli.play import DEFAULT_MAP_PATH, DEFAULT_SAVE_PATH, main
 from hexcrawler.cli.runtime_profiles import DEFAULT_RUNTIME_PROFILE
 
 
@@ -36,6 +36,7 @@ def test_play_launcher_defaults_to_canonical_save_path(monkeypatch) -> None:
     assert result == 0
     assert captured["load_save"] == DEFAULT_SAVE_PATH
     assert captured["save_path"] == DEFAULT_SAVE_PATH
+    assert captured["map_path"] == DEFAULT_MAP_PATH
     assert captured["runtime_profile"] == DEFAULT_RUNTIME_PROFILE
 
 

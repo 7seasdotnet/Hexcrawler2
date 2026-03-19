@@ -58,7 +58,7 @@ from hexcrawler.sim.movement import (
     world_xy_to_axial,
     world_xy_to_square_grid_cell,
 )
-from hexcrawler.sim.world import LOCAL_SPACE_ROLE, HexCoord
+from hexcrawler.sim.world import LOCAL_SPACE_ROLE, HexCoord, SiteRecord
 from hexcrawler.sim.wounds import (
     WOUND_INCAPACITATE_SEVERITY,
     is_incapacitated_from_wounds,
@@ -108,9 +108,10 @@ TERRAIN_COLORS: dict[str, tuple[int, int, int]] = {
 SITE_COLORS: dict[str, tuple[int, int, int]] = {
     "town": (80, 160, 255),
     "dungeon": (210, 85, 85),
+    "dungeon_entrance": (210, 85, 85),
+    "ruin": (176, 106, 210),
 }
 HOME_SITE_IDS: tuple[str, ...] = ("home_greybridge",)
-HOME_SITE_LABEL = "GREYBRIDGE HOME"
 ENCOUNTER_DEBUG_SIGNAL_LIMIT = 10
 ENCOUNTER_DEBUG_TRACK_LIMIT = 10
 ENCOUNTER_DEBUG_SPAWN_LIMIT = 10
@@ -743,6 +744,7 @@ class MarkerRecord:
     color: tuple[int, int, int]
     radius: int
     label: str
+    world_position: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -1223,6 +1225,44 @@ def _short_stable_id(value: str, max_length: int = 10) -> str:
     return _truncate_label(value.split(":")[-1], max_length=max_length)
 
 
+def _site_label_for_marker(site: SiteRecord) -> str:
+    label_source = site.name if isinstance(site.name, str) and site.name.strip() else site.site_id
+    return _truncate_label(label_source, max_length=16)
+
+
+def _site_marker_style(site: SiteRecord) -> tuple[tuple[int, int, int], int]:
+    if site.site_type == "town":
+        return SITE_COLORS.get("town", (80, 160, 255)), 11
+    if site.site_type in {"dungeon", "dungeon_entrance", "ruin"}:
+        return SITE_COLORS.get(site.site_type, SITE_COLORS.get("dungeon", (210, 85, 85))), 9
+    return SITE_COLORS.get(site.site_type, (245, 245, 120)), 7
+
+
+def _site_campaign_anchor_world(site: SiteRecord) -> tuple[float, float] | None:
+    location = site.location if isinstance(site.location, dict) else {}
+    anchor = location.get("campaign_anchor")
+    if isinstance(anchor, dict):
+        try:
+            return float(anchor["x"]), float(anchor["y"])
+        except (KeyError, TypeError, ValueError):
+            pass
+    coord = location.get("coord")
+    if not isinstance(coord, dict):
+        return None
+    topology_type = str(location.get("topology_type", OVERWORLD_HEX_TOPOLOGY))
+    if topology_type in HEX_TOPOLOGY_TYPES:
+        try:
+            return axial_to_world_xy(HexCoord(q=int(coord["q"]), r=int(coord["r"])))
+        except (KeyError, TypeError, ValueError):
+            return None
+    if topology_type == SQUARE_GRID_TOPOLOGY:
+        try:
+            return float(coord["x"]) + 0.5, float(coord["y"]) + 0.5
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
 def _clamp_scroll_offset(current: int, delta: int, total_count: int, page_size: int) -> int:
     max_offset = max(0, total_count - page_size)
     return max(0, min(max_offset, current + delta))
@@ -1247,16 +1287,17 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
         markers_by_cell.setdefault(cell, []).append(marker)
 
     for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
-        is_home_site = _is_home_site(site.site_id)
+        marker_color, marker_radius = _site_marker_style(site)
         add_marker(
             _marker_cell_from_location(site.location, active_location_topology),
             MarkerRecord(
-                priority=-2 if is_home_site else 0,
+                priority=-1 if site.site_type == "town" else 0,
                 marker_id=f"site:{site.site_id}",
-                marker_kind="home_site" if is_home_site else "site",
-                color=(255, 220, 96) if is_home_site else SITE_COLORS.get(site.site_type, (245, 245, 120)),
-                radius=HOME_MARKER_RADIUS if is_home_site else 6,
-                label=HOME_SITE_LABEL if is_home_site else _truncate_label(site.name if site.name else site.site_id, max_length=12),
+                marker_kind="site",
+                color=marker_color,
+                radius=marker_radius,
+                label=_site_label_for_marker(site),
+                world_position=_site_campaign_anchor_world(site),
             ),
         )
 
@@ -1445,10 +1486,6 @@ def _stable_unit_pair(signature: str, attempt: int) -> tuple[float, float]:
 def _slot_markers_for_hex(center_x: float, center_y: float, markers: list[MarkerRecord], cell: MarkerCellRef) -> tuple[list[MarkerPlacement], int]:
     placements: list[MarkerPlacement] = []
     for marker in markers:
-        if marker.marker_kind == "home_site":
-            center_point = (int(round(center_x)), int(round(center_y)))
-            placements.append(MarkerPlacement(marker=marker, x=center_point[0], y=center_point[1]))
-            continue
         signature = _placement_signature(cell, marker)
         chosen_point: tuple[float, float] | None = None
         for attempt in range(MARKER_PLACEMENT_ATTEMPTS):
@@ -1486,8 +1523,19 @@ def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_
         projection_topology,
     )
     for cell in sorted(markers_by_cell, key=lambda current: (current.space_id, current.topology_type, current.coord_key)):
+        cell_markers = markers_by_cell[cell]
+        anchored_markers = [marker for marker in cell_markers if marker.world_position is not None]
+        for marker in anchored_markers:
+            world_position = marker.world_position
+            if world_position is None:
+                continue
+            px, py = _world_to_pixel(world_position[0], world_position[1], center, zoom_scale)
+            placements.append(MarkerPlacement(marker=marker, x=int(round(px)), y=int(round(py))))
+        unslotted_markers = [marker for marker in cell_markers if marker.world_position is None]
+        if not unslotted_markers:
+            continue
         center_x, center_y = _marker_cell_center(cell, center, zoom_scale)
-        slotted, _ = _slot_markers_for_hex(center_x, center_y, markers_by_cell[cell], cell)
+        slotted, _ = _slot_markers_for_hex(center_x, center_y, unslotted_markers, cell)
         placements.extend(slotted)
     return placements
 
@@ -1500,19 +1548,19 @@ def _draw_world_markers(
     zoom_scale: float = 1.0,
 ) -> None:
     for placement in _world_marker_placements(sim, center, zoom_scale):
-        if placement.marker.marker_kind == "home_site":
+        if placement.marker.marker_kind == "site" and placement.marker.radius >= 11:
             pygame.draw.circle(screen, (255, 248, 180), (placement.x, placement.y), HOME_MARKER_RING_RADIUS, HOME_MARKER_RING_WIDTH)
             pygame.draw.circle(screen, (36, 28, 12), (placement.x, placement.y), HOME_MARKER_RING_RADIUS + 1, 1)
         pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
         pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
         label_surface = font.render(placement.marker.label, True, (248, 250, 255))
         outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
-        if placement.marker.marker_kind == "home_site":
+        if placement.marker.marker_kind == "site" and placement.marker.radius >= 11:
             label_box = label_surface.get_rect()
             label_box.topleft = (placement.x + 10, placement.y - 10)
             padded = pygame.Rect(label_box.left - 4, label_box.top - 2, label_box.width + 8, label_box.height + 4)
             pygame.draw.rect(screen, (32, 34, 40), padded, border_radius=4)
-            pygame.draw.rect(screen, (255, 220, 96), padded, 1, border_radius=4)
+            pygame.draw.rect(screen, placement.marker.color, padded, 1, border_radius=4)
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
         screen.blit(label_surface, (placement.x + 8, placement.y - 8))
@@ -1907,7 +1955,7 @@ def _draw_hud(
 
     lines = [
         context_line,
-        "WASD move | LMB select/attack-local | SPACE attack selected-local | ENTER/E home panel at Greybridge | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
+        "WASD move | LMB select/attack-local/site | SPACE attack selected-local | ENTER/E use selected-or-near site | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
         "F7 focus selected entity | F12 toggle follow-selected",
         f"runtime={'paused' if runtime_state.paused else 'running'} | runtime_profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
         f"follow status={follow_state.status}",
@@ -2878,12 +2926,84 @@ def _open_home_panel_from_marker_click(
     zoom_scale: float,
 ) -> str | None:
     marker = _find_world_marker_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=12.0)
-    if marker is None or marker.marker_kind != "home_site":
+    if marker is None or marker.marker_kind != "site":
         return None
     site_id = _marker_payload_id(marker, expected_kind="site")
     if site_id is None or not _is_home_site(site_id):
         return None
     return site_id
+
+
+def _site_for_marker_click(
+    sim: Simulation,
+    *,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    zoom_scale: float,
+) -> SiteRecord | None:
+    marker = _find_world_marker_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=12.0)
+    if marker is None or marker.marker_kind != "site":
+        return None
+    site_id = _marker_payload_id(marker, expected_kind="site")
+    if site_id is None:
+        return None
+    return sim.state.world.sites.get(site_id)
+
+
+def _nearest_campaign_site_for_player(
+    sim: Simulation,
+    *,
+    player: EntityState,
+    selected_site_id: str | None = None,
+    max_distance_world: float = 0.9,
+) -> SiteRecord | None:
+    active_space = sim.state.world.spaces.get(player.space_id)
+    if active_space is None or str(getattr(active_space, "role", "")) != "campaign":
+        return None
+
+    if isinstance(selected_site_id, str) and selected_site_id:
+        selected_site = sim.state.world.sites.get(selected_site_id)
+        selected_anchor = _site_campaign_anchor_world(selected_site) if selected_site is not None else None
+        if (
+            selected_site is not None
+            and selected_site.location.get("space_id") == player.space_id
+            and selected_anchor is not None
+            and math.dist((player.position_x, player.position_y), selected_anchor) <= max_distance_world
+        ):
+            return selected_site
+
+    candidates: list[tuple[float, str, SiteRecord]] = []
+    for site in sim.state.world.sites.values():
+        if site.location.get("space_id") != player.space_id:
+            continue
+        anchor = _site_campaign_anchor_world(site)
+        if anchor is None:
+            continue
+        distance = math.dist((player.position_x, player.position_y), anchor)
+        if distance <= max_distance_world:
+            candidates.append((distance, site.site_id, site))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    return candidates[0][2]
+
+
+def _use_campaign_site(
+    sim: Simulation,
+    controller: SimulationController,
+    *,
+    player: EntityState,
+    selected_site_id: str | None,
+) -> tuple[str, str | None, bool]:
+    site = _nearest_campaign_site_for_player(sim, player=player, selected_site_id=selected_site_id)
+    if site is None:
+        return "no site in range (move closer or select a nearby site marker)", selected_site_id, False
+    if site.entrance is not None:
+        controller.enter_site(site.site_id)
+        return f"entering site: {site.name if site.name else site.site_id}", site.site_id, False
+    if site.site_type == "town" or "safe" in site.tags:
+        return f"site services opened: {site.name if site.name else site.site_id}", site.site_id, True
+    return f"site selected: {site.name if site.name else site.site_id} (no Enter/E action yet)", site.site_id, False
 
 
 def _selected_entity_lines(
@@ -3249,7 +3369,7 @@ def run_pygame_viewer(
         del recent_saves[RECENT_SAVES_LIMIT:]
 
     def load_simulation_from_path(path_value: str) -> bool:
-        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, last_sent_move_vector
+        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, last_sent_move_vector, selected_site_id
         try:
             sim = runtime_controller.load_simulation(path_value)
             previous_snapshot = extract_render_snapshot(sim)
@@ -3259,6 +3379,7 @@ def run_pygame_viewer(
             push_recent_save(path_value)
             status_message = f"loaded {path_value}"
             last_sent_move_vector = (0.0, 0.0)
+            selected_site_id = None
             return True
         except Exception as exc:
             status_message = f"load failed: {exc}"
@@ -3293,26 +3414,19 @@ def run_pygame_viewer(
                         items.append(ContextMenuItem(label=f"Select {marker.label}", action="select", payload=entity_id))
                         if sim.selected_entity_id(owner_entity_id=PLAYER_ID) == entity_id:
                             items.append(ContextMenuItem(label=f"Deselect {marker.label}", action="clear_selection"))
-                    elif marker.marker_kind in {"site", "home_site"}:
+                    elif marker.marker_kind == "site":
                         site_id = _marker_payload_id(marker, expected_kind="site")
                         if site_id is None:
                             items.append(ContextMenuItem(label="marker_id malformed: site", action="noop"))
                             continue
                         site = sim.state.world.sites.get(site_id)
-                        if site is not None and site.entrance is not None:
+                        if site is not None:
                             site_label = site.name if site.name else site.site_id
-                            items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
-                        elif site is not None and _is_home_site(site.site_id):
-                            items.append(ContextMenuItem(label="Greybridge: campaign home node", action="noop"))
-                            items.append(ContextMenuItem(label="Enter/Use Home Node", action="open_home_panel", payload=site.site_id))
-                            items.append(ContextMenuItem(label="Recover (safe_recovery_intent)", action="home_recover"))
-                            items.append(ContextMenuItem(label="Turn in Proof -> Rations", action="home_turn_in"))
-                            items.append(
-                                ContextMenuItem(
-                                    label="Note: this is a minimal service panel; full town interior is not implemented yet.",
-                                    action="noop",
-                                )
-                            )
+                            items.append(ContextMenuItem(label=f"Select site: {site_label}", action="select_site", payload=site.site_id))
+                            if site.entrance is not None:
+                                items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
+                            if site.site_type == "town" or "safe" in site.tags:
+                                items.append(ContextMenuItem(label=f"Open services: {site_label}", action="open_home_panel", payload=site.site_id))
                     elif marker.marker_kind == "door":
                         door_id = _marker_payload_id(marker, expected_kind="door")
                         if door_id is None:
@@ -3436,6 +3550,7 @@ def run_pygame_viewer(
     push_recent_save(load_save)
     status_message: str | None = None
     last_sent_move_vector = (0.0, 0.0)
+    selected_site_id: str | None = None
 
     while running:
         target_fps = 30 if runtime_state.paused else 60
@@ -3467,6 +3582,7 @@ def run_pygame_viewer(
                 last_tick_time = pygame_module.time.get_ticks() / 1000.0
                 status_message = f"new simulation map={runtime_state.map_path} seed={sim.seed}"
                 last_sent_move_vector = (0.0, 0.0)
+                selected_site_id = None
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F5:
                 saved_path = runtime_controller.save_simulation()
                 push_recent_save(saved_path)
@@ -3570,11 +3686,15 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_RETURN, pygame_module.K_e):
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None:
-                    at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, player)
-                    if at_safe_site and _is_home_site(safe_site_id):
+                    status_message, selected_site_id, open_site_panel = _use_campaign_site(
+                        sim,
+                        controller,
+                        player=player,
+                        selected_site_id=selected_site_id,
+                    )
+                    if open_site_panel:
                         home_panel_state.visible = True
-                        home_panel_state.site_id = safe_site_id
-                        status_message = "Greybridge home panel opened"
+                        home_panel_state.site_id = selected_site_id
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -3679,6 +3799,9 @@ def run_pygame_viewer(
                             controller.set_selected_entity(item.payload)
                         elif item.action == "clear_selection":
                             controller.clear_selected_entity()
+                        elif item.action == "select_site" and item.payload is not None:
+                            selected_site_id = item.payload
+                            status_message = f"selected site -> {item.payload}"
                         elif item.action == "load_recent" and item.payload is not None:
                             load_simulation_from_path(item.payload)
                         elif item.action == "enter_site" and item.payload is not None:
@@ -3686,7 +3809,7 @@ def run_pygame_viewer(
                         elif item.action == "open_home_panel":
                             home_panel_state.visible = True
                             home_panel_state.site_id = item.payload
-                            status_message = "Greybridge home panel opened"
+                            status_message = f"site services opened: {item.payload if item.payload else 'town'}"
                         elif item.action == "home_recover":
                             controller.safe_recovery_intent()
                             status_message = "recover intent queued"
@@ -3745,10 +3868,19 @@ def run_pygame_viewer(
                     center=world_center,
                     zoom_scale=world_zoom_scale,
                 )
-                if site_id is not None:
-                    home_panel_state.visible = True
-                    home_panel_state.site_id = site_id
-                    status_message = "Greybridge home panel opened"
+                selected_site = _site_for_marker_click(
+                    sim,
+                    pixel_pos=event.pos,
+                    center=world_center,
+                    zoom_scale=world_zoom_scale,
+                )
+                if selected_site is not None:
+                    selected_site_id = selected_site.site_id
+                    status_message = f"selected site -> {selected_site.name if selected_site.name else selected_site.site_id}"
+                    if site_id is not None:
+                        home_panel_state.visible = True
+                        home_panel_state.site_id = site_id
+                        status_message = f"site services opened: {selected_site.name if selected_site.name else selected_site.site_id}"
                     continue
                 attack_status = _queue_local_attack_for_click(
                     sim,
