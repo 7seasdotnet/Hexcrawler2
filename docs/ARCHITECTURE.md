@@ -35,6 +35,7 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** The campaign simulation operates on a continuous 2D plane.
 - **Contract:** Entity position is stored as continuous coordinates.
 - **Contract:** Hex coordinates are **derived indices** used for content placement, editor tooling, spatial partitioning, cadence/event triggers, and player-facing map presentation.
+- **Contract:** Campaign sites may carry explicit continuous campaign anchor coordinates for rendering/interaction; containing hex remains a derived indexing/presentation reference and fallback when anchors are absent.
 - **Contract:** Hexes are **not** the primary physics layer.
 - **Contract:** Movement, pursuit, and campaign interactions operate on continuous positions; hex membership is computed from position and is never the authoritative location of an entity.
 - **Contract:** Travel speed, roads, terrain effects, pursuit, escape, and travel timing must not be fundamentally defined as hex-step transitions.

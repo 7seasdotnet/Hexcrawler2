@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke to validate Greybridge Enter/E home-panel flow and committed melee strike readability in the live local encounter loop.
+- **Next action:** Run a manual `python play.py` smoke to validate generic campaign site visibility/selection/use (town + dungeon entrance) through the same Enter/E flow in `core_playable`.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,13 +104,14 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Improved **Greybridge/home usability in `core_playable`**: Greybridge now renders as a centered high-contrast home marker with a persistent halo/label treatment, and the home panel can be opened from the home hex with either **Enter or E** (plus marker/context routes), keeping it the canonical minimal home interaction surface.
-- Improved reward turn-in clarity on the same home panel/HUD surfaces: condition + proof/ration counts + recover/turn-in availability reasons remain explicit, with clear feedback for proof-token gain and ration gain.
-- Added a **committed melee strike foundation** on the existing authoritative `attack_intent` seam: attack now snapshots target/cell at commit time, resolves after deterministic windup ticks, enforces a deterministic recovery cooldown gate, and emits clear hit/miss reasons (including moved-target misses) without introducing a second combat path.
+- Added a **generic campaign site placement/presentation path** in the viewer: site markers now use explicit continuous `location.campaign_anchor` coordinates when present, with deterministic hex-center fallback only for legacy/missing-anchor data.
+- Updated default `core_playable` map content so both **Greybridge (town/home)** and **Old Stair (dungeon entrance)** have explicit campaign anchors and render as distinct, readable campaign places.
+- Added generic **Enter/E site use flow** for selected-or-near campaign sites: towns/safe sites open the services panel through the same generic path, while dungeon entrances route to `enter_site`; targeted viewer tests now cover anchor placement, fallback, and interaction reachability.
+- Added bootstrap-parity verification coverage so `play.py` defaults and runtime `new_simulation` preserve the same viewer-map site visibility set (town + dungeon entrance) across reload/new-sim paths.
 
 ## Core-playable clarity note (this pass)
-- Greybridge is now a **minimal usable home node** in the default `core_playable` path via an explicit service panel (Recover, Turn in Proof, Leave) without requiring a full interior.
-- Full town interior/editor workflows remain later scope, and combat work here is a committed-melee foundation pass only (not a broad redesign and no projectile/ranged path added).
+- Campaign sites in the default `core_playable` path now use a **generic placement/presentation/interaction contract** (continuous anchor + marker + Enter/E action), rather than a Greybridge-only rendering path.
+- Full town/dungeon interior authoring and broad editor workflows remain later scope; this pass keeps towns as service nodes and dungeon entry as a campaign-to-local transition seam.
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).

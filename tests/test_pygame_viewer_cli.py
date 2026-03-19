@@ -47,6 +47,8 @@ from hexcrawler.cli.pygame_viewer import (
     _selected_entity_lines,
     _selected_entity_recent_trace_rows,
     _slot_markers_for_hex,
+    _site_campaign_anchor_world,
+    _use_campaign_site,
     _supported_viewer_topology,
     _viewer_topology_diagnostic,
     _world_marker_placements,
@@ -112,29 +114,48 @@ def test_core_playable_viewer_map_contains_visible_safe_home_town() -> None:
     assert site.name == "Greybridge Home"
 
 
-def test_world_markers_include_distinct_greybridge_home_marker() -> None:
+def test_world_markers_include_generic_town_and_dungeon_site_markers() -> None:
     sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
 
     markers = _world_marker_placements(sim, center=(640.0, 360.0), zoom_scale=1.0)
-    home_markers = [placement.marker for placement in markers if placement.marker.marker_kind == "home_site"]
+    town_markers = [placement.marker for placement in markers if placement.marker.marker_kind == "site" and placement.marker.marker_id == "site:home_greybridge"]
+    dungeon_markers = [
+        placement.marker
+        for placement in markers
+        if placement.marker.marker_kind == "site" and placement.marker.marker_id == "site:demo_dungeon_entrance"
+    ]
 
-    assert home_markers
-    assert any(marker.label == "GREYBRIDGE HOME" for marker in home_markers)
-    assert all(marker.radius >= 18 for marker in home_markers)
-    assert all(marker.color == (255, 220, 96) for marker in home_markers)
+    assert town_markers
+    assert dungeon_markers
+    assert town_markers[0].radius > dungeon_markers[0].radius
+    assert town_markers[0].color == (80, 160, 255)
+    assert dungeon_markers[0].color == (210, 85, 85)
 
 
-def test_greybridge_home_marker_is_anchored_at_hex_center() -> None:
+def test_site_marker_uses_campaign_anchor_position_instead_of_hex_center() -> None:
     sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
     world_center = (640.0, 360.0)
     site = sim.state.world.sites["home_greybridge"]
+    anchor = _site_campaign_anchor_world(site)
+    assert anchor is not None
+    expected_x, expected_y = viewer_module._world_to_pixel(anchor[0], anchor[1], world_center, 1.0)
+    markers = _world_marker_placements(sim, center=world_center, zoom_scale=1.0)
+    placement = next(current for current in markers if current.marker.marker_id == "site:home_greybridge")
+
+    assert placement.x == int(round(expected_x))
+    assert placement.y == int(round(expected_y))
+
+
+def test_site_marker_falls_back_to_hex_center_when_campaign_anchor_missing() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    world_center = (640.0, 360.0)
+    site = sim.state.world.sites["home_greybridge"]
+    site.location.pop("campaign_anchor", None)
     home_cell = _marker_cell_from_location(site.location, OVERWORLD_HEX_TOPOLOGY)
     assert home_cell is not None
-
     expected_x, expected_y = _marker_cell_center(home_cell, world_center, zoom_scale=1.0)
     markers = _world_marker_placements(sim, center=world_center, zoom_scale=1.0)
-    placement = next(current for current in markers if current.marker.marker_kind == "home_site")
-
+    placement = next(current for current in markers if current.marker.marker_id == "site:home_greybridge")
     assert placement.x == int(round(expected_x))
     assert placement.y == int(round(expected_y))
 
@@ -220,6 +241,47 @@ def test_simulation_controller_appends_attack_intent_command() -> None:
         "mode": "melee",
         "tags": ["viewer_local_attack"],
     }
+
+
+def test_enter_or_e_generic_site_use_opens_town_services_via_generic_path() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    player = sim.state.entities[PLAYER_ID]
+
+    message, selected_site_id, open_site_panel = _use_campaign_site(
+        sim,
+        controller,
+        player=player,
+        selected_site_id="home_greybridge",
+    )
+
+    assert selected_site_id == "home_greybridge"
+    assert open_site_panel is True
+    assert "site services opened" in message
+
+
+def test_enter_or_e_generic_site_use_reaches_dungeon_entrance_path() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    player = sim.state.entities[PLAYER_ID]
+    dungeon_site = sim.state.world.sites["demo_dungeon_entrance"]
+    anchor = _site_campaign_anchor_world(dungeon_site)
+    assert anchor is not None
+    player.position_x = anchor[0]
+    player.position_y = anchor[1]
+
+    message, selected_site_id, open_site_panel = _use_campaign_site(
+        sim,
+        controller,
+        player=player,
+        selected_site_id="demo_dungeon_entrance",
+    )
+
+    assert selected_site_id == "demo_dungeon_entrance"
+    assert open_site_panel is False
+    assert "entering site" in message
+    assert sim.input_log[-1].command_type == "enter_site"
+    assert sim.input_log[-1].params == {"site_id": "demo_dungeon_entrance"}
 
 
 def test_queue_local_attack_for_click_routes_to_authoritative_attack_intent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -977,6 +1039,34 @@ def test_viewer_runtime_controller_new_simulation_same_seed_and_commands_is_dete
 
     assert first_hash == second_hash
 
+
+def test_viewer_runtime_controller_new_simulation_preserves_viewer_map_site_anchor_visibility() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False, seed=55)
+    state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/viewer_map.json",
+        with_encounters=False,
+        current_save_path="saves/session_save.json",
+    )
+    runtime = ViewerRuntimeController(state)
+    center = (640.0, 360.0)
+
+    before_ids = sorted(
+        placement.marker.marker_id
+        for placement in _world_marker_placements(state.sim, center=center, zoom_scale=1.0)
+        if placement.marker.marker_kind == "site"
+    )
+
+    runtime.new_simulation(seed=55)
+
+    after_ids = sorted(
+        placement.marker.marker_id
+        for placement in _world_marker_placements(state.sim, center=center, zoom_scale=1.0)
+        if placement.marker.marker_kind == "site"
+    )
+    assert before_ids == after_ids
+    assert "site:home_greybridge" in after_ids
+    assert "site:demo_dungeon_entrance" in after_ids
 
 def test_selected_entity_for_click_returns_entity_marker_hit() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
