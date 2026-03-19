@@ -761,6 +761,17 @@ class MarkerPlacement:
     y: int
 
 
+@dataclass(frozen=True)
+class CampaignSiteProjection:
+    site_id: str
+    site_name: str
+    site_type: str
+    anchor_source: str
+    world_position: tuple[float, float]
+    screen_position: tuple[int, int]
+    on_screen: bool
+
+
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -1263,6 +1274,75 @@ def _site_campaign_anchor_world(site: SiteRecord) -> tuple[float, float] | None:
     return None
 
 
+def _site_world_position(site: SiteRecord) -> tuple[tuple[float, float] | None, str]:
+    anchor_position = _site_campaign_anchor_world(site)
+    location = site.location if isinstance(site.location, dict) else {}
+    has_explicit_anchor = isinstance(location.get("campaign_anchor"), dict)
+    if anchor_position is not None:
+        return anchor_position, "campaign_anchor" if has_explicit_anchor else "legacy_hex_fallback"
+    return None, "unsupported"
+
+
+def _campaign_site_projections(
+    sim: Simulation,
+    center: tuple[float, float],
+    zoom_scale: float,
+    *,
+    clip_rect: pygame.Rect | None = None,
+) -> list[CampaignSiteProjection]:
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    if active_space is None or str(getattr(active_space, "role", "")) != "campaign":
+        return []
+    projections: list[CampaignSiteProjection] = []
+    for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
+        if site.location.get("space_id") != active_space.space_id:
+            continue
+        world_position, anchor_source = _site_world_position(site)
+        if world_position is None:
+            continue
+        px, py = _world_to_pixel(world_position[0], world_position[1], center, zoom_scale)
+        point = (int(round(px)), int(round(py)))
+        on_screen = True if clip_rect is None else clip_rect.collidepoint(point)
+        projections.append(
+            CampaignSiteProjection(
+                site_id=site.site_id,
+                site_name=site.name if isinstance(site.name, str) and site.name.strip() else site.site_id,
+                site_type=site.site_type,
+                anchor_source=anchor_source,
+                world_position=world_position,
+                screen_position=point,
+                on_screen=on_screen,
+            )
+        )
+    return projections
+
+
+def _campaign_site_diagnostic_rows(
+    sim: Simulation,
+    center: tuple[float, float],
+    zoom_scale: float,
+    *,
+    clip_rect: pygame.Rect,
+    max_rows: int = 6,
+) -> list[str]:
+    projections = _campaign_site_projections(sim, center, zoom_scale, clip_rect=clip_rect)
+    if not projections:
+        return ["campaign_sites loaded=0 visible=0 (campaign role only)"]
+    sorted_rows = sorted(projections, key=lambda row: (row.site_id, row.site_type))
+    visible_count = sum(1 for row in sorted_rows if row.on_screen)
+    lines = [f"campaign_sites loaded={len(sorted_rows)} visible={visible_count} showing={min(max_rows, len(sorted_rows))}"]
+    for row in sorted_rows[:max_rows]:
+        lines.append(
+            "site "
+            f"id={row.site_id} type={row.site_type} anchor={row.anchor_source} "
+            f"world=({row.world_position[0]:.2f},{row.world_position[1]:.2f}) "
+            f"screen=({row.screen_position[0]},{row.screen_position[1]}) "
+            f"on_screen={'yes' if row.on_screen else 'no'}"
+        )
+    return lines
+
+
 def _clamp_scroll_offset(current: int, delta: int, total_count: int, page_size: int) -> int:
     max_offset = max(0, total_count - page_size)
     return max(0, min(max_offset, current + delta))
@@ -1285,21 +1365,6 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
         if cell is None or not _is_in_current_space(cell.space_id, active_space_id) or cell.topology_type != active_location_topology:
             return
         markers_by_cell.setdefault(cell, []).append(marker)
-
-    for site in sorted(sim.state.world.sites.values(), key=lambda current: current.site_id):
-        marker_color, marker_radius = _site_marker_style(site)
-        add_marker(
-            _marker_cell_from_location(site.location, active_location_topology),
-            MarkerRecord(
-                priority=-1 if site.site_type == "town" else 0,
-                marker_id=f"site:{site.site_id}",
-                marker_kind="site",
-                color=marker_color,
-                radius=marker_radius,
-                label=_site_label_for_marker(site),
-                world_position=_site_campaign_anchor_world(site),
-            ),
-        )
 
     space = sim.state.world.spaces.get(active_space_id)
     if space is not None:
@@ -1517,6 +1582,26 @@ def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_
     if projection_topology == "unsupported":
         return []
     placements: list[MarkerPlacement] = []
+    for site_projection in _campaign_site_projections(sim, center, zoom_scale):
+        site = sim.state.world.sites.get(site_projection.site_id)
+        if site is None:
+            continue
+        marker_color, marker_radius = _site_marker_style(site)
+        placements.append(
+            MarkerPlacement(
+                marker=MarkerRecord(
+                    priority=-1 if site.site_type == "town" else 0,
+                    marker_id=f"site:{site.site_id}",
+                    marker_kind="site",
+                    color=marker_color,
+                    radius=marker_radius,
+                    label=_site_label_for_marker(site),
+                    world_position=site_projection.world_position,
+                ),
+                x=site_projection.screen_position[0],
+                y=site_projection.screen_position[1],
+            )
+        )
     markers_by_cell = _collect_world_markers(
         sim,
         active_space.space_id,
@@ -2006,6 +2091,15 @@ def _draw_hud(
     topology_diagnostic = _viewer_topology_diagnostic(active_space)
     if topology_diagnostic is not None:
         lines.append(f"viewer: {topology_diagnostic}")
+    if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
+        lines.extend(
+            _campaign_site_diagnostic_rows(
+                sim,
+                center=(float(world_rect.centerx), float(world_rect.centery)),
+                zoom_scale=1.0,
+                clip_rect=world_rect,
+            )
+        )
     old_clip = screen.get_clip()
     screen.set_clip(world_rect)
     y = world_rect.y + 8
@@ -2963,7 +3057,7 @@ def _nearest_campaign_site_for_player(
 
     if isinstance(selected_site_id, str) and selected_site_id:
         selected_site = sim.state.world.sites.get(selected_site_id)
-        selected_anchor = _site_campaign_anchor_world(selected_site) if selected_site is not None else None
+        selected_anchor, _ = _site_world_position(selected_site) if selected_site is not None else (None, "unsupported")
         if (
             selected_site is not None
             and selected_site.location.get("space_id") == player.space_id
@@ -2976,7 +3070,7 @@ def _nearest_campaign_site_for_player(
     for site in sim.state.world.sites.values():
         if site.location.get("space_id") != player.space_id:
             continue
-        anchor = _site_campaign_anchor_world(site)
+        anchor, _ = _site_world_position(site)
         if anchor is None:
             continue
         distance = math.dist((player.position_x, player.position_y), anchor)

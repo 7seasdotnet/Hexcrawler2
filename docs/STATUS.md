@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke to validate generic campaign site visibility/selection/use (town + dungeon entrance) through the same Enter/E flow in `core_playable`.
+- **Next action:** Run a manual `python play.py` smoke to confirm canonical-save refresh + campaign-site diagnostic rows keep Greybridge and Old Stair visibly present/useable on first launch in `core_playable`.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,13 +104,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added a **generic campaign site placement/presentation path** in the viewer: site markers now use explicit continuous `location.campaign_anchor` coordinates when present, with deterministic hex-center fallback only for legacy/missing-anchor data.
-- Updated default `core_playable` map content so both **Greybridge (town/home)** and **Old Stair (dungeon entrance)** have explicit campaign anchors and render as distinct, readable campaign places.
-- Added generic **Enter/E site use flow** for selected-or-near campaign sites: towns/safe sites open the services panel through the same generic path, while dungeon entrances route to `enter_site`; targeted viewer tests now cover anchor placement, fallback, and interaction reachability.
-- Added bootstrap-parity verification coverage so `play.py` defaults and runtime `new_simulation` preserve the same viewer-map site visibility set (town + dungeon entrance) across reload/new-sim paths.
+- Identified and fixed the live-play root cause: `python play.py` preferred an existing canonical save over updated map content, so stale saves could keep campaign-site anchors/visibility out of sync even after renderer fixes; launcher now rebuilds when save world hash mismatches map world hash.
+- Scoped stale-save auto-refresh to the **default canonical startup path** (`DEFAULT_SAVE_PATH` + `DEFAULT_MAP_PATH`) so explicit user-provided save paths are not silently replaced.
+- Added a dedicated **campaign-site render truth path** in the viewer (campaign role): site projections are computed from site identity + anchor/fallback world coordinates and then drawn directly, bypassing generic marker scatter/slotting for major campaign sites.
+- Unified Enter/E site resolution with the same site world-position contract (explicit anchor first, deterministic legacy fallback) and added bounded read-only campaign-site diagnostics (loaded, world coords, projected screen coords, on-screen visibility), plus targeted tests for fallback/use parity and diagnostics bounds.
 
 ## Core-playable clarity note (this pass)
-- Campaign sites in the default `core_playable` path now use a **generic placement/presentation/interaction contract** (continuous anchor + marker + Enter/E action), rather than a Greybridge-only rendering path.
+- Campaign sites in the default `core_playable` path now use a **single visible/render-truth contract** (campaign-site projection + marker + Enter/E against the same site identity), rather than mixed marker-only vs interaction-only assumptions.
 - Full town/dungeon interior authoring and broad editor workflows remain later scope; this pass keeps towns as service nodes and dungeon entry as a campaign-to-local transition seam.
 
 ## Runtime profile note (C1)

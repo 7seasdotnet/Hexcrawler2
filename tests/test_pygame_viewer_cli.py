@@ -47,6 +47,7 @@ from hexcrawler.cli.pygame_viewer import (
     _selected_entity_lines,
     _selected_entity_recent_trace_rows,
     _slot_markers_for_hex,
+    _campaign_site_diagnostic_rows,
     _site_campaign_anchor_world,
     _use_campaign_site,
     _supported_viewer_topology,
@@ -282,6 +283,52 @@ def test_enter_or_e_generic_site_use_reaches_dungeon_entrance_path() -> None:
     assert "entering site" in message
     assert sim.input_log[-1].command_type == "enter_site"
     assert sim.input_log[-1].params == {"site_id": "demo_dungeon_entrance"}
+
+
+def test_enter_or_e_generic_site_use_uses_legacy_hex_fallback_when_anchor_missing() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    player = sim.state.entities[PLAYER_ID]
+    dungeon_site = sim.state.world.sites["demo_dungeon_entrance"]
+    dungeon_site.location.pop("campaign_anchor", None)
+    player.position_x = 0.0
+    player.position_y = 0.0
+
+    message, selected_site_id, open_site_panel = _use_campaign_site(
+        sim,
+        controller,
+        player=player,
+        selected_site_id="demo_dungeon_entrance",
+    )
+
+    assert selected_site_id == "demo_dungeon_entrance"
+    assert open_site_panel is False
+    assert "entering site" in message
+    assert sim.input_log[-1].command_type == "enter_site"
+    assert sim.input_log[-1].params == {"site_id": "demo_dungeon_entrance"}
+
+
+def test_campaign_site_diagnostics_report_loaded_sites_and_are_bounded() -> None:
+    class ClipRect:
+        def collidepoint(self, point: tuple[int, int]) -> bool:
+            x, y = point
+            return 0 <= x <= 1280 and 0 <= y <= 720
+
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    rows = _campaign_site_diagnostic_rows(
+        sim,
+        center=(640.0, 360.0),
+        zoom_scale=1.0,
+        clip_rect=ClipRect(),
+        max_rows=1,
+    )
+
+    assert rows[0].startswith("campaign_sites loaded=2 visible=2 showing=1")
+    assert len(rows) == 2
+    assert "site id=" in rows[1]
+    assert "world=(" in rows[1]
+    assert "screen=(" in rows[1]
+    assert "on_screen=yes" in rows[1]
 
 
 def test_queue_local_attack_for_click_routes_to_authoritative_attack_intent(monkeypatch: pytest.MonkeyPatch) -> None:
