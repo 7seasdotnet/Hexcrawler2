@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Validate this pass in a short gameplay smoke and then tune only small readability constants (HUD line density + local hostile pressure cadence) if needed without broadening scope.
+- **Next action:** Run a quick `core_playable` smoke focused on Greybridge enter/use-home panel legibility and confirm no extra combat/UI scope creep before any further tuning.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,13 +104,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Improved **core_playable Greybridge/home legibility**: campaign map now renders `home_greybridge` with a distinct high-priority home marker/label and explicit home-node service messaging (recovery + proof turn-in) that clearly states town interior is not implemented yet.
-- Improved reward loop feedback in viewer HUD/inspector surfaces: explicit proof-token gain and ration turn-in feedback lines are surfaced from authoritative events, while proof/ration counts and home turn-in availability remain continuously visible.
-- Improved local combat readability foundations without adding a second combat path: local hostile markers now visibly differentiate active vs incapacitated hostiles, and last attack outcomes show hit/miss + neutralization status through the existing authoritative `attack_intent` flow.
+- Improved **Greybridge/home usability in `core_playable`**: `home_greybridge` is now anchored at home-hex center with a larger persistent marker/label, and players can explicitly open a minimal enter/use home panel (Recover / Turn in Proof / Leave) via marker click, context action, or Enter while at home.
+- Improved menu/readability + reward clarity: context menu now wraps long rows with dynamic item heights; home and HUD surfaces clearly expose proof/ration counts, recover/turn-in availability reasons, explicit proof-token gain, and explicit ration gain feedback.
+- Improved local combat feel/readability foundations without changing authority seams: local hostile rendering is clearer (active vs incapacitated), and attack feedback remains routed through the single authoritative `attack_intent` path with direct hit/miss/neutralized messaging.
 
 ## Core-playable clarity note (this pass)
-- Greybridge/home visibility, reward gain/use feedback, and local combat readability were improved in the default `core_playable` runtime path.
-- Enterable town interiors and broader editor/town workflows remain a later milestone and were intentionally left out of this pass.
+- Greybridge is now a **minimal usable home node** in the default `core_playable` path via an explicit service panel (Recover, Turn in Proof, Leave) without requiring a full interior.
+- Full town interior/editor workflows remain later scope, and combat work here is foundational/readability-focused only (not a full redesign).
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).

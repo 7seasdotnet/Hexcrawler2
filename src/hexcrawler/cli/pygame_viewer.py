@@ -129,7 +129,12 @@ RECENT_SAVES_LIMIT = 8
 CONTEXT_MENU_WIDTH = 260
 CONTEXT_MENU_ROW_HEIGHT = 28
 CONTEXT_MENU_TEXT_PADDING_X = 10
+CONTEXT_MENU_TEXT_PADDING_Y = 6
+CONTEXT_MENU_MIN_WIDTH = 360
 LOCAL_VIEWPORT_FILL_RATIO = 0.72
+HOME_PANEL_WIDTH = 560
+HOME_PANEL_MIN_HEIGHT = 260
+HOME_PANEL_BUTTON_HEIGHT = 34
 
 MARKER_SCATTER_RADIUS_MIN = 8.0
 MARKER_SCATTER_RADIUS_MAX = 18.0
@@ -172,11 +177,24 @@ class ContextMenuItem:
     payload: str | None = None
 
 
+@dataclass(frozen=True)
+class ContextMenuRowLayout:
+    item_index: int
+    row_rect: pygame.Rect
+    lines: tuple[str, ...]
+
+
 @dataclass
 class ContextMenuState:
     pixel_x: int
     pixel_y: int
     items: tuple[ContextMenuItem, ...]
+
+
+@dataclass
+class HomePanelState:
+    visible: bool = False
+    site_id: str | None = None
 
 
 @dataclass
@@ -277,6 +295,26 @@ class SimulationController:
                 entity_id=self.entity_id,
                 command_type="enter_site",
                 params={"site_id": site_id},
+            )
+        )
+
+    def safe_recovery_intent(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=SAFE_RECOVERY_INTENT_COMMAND_TYPE,
+                params={},
+            )
+        )
+
+    def turn_in_reward_token_intent(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
+                params={},
             )
         )
 
@@ -1214,7 +1252,7 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
                 marker_id=f"site:{site.site_id}",
                 marker_kind="home_site" if is_home_site else "site",
                 color=(255, 206, 84) if is_home_site else SITE_COLORS.get(site.site_type, (245, 245, 120)),
-                radius=9 if is_home_site else 6,
+                radius=12 if is_home_site else 6,
                 label=HOME_SITE_LABEL if is_home_site else _truncate_label(site.name if site.name else site.site_id, max_length=12),
             ),
         )
@@ -1404,6 +1442,10 @@ def _stable_unit_pair(signature: str, attempt: int) -> tuple[float, float]:
 def _slot_markers_for_hex(center_x: float, center_y: float, markers: list[MarkerRecord], cell: MarkerCellRef) -> tuple[list[MarkerPlacement], int]:
     placements: list[MarkerPlacement] = []
     for marker in markers:
+        if marker.marker_kind == "home_site":
+            center_point = (int(round(center_x)), int(round(center_y)))
+            placements.append(MarkerPlacement(marker=marker, x=center_point[0], y=center_point[1]))
+            continue
         signature = _placement_signature(cell, marker)
         chosen_point: tuple[float, float] | None = None
         for attempt in range(MARKER_PLACEMENT_ATTEMPTS):
@@ -1550,12 +1592,20 @@ def _draw_spawned_entity(
     x = int(center[0] + world_x * size)
     y = int(center[1] + world_y * size)
     marker_color = (140, 225, 255)
+    marker_radius = 6
     if str(entity.template_id or "") == "encounter_hostile_v1":
         marker_color = (214, 104, 98)
+        marker_radius = 7
         if is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
             marker_color = (122, 124, 130)
-    pygame.draw.circle(screen, marker_color, (x, y), 5)
-    pygame.draw.circle(screen, (14, 24, 30), (x, y), 5, 1)
+            marker_radius = 8
+    pygame.draw.circle(screen, marker_color, (x, y), marker_radius)
+    pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
+    if str(entity.template_id or "") == "encounter_hostile_v1" and is_incapacitated_from_wounds(
+        entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY
+    ):
+        pygame.draw.line(screen, (30, 32, 38), (x - 4, y - 4), (x + 4, y + 4), 2)
+        pygame.draw.line(screen, (30, 32, 38), (x + 4, y - 4), (x - 4, y + 4), 2)
     screen.set_clip(old_clip)
 
 
@@ -1667,7 +1717,7 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
         quantity = int(details.get("quantity", 0)) if isinstance(details.get("quantity"), int) else 0
         incapacitated = int(details.get("incapacitated_hostiles", 0)) if isinstance(details.get("incapacitated_hostiles"), int) else 0
         if bool(reward_event.get("applied")) and quantity > 0:
-            lines.append(f"reward_feedback=Proof Token +{quantity} (local neutralized={incapacitated})")
+            lines.append(f"reward_feedback=PROOF TOKEN GAINED +{quantity} (local neutralized={incapacitated})")
         else:
             lines.append(f"reward_feedback=No proof token ({reward_event.get('reason', 'unknown')})")
 
@@ -1677,7 +1727,7 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
         granted_item = details.get("granted_item_id")
         granted_quantity = details.get("granted_quantity")
         if bool(turn_in_event.get("applied")) and granted_item == "rations" and isinstance(granted_quantity, int) and granted_quantity > 0:
-            lines.append(f"turn_in_feedback=Rations +{granted_quantity} (proof converted at home)")
+            lines.append(f"turn_in_feedback=RATIONS GAINED +{granted_quantity} (proof converted at home)")
         else:
             lines.append(f"turn_in_feedback=No ration gain ({turn_in_event.get('reason', 'unknown')})")
 
@@ -1703,6 +1753,103 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
                 f"by={attacker_id if isinstance(attacker_id, str) else '?'} reason={combat_event.get('reason', '?')}"
             )
     return lines
+
+
+def _home_panel_lines(sim: Simulation, *, entity: EntityState) -> list[str]:
+    lines: list[str] = []
+    at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
+    at_home = at_safe_site and _is_home_site(safe_site_id)
+    proof_tokens, rations = _inventory_counts_for_entity(sim, entity)
+    movement_multiplier = movement_multiplier_from_wounds(entity.wounds)
+    incapacitated = is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+    condition = "incapacitated" if incapacitated else ("slowed" if movement_multiplier < 1.0 else "mobile")
+    has_light_wound = any(isinstance(w, dict) and w.get("severity") == 1 for w in entity.wounds)
+    recovery_available = at_home and has_light_wound
+    turn_in_available = at_home and proof_tokens > 0
+    lines.extend(
+        [
+            "Greybridge Home Services (minimal node panel)",
+            f"location_status={'at_home' if at_home else 'away_from_home'}",
+            f"condition={condition} wound_total={wound_severity_total(entity.wounds)} move_mult={movement_multiplier:.2f}",
+            f"inventory proof_token={proof_tokens} rations={rations}",
+            f"recover={'AVAILABLE' if recovery_available else 'UNAVAILABLE'} "
+            f"reason={'ready' if recovery_available else ('severity1_wound_required' if at_home else 'must_be_at_home')}",
+            f"turn_in_proof={'AVAILABLE' if turn_in_available else 'UNAVAILABLE'} "
+            f"reason={'ready' if turn_in_available else ('proof_token_required' if at_home else 'must_be_at_home')}",
+            "town_interior=NOT_IMPLEMENTED (this panel is current honest interaction surface)",
+        ]
+    )
+    return lines
+
+
+def _draw_home_panel(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    viewport_rect: pygame.Rect,
+) -> dict[str, pygame.Rect]:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return {}
+    lines = _home_panel_lines(sim, entity=player)
+    panel_rect = _home_panel_rect(viewport_rect, len(lines))
+
+    pygame.draw.rect(screen, (20, 24, 34), panel_rect)
+    pygame.draw.rect(screen, (198, 208, 222), panel_rect, 2)
+    title = "Enter/Use Home: Greybridge"
+    screen.blit(font.render(title, True, (245, 245, 248)), (panel_rect.x + 12, panel_rect.y + 10))
+
+    body_rect = pygame.Rect(panel_rect.x + 12, panel_rect.y + 38, panel_rect.width - 24, panel_rect.height - 98)
+    _render_wrapped_lines(screen, font, body_rect, lines, scroll_offset=0)
+
+    buttons = _home_panel_button_rects(panel_rect)
+    for action, rect in buttons.items():
+        text = {
+            "recover": "Recover",
+            "turn_in": "Turn In Proof",
+            "close": "Leave/Close",
+        }[action]
+        pygame.draw.rect(screen, (46, 54, 76), rect)
+        pygame.draw.rect(screen, (170, 176, 194), rect, 1)
+        label = _truncate_text_to_pixel_width(text, font, rect.width - 14)
+        text_surface = font.render(label, True, (245, 245, 250))
+        text_pos = text_surface.get_rect(center=rect.center)
+        screen.blit(text_surface, text_pos)
+    return buttons
+
+
+def _home_panel_button_rects(panel_rect: pygame.Rect) -> dict[str, pygame.Rect]:
+    button_width = max(120, (panel_rect.width - 48) // 3)
+    button_top = panel_rect.bottom - HOME_PANEL_BUTTON_HEIGHT - 12
+    buttons: dict[str, pygame.Rect] = {}
+    for index, action in enumerate(("recover", "turn_in", "close")):
+        buttons[action] = pygame.Rect(
+            panel_rect.x + 12 + (index * (button_width + 12)),
+            button_top,
+            button_width,
+            HOME_PANEL_BUTTON_HEIGHT,
+        )
+    return buttons
+
+
+def _home_panel_rect(viewport_rect: pygame.Rect, line_count: int) -> pygame.Rect:
+    panel_width = min(HOME_PANEL_WIDTH, max(340, viewport_rect.width - 48))
+    panel_height = max(HOME_PANEL_MIN_HEIGHT, min(viewport_rect.height - 40, HOME_PANEL_MIN_HEIGHT + (line_count * 24)))
+    panel_rect = pygame.Rect(0, 0, panel_width, panel_height)
+    panel_rect.center = viewport_rect.center
+    return panel_rect
+
+
+def _home_panel_buttons_for_click(
+    sim: Simulation,
+    viewport_rect: pygame.Rect,
+) -> dict[str, pygame.Rect]:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return {}
+    lines = _home_panel_lines(sim, entity=player)
+    panel_rect = _home_panel_rect(viewport_rect, len(lines))
+    return _home_panel_button_rects(panel_rect)
 
 
 def _draw_hud(
@@ -1741,7 +1888,7 @@ def _draw_hud(
 
     lines = [
         context_line,
-        "WASD move | LMB select/attack-local | SPACE attack selected-local | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
+        "WASD move | LMB select/attack-local | SPACE attack selected-local | ENTER home panel at Greybridge | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
         "F7 focus selected entity | F12 toggle follow-selected",
         f"runtime={'paused' if runtime_state.paused else 'running'} | runtime_profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
         f"follow status={follow_state.status}",
@@ -2422,11 +2569,48 @@ def _draw_encounter_debug_panel(
     return section_rects, section_counts
 
 
-def _context_menu_rect(menu_state: ContextMenuState, viewport_rect: pygame.Rect) -> pygame.Rect:
-    height = max(1, len(menu_state.items)) * CONTEXT_MENU_ROW_HEIGHT
-    menu_rect = pygame.Rect(menu_state.pixel_x, menu_state.pixel_y, CONTEXT_MENU_WIDTH, height)
+def _context_menu_layout(
+    menu_state: ContextMenuState,
+    font: pygame.font.Font,
+    viewport_rect: pygame.Rect,
+) -> tuple[pygame.Rect, tuple[ContextMenuRowLayout, ...]]:
+    width = max(CONTEXT_MENU_WIDTH, CONTEXT_MENU_MIN_WIDTH)
+    max_line_width = max(1, width - (2 * CONTEXT_MENU_TEXT_PADDING_X))
+    line_height = max(14, int(font.get_linesize()))
+
+    provisional_rows: list[tuple[tuple[str, ...], int]] = []
+    total_height = 0
+    for item in menu_state.items:
+        lines = tuple(_wrap_text_to_pixel_width(item.label, font, max_line_width))
+        row_height = max(CONTEXT_MENU_ROW_HEIGHT, (len(lines) * line_height) + (2 * CONTEXT_MENU_TEXT_PADDING_Y))
+        provisional_rows.append((lines, row_height))
+        total_height += row_height
+
+    menu_rect = pygame.Rect(menu_state.pixel_x, menu_state.pixel_y, width, max(1, total_height))
     menu_rect.clamp_ip(viewport_rect)
-    return menu_rect
+
+    rows: list[ContextMenuRowLayout] = []
+    row_top = menu_rect.y
+    for item_index, (lines, row_height) in enumerate(provisional_rows):
+        row_rect = pygame.Rect(menu_rect.x, row_top, menu_rect.width, row_height)
+        rows.append(ContextMenuRowLayout(item_index=item_index, row_rect=row_rect, lines=lines))
+        row_top += row_height
+    return menu_rect, tuple(rows)
+
+
+def _context_menu_item_index_at_pixel(
+    menu_state: ContextMenuState,
+    font: pygame.font.Font,
+    viewport_rect: pygame.Rect,
+    pixel_pos: tuple[int, int],
+) -> int | None:
+    menu_rect, rows = _context_menu_layout(menu_state, font, viewport_rect)
+    if not menu_rect.collidepoint(pixel_pos):
+        return None
+    for row in rows:
+        if row.row_rect.collidepoint(pixel_pos):
+            return row.item_index
+    return None
 
 
 def _draw_context_menu(
@@ -2438,17 +2622,21 @@ def _draw_context_menu(
     if menu_state is None:
         return None
 
-    menu_rect = _context_menu_rect(menu_state, viewport_rect)
+    menu_rect, rows = _context_menu_layout(menu_state, font, viewport_rect)
     pygame.draw.rect(screen, (32, 34, 44), menu_rect)
     pygame.draw.rect(screen, (185, 185, 200), menu_rect, 1)
 
-    for index, item in enumerate(menu_state.items):
-        row_rect = pygame.Rect(menu_rect.x, menu_rect.y + (index * CONTEXT_MENU_ROW_HEIGHT), menu_rect.width, CONTEXT_MENU_ROW_HEIGHT)
+    line_height = max(14, int(font.get_linesize()))
+    for row in rows:
+        item = menu_state.items[row.item_index]
+        row_rect = row.row_rect
         pygame.draw.line(screen, (64, 68, 84), (row_rect.x, row_rect.bottom), (row_rect.right, row_rect.bottom), 1)
-        max_label_width = menu_rect.width - (2 * CONTEXT_MENU_TEXT_PADDING_X)
-        label_text = _truncate_text_to_pixel_width(item.label, font, max_label_width)
-        label = font.render(label_text, True, (245, 245, 245))
-        screen.blit(label, (row_rect.x + CONTEXT_MENU_TEXT_PADDING_X, row_rect.y + 5))
+        text_y = row_rect.y + CONTEXT_MENU_TEXT_PADDING_Y
+        for line in row.lines:
+            label_text = _truncate_text_to_pixel_width(line, font, max(1, row_rect.width - (2 * CONTEXT_MENU_TEXT_PADDING_X)))
+            label = font.render(label_text, True, (245, 245, 245))
+            screen.blit(label, (row_rect.x + CONTEXT_MENU_TEXT_PADDING_X, text_y))
+            text_y += line_height
     return menu_rect
 
 
@@ -2661,6 +2849,22 @@ def _queue_selection_command_for_click(
         return f"selected {selected_entity}"
     controller.clear_selected_entity()
     return "selection cleared"
+
+
+def _open_home_panel_from_marker_click(
+    sim: Simulation,
+    *,
+    pixel_pos: tuple[int, int],
+    center: tuple[float, float],
+    zoom_scale: float,
+) -> str | None:
+    marker = _find_world_marker_at_pixel(sim, pixel_pos, center, zoom_scale, radius_px=12.0)
+    if marker is None or marker.marker_kind != "home_site":
+        return None
+    site_id = _marker_payload_id(marker, expected_kind="site")
+    if site_id is None or not _is_home_site(site_id):
+        return None
+    return site_id
 
 
 def _selected_entity_lines(
@@ -3081,9 +3285,15 @@ def run_pygame_viewer(
                             items.append(ContextMenuItem(label=f"Enter {site_label}", action="enter_site", payload=site.site_id))
                         elif site is not None and _is_home_site(site.site_id):
                             items.append(ContextMenuItem(label="Greybridge: campaign home node", action="noop"))
-                            items.append(ContextMenuItem(label="- Recover (safe_recovery_intent)", action="noop"))
-                            items.append(ContextMenuItem(label="- Turn in Proof Token for Rations", action="noop"))
-                            items.append(ContextMenuItem(label="- Town interior not implemented yet", action="noop"))
+                            items.append(ContextMenuItem(label="Enter/Use Home Node", action="open_home_panel", payload=site.site_id))
+                            items.append(ContextMenuItem(label="Recover (safe_recovery_intent)", action="home_recover"))
+                            items.append(ContextMenuItem(label="Turn in Proof -> Rations", action="home_turn_in"))
+                            items.append(
+                                ContextMenuItem(
+                                    label="Note: this is a minimal service panel; full town interior is not implemented yet.",
+                                    action="noop",
+                                )
+                            )
                     elif marker.marker_kind == "door":
                         door_id = _marker_payload_id(marker, expected_kind="door")
                         if door_id is None:
@@ -3192,6 +3402,7 @@ def run_pygame_viewer(
     follow_state = FollowSelectionState()
     show_local_arena_overlay = False
     debug_panel_cache = DebugPanelRenderCache()
+    home_panel_state = HomePanelState()
 
     accumulator = 0.0
     running = True
@@ -3222,7 +3433,11 @@ def run_pygame_viewer(
                 viewport_rect = layout.world_view
                 local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_ESCAPE:
-                running = False
+                if home_panel_state.visible:
+                    home_panel_state.visible = False
+                    status_message = "home panel closed"
+                else:
+                    running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F2:
                 paused = runtime_controller.toggle_pause()
                 status_message = f"simulation {'paused' if paused else 'running'}"
@@ -3333,6 +3548,14 @@ def run_pygame_viewer(
                     ):
                         controller.attack_entity(target.entity_id)
                         status_message = f"attack queued -> {target.entity_id}"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_RETURN:
+                player = sim.state.entities.get(PLAYER_ID)
+                if player is not None:
+                    at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, player)
+                    if at_safe_site and _is_home_site(safe_site_id):
+                        home_panel_state.visible = True
+                        home_panel_state.site_id = safe_site_id
+                        status_message = "Greybridge home panel opened"
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(
@@ -3427,10 +3650,8 @@ def run_pygame_viewer(
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
                 context_menu = build_context_menu(event.pos)
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
-                menu_rect = _context_menu_rect(context_menu, viewport_rect)
-                if menu_rect.collidepoint(event.pos):
-                    row_index = (event.pos[1] - menu_rect.y) // CONTEXT_MENU_ROW_HEIGHT
-                    if 0 <= row_index < len(context_menu.items):
+                row_index = _context_menu_item_index_at_pixel(context_menu, font, viewport_rect, event.pos)
+                if row_index is not None and 0 <= row_index < len(context_menu.items):
                         item = context_menu.items[row_index]
                         if item.action == "move_here" and item.payload is not None:
                             x_str, y_str = item.payload.split(",", 1)
@@ -3443,6 +3664,16 @@ def run_pygame_viewer(
                             load_simulation_from_path(item.payload)
                         elif item.action == "enter_site" and item.payload is not None:
                             controller.enter_site(item.payload)
+                        elif item.action == "open_home_panel":
+                            home_panel_state.visible = True
+                            home_panel_state.site_id = item.payload
+                            status_message = "Greybridge home panel opened"
+                        elif item.action == "home_recover":
+                            controller.safe_recovery_intent()
+                            status_message = "recover intent queued"
+                        elif item.action == "home_turn_in":
+                            controller.turn_in_reward_token_intent()
+                            status_message = "turn-in intent queued"
                         elif item.action == "explore" and item.payload is not None:
                             action, duration_str = item.payload.split(":", 1)
                             controller.explore_intent(action, int(duration_str))
@@ -3452,7 +3683,26 @@ def run_pygame_viewer(
                         elif item.action == "return_to_origin":
                             controller.end_local_encounter()
                 context_menu = None
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and home_panel_state.visible:
+                home_buttons = _home_panel_buttons_for_click(sim, viewport_rect)
+                if home_buttons.get("recover") is not None and home_buttons["recover"].collidepoint(event.pos):
+                    controller.safe_recovery_intent()
+                    status_message = "recover intent queued"
+                elif home_buttons.get("turn_in") is not None and home_buttons["turn_in"].collidepoint(event.pos):
+                    controller.turn_in_reward_token_intent()
+                    status_message = "turn-in intent queued"
+                elif home_buttons.get("close") is not None and home_buttons["close"].collidepoint(event.pos):
+                    home_panel_state.visible = False
+                    status_message = "home panel closed"
+                else:
+                    panel_player = sim.state.entities.get(PLAYER_ID)
+                    if panel_player is not None:
+                        panel_rect = _home_panel_rect(viewport_rect, len(_home_panel_lines(sim, entity=panel_player)))
+                        if not panel_rect.collidepoint(event.pos):
+                            home_panel_state.visible = False
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and viewport_rect.collidepoint(event.pos):
+                if home_panel_state.visible:
+                    continue
                 if _pending_encounter_offer(sim) is not None:
                     if offer_buttons.get("fight") is not None and offer_buttons["fight"].collidepoint(event.pos):
                         controller.accept_encounter_offer()
@@ -3470,6 +3720,17 @@ def run_pygame_viewer(
                         else:
                             status_message = f"encounter offer flee pending after {advanced} ticks (cap reached)"
                         continue
+                site_id = _open_home_panel_from_marker_click(
+                    sim,
+                    pixel_pos=event.pos,
+                    center=world_center,
+                    zoom_scale=world_zoom_scale,
+                )
+                if site_id is not None:
+                    home_panel_state.visible = True
+                    home_panel_state.site_id = site_id
+                    status_message = "Greybridge home panel opened"
+                    continue
                 attack_status = _queue_local_attack_for_click(
                     sim,
                     controller,
@@ -3580,6 +3841,8 @@ def run_pygame_viewer(
         )
         _draw_context_menu(screen, font, context_menu, viewport_rect)
         offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect)
+        if home_panel_state.visible:
+            _draw_home_panel(screen, sim, font, viewport_rect)
         pygame_module.display.flip()
 
     pygame_module.quit()

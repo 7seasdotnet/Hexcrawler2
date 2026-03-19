@@ -5,45 +5,51 @@ import pytest
 
 from hexcrawler.cli.runtime_profiles import CORE_PLAYABLE, EXPERIMENTAL_WORLD
 from hexcrawler.cli.pygame_viewer import (
+    CONTEXT_MENU_ROW_HEIGHT,
     PLAYER_ID,
     DebugFilterState,
+    MarkerPlacement,
+    MarkerRecord,
+    PENDING_OFFER_DECISION_TICK_CAP,
     RumorPanelState,
     SimulationController,
     ViewerRuntimeController,
     ViewerRuntimeState,
-    PENDING_OFFER_DECISION_TICK_CAP,
-    _consume_rumor_outcome,
-    _refresh_rumor_query,
+    _build_debug_filter_trace_rows,
     _build_parser,
     _build_viewer_simulation,
-    MarkerPlacement,
-    MarkerRecord,
-    _find_entity_at_pixel,
-    _find_world_marker_at_pixel,
-    _find_world_marker_candidates_at_pixel,
-    _marker_cell_from_location,
-    _marker_payload_id,
-    _slot_markers_for_hex,
-    _load_viewer_simulation,
-    _save_viewer_simulation,
     _calendar_presentation,
-    _find_safe_site_status,
-    _player_feedback_lines,
-    _queue_local_attack_for_click,
-    _queue_selection_command_for_click,
-    _selected_entity_for_click,
-    _selected_entity_lines,
-    _selected_entity_recent_trace_rows,
-    _supported_viewer_topology,
-    _viewer_topology_diagnostic,
-    _world_marker_placements,
-    _event_trace_entry_mentions_entity,
-    _build_debug_filter_trace_rows,
+    _consume_rumor_outcome,
+    _context_menu_item_index_at_pixel,
+    _context_menu_layout,
     _cycle_debug_event_type_filter,
     _cycle_debug_filter_mode,
     _debug_filter_label,
     _debug_rows_by_section,
+    _event_trace_entry_mentions_entity,
+    _find_entity_at_pixel,
+    _find_safe_site_status,
+    _find_world_marker_at_pixel,
+    _find_world_marker_candidates_at_pixel,
     _format_debug_trace_row,
+    _home_panel_buttons_for_click,
+    _home_panel_lines,
+    _load_viewer_simulation,
+    _marker_cell_center,
+    _marker_cell_from_location,
+    _marker_payload_id,
+    _player_feedback_lines,
+    _queue_local_attack_for_click,
+    _queue_selection_command_for_click,
+    _refresh_rumor_query,
+    _save_viewer_simulation,
+    _selected_entity_for_click,
+    _selected_entity_lines,
+    _selected_entity_recent_trace_rows,
+    _slot_markers_for_hex,
+    _supported_viewer_topology,
+    _viewer_topology_diagnostic,
+    _world_marker_placements,
 )
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE
 from hexcrawler.sim.core import EntityState
@@ -115,6 +121,21 @@ def test_world_markers_include_distinct_greybridge_home_marker() -> None:
     assert home_markers
     assert any(marker.label == "GREYBRIDGE HOME" for marker in home_markers)
     assert all(marker.radius >= 9 for marker in home_markers)
+
+
+def test_greybridge_home_marker_is_anchored_at_hex_center() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    world_center = (640.0, 360.0)
+    site = sim.state.world.sites["home_greybridge"]
+    home_cell = _marker_cell_from_location(site.location, OVERWORLD_HEX_TOPOLOGY)
+    assert home_cell is not None
+
+    expected_x, expected_y = _marker_cell_center(home_cell, world_center, zoom_scale=1.0)
+    markers = _world_marker_placements(sim, center=world_center, zoom_scale=1.0)
+    placement = next(current for current in markers if current.marker.marker_kind == "home_site")
+
+    assert placement.x == int(round(expected_x))
+    assert placement.y == int(round(expected_y))
 
 
 def test_safe_site_detection_resolves_home_town_for_player() -> None:
@@ -277,6 +298,19 @@ def test_simulation_controller_appends_encounter_offer_commands() -> None:
     assert sim.input_log[-2].params == {"entity_id": PLAYER_ID}
     assert sim.input_log[-1].command_type == FLEE_ENCOUNTER_OFFER_INTENT
     assert sim.input_log[-1].params == {"entity_id": PLAYER_ID}
+
+
+def test_simulation_controller_appends_home_service_commands() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    controller.safe_recovery_intent()
+    controller.turn_in_reward_token_intent()
+
+    assert sim.input_log[-2].command_type == "safe_recovery_intent"
+    assert sim.input_log[-2].entity_id == PLAYER_ID
+    assert sim.input_log[-1].command_type == "turn_in_reward_token_intent"
+    assert sim.input_log[-1].entity_id == PLAYER_ID
 
 
 def test_rumor_panel_queries_outcomes_without_mutating_world_hash() -> None:
@@ -1051,9 +1085,64 @@ def test_player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution() -
 
     lines = _player_feedback_lines(sim, entity=scout)
 
-    assert any("Proof Token +1" in line for line in lines)
-    assert any("Rations +1" in line for line in lines)
+    assert any("PROOF TOKEN GAINED +1" in line for line in lines)
+    assert any("RATIONS GAINED +1" in line for line in lines)
     assert any("attack_feedback=HIT" in line and "neutralized=yes" in line for line in lines)
+
+
+def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:
+    viewer_module._ensure_pygame_imported()
+    viewer_module.pygame.font.init()
+    font = viewer_module.pygame.font.SysFont("consolas", 18)
+    menu_state = viewer_module.ContextMenuState(
+        pixel_x=24,
+        pixel_y=24,
+        items=(
+            viewer_module.ContextMenuItem(
+                label="Note: this is a minimal service panel; full town interior is not implemented yet.",
+                action="noop",
+            ),
+            viewer_module.ContextMenuItem(label="Enter/Use Home Node", action="open_home_panel", payload="home_greybridge"),
+        ),
+    )
+    viewport = viewer_module.pygame.Rect(0, 0, 1024, 768)
+
+    _menu_rect, rows = _context_menu_layout(menu_state, font, viewport)
+
+    assert len(rows) == 2
+    assert rows[0].row_rect.height > CONTEXT_MENU_ROW_HEIGHT
+    assert len(rows[0].lines) >= 2
+    first_item_point = (rows[0].row_rect.x + 4, rows[0].row_rect.y + 4)
+    second_item_point = (rows[1].row_rect.x + 4, rows[1].row_rect.y + 4)
+    assert _context_menu_item_index_at_pixel(menu_state, font, viewport, first_item_point) == 0
+    assert _context_menu_item_index_at_pixel(menu_state, font, viewport, second_item_point) == 1
+
+
+def test_home_panel_lines_are_honest_and_show_home_service_availability() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    container_id = player.inventory_container_id
+    assert container_id is not None
+    sim.state.world.containers[container_id].items["proof_token"] = 1
+    player.wounds = [{"severity": 1, "region": "arm"}]
+
+    lines = _home_panel_lines(sim, entity=player)
+
+    assert any("Greybridge Home Services (minimal node panel)" in line for line in lines)
+    assert any("recover=AVAILABLE" in line for line in lines)
+    assert any("turn_in_proof=AVAILABLE" in line for line in lines)
+    assert any("town_interior=NOT_IMPLEMENTED" in line for line in lines)
+
+
+def test_home_panel_button_rects_are_bounded_and_exposed() -> None:
+    viewer_module._ensure_pygame_imported()
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    viewport = viewer_module.pygame.Rect(0, 0, 1280, 720)
+
+    buttons = _home_panel_buttons_for_click(sim, viewport)
+
+    assert set(buttons) == {"recover", "turn_in", "close"}
+    assert all(viewport.contains(rect) for rect in buttons.values())
 
 
 def test_pending_offer_modal_uses_source_and_title_fields() -> None:
