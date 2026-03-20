@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke to confirm the C6 minimal `core_playable` campaign scene stays sparse/legible (player + Greybridge + Old Stair + one patrol) after startup and after `F4` new simulation reset.
+- **Next action:** Run a manual `python play.py` smoke and verify the C7 startup-truth banner reports `core_playable` source map/save and major-site/patrol counts while default launch and `F4` both preserve the Greybridge + Old Stair + single patrol scene.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -86,6 +86,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_play_launcher.py tests/test_pygame_viewer_cli.py -k "core_playable_default_scene_is_sparse_and_contains_single_patrol or play_launcher_default_core_playable_rebuilds_when_scene_is_missing or play_launcher_startup_truth_log_includes_scene_and_paths or viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites"`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_reward_turn_in_loop_p5.py tests/test_calendar_time.py`
 - `PYTHONPATH=src python - <<'PY' ... core_playable visible-loop smoke (home visibility + local attack intent + hostile incapacitation + reward turn-in + calendar tie-to-tick) ... PY`
 - `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py tests/test_pygame_viewer_cli.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py tests/test_reward_turn_in_loop_p5.py`
@@ -104,10 +105,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added a C6 campaign presentation reset for default `core_playable`: explicit campaign render layer ordering in code, plus a sparse default scene contract that preserves only major-site readability and actor visibility on launch.
-- Added deterministic default-scene composition guardrails in viewer bootstrap/new-sim: `core_playable` now guarantees one visible hostile patrol entity plus the two major sites (Greybridge + Old Stair), and this same composition is preserved on `F4` new simulation.
-- Corrected save-load boundary behavior: loading an existing save in `core_playable` now preserves saved patrol/world composition (no forced demo-scene normalization on load), with a targeted regression test.
-- Quarantined incidental campaign-map marker noise from the default `core_playable` presentation surface (signals/tracks/spawn descriptors), while preserving those systems behind non-default profiles (for example `experimental_world`) and keeping interior/editor expansion in later scope.
+- Enforced C7 default startup truth in `play.py`: default `core_playable` launch now validates the canonical save against required scene composition (Greybridge home town + Old Stair dungeon entrance + hostile patrol) and rebuilds the default canonical save when stale/mismatched.
+- Added explicit startup-truth diagnostics in launcher output: runtime profile, source map path, source save path, rebuild/reuse action, major site ids/types, and home/dungeon/patrol counts are now printed at launch.
+- Preserved explicit save authority boundaries: non-default explicit `--load-save` paths remain authoritative/reused when present (no silent normalization), while `F4` parity continues through existing viewer new-sim scene tests.
 
 ## Core-playable clarity note (this pass)
 - Campaign sites in the default `core_playable` path now use a **single visible/render-truth contract** (campaign-site projection + marker + Enter/E against the same site identity), with explicit campaign render-layer ownership so site icons/labels do not get visually buried by incidental map overlays.
