@@ -5,6 +5,10 @@ import pytest
 
 from hexcrawler.cli.runtime_profiles import CORE_PLAYABLE, EXPERIMENTAL_WORLD
 from hexcrawler.cli.pygame_viewer import (
+    CAMPAIGN_RENDER_LAYER_ORDER,
+    CORE_PLAYABLE_DEFAULT_PATROL_ID,
+    CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+    CORE_PLAYABLE_MAJOR_SITE_IDS,
     CONTEXT_MENU_ROW_HEIGHT,
     PLAYER_ID,
     DebugFilterState,
@@ -131,6 +135,57 @@ def test_world_markers_include_generic_town_and_dungeon_site_markers() -> None:
     assert town_markers[0].radius > dungeon_markers[0].radius
     assert town_markers[0].color == (80, 160, 255)
     assert dungeon_markers[0].color == (210, 85, 85)
+
+
+def test_core_playable_default_scene_is_sparse_and_contains_single_patrol() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+
+    assert tuple(sorted(sim.state.world.sites.keys())) == tuple(sorted(CORE_PLAYABLE_MAJOR_SITE_IDS))
+    patrols = [entity for entity in sim.state.entities.values() if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE]
+    assert len(patrols) == 1
+    assert patrols[0].stats.get("role") == "patrol"
+
+
+def test_core_playable_campaign_marker_surface_omits_incidental_world_records() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    sim.state.world.signals.append(
+        {
+            "signal_uid": "sig:test",
+            "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+        }
+    )
+    sim.state.world.tracks.append(
+        {
+            "track_uid": "trk:test",
+            "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+        }
+    )
+    sim.state.world.append_spawn_descriptor(
+        {
+            "action_uid": "spawn:test",
+            "location": {"space_id": "overworld", "topology_type": "overworld_hex", "coord": {"q": 0, "r": 0}},
+        }
+    )
+
+    markers = _world_marker_placements(sim, center=(640.0, 360.0), zoom_scale=1.0, include_incidental_records=False)
+    marker_kinds = {placement.marker.marker_kind for placement in markers}
+
+    assert "site" in marker_kinds
+    assert "entity" in marker_kinds
+    assert "signal" not in marker_kinds
+    assert "track" not in marker_kinds
+    assert "spawn_desc" not in marker_kinds
+
+
+def test_campaign_render_layer_order_is_explicit_and_stable() -> None:
+    assert CAMPAIGN_RENDER_LAYER_ORDER == (
+        "map_base",
+        "site_icons",
+        "site_labels",
+        "actors",
+        "overlays_selection",
+        "hud_panels_modals",
+    )
 
 
 def test_site_marker_uses_campaign_anchor_position_instead_of_hex_center() -> None:
@@ -329,6 +384,48 @@ def test_campaign_site_diagnostics_report_loaded_sites_and_are_bounded() -> None
     assert "world=(" in rows[1]
     assert "screen=(" in rows[1]
     assert "on_screen=yes" in rows[1]
+
+
+def test_viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE, seed=7)
+    runtime_state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/viewer_map.json",
+        with_encounters=True,
+        current_save_path="saves/session_save.json",
+        runtime_profile=CORE_PLAYABLE,
+    )
+    runtime = ViewerRuntimeController(runtime_state)
+
+    replaced = runtime.new_simulation(seed=55)
+
+    assert tuple(sorted(replaced.state.world.sites.keys())) == tuple(sorted(CORE_PLAYABLE_MAJOR_SITE_IDS))
+    patrol_ids = sorted(
+        entity.entity_id for entity in replaced.state.entities.values() if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE
+    )
+    assert len(patrol_ids) == 1
+
+
+def test_load_simulation_preserves_saved_patrol_composition_without_core_scene_normalization(tmp_path: Path) -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE, seed=7)
+    sim.add_entity(
+        EntityState(
+            entity_id="patrol:extra_saved",
+            position_x=1.8,
+            position_y=0.7,
+            template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+            stats={"faction_id": "hostile", "role": "patrol"},
+        )
+    )
+    save_path = tmp_path / "custom_scene_save.json"
+    _save_viewer_simulation(sim, str(save_path))
+
+    loaded = _load_viewer_simulation(str(save_path), runtime_profile=CORE_PLAYABLE)
+    patrol_ids = sorted(
+        entity.entity_id for entity in loaded.state.entities.values() if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE
+    )
+
+    assert patrol_ids == ["danger:raider_patrol_alpha", "patrol:extra_saved"]
 
 
 def test_queue_local_attack_for_click_routes_to_authoritative_attack_intent(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -363,6 +363,18 @@ Before landing a new system, confirm:
 - **Contract:** Interpolation alpha is derived from wall-clock frame time relative to tick duration and clamped to `[0, 1]`.
 - **Contract:** Interpolated render positions are presentation-only and must never feed back into simulation state, command logs, RNG, or hashing.
 
+## 10A) Campaign Presentation Layering Contract (C6)
+- **Space role scope:** `campaign` (viewer/presentation only).
+- **Contract:** Campaign presentation uses explicit ordered render ownership:
+  1. map base,
+  2. site icons,
+  3. site labels,
+  4. actors/moving groups,
+  5. overlays/selection,
+  6. HUD/panels/modals.
+- **Contract:** Campaign major sites render from site identity + campaign anchor/fallback world position; major-site visibility must not depend on generic marker scatter/declutter behavior.
+- **Contract:** Enter/E campaign site use resolves against the same site identity/path used for campaign rendering (no parallel site interaction path).
+
 ## 11) Replay Forensics CLI Contract
 - **Contract:** `python -m hexcrawler.cli.replay_tool <save_path> --ticks N` replays forward from the **current saved simulation state** (not reconstruction from tick 0).
 - **Contract:** Replay tool uses the same simulation stepping path and command execution semantics as runtime simulation; no alternate replay gameplay logic is introduced.

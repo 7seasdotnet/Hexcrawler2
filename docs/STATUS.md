@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke to confirm canonical-save refresh + campaign-site diagnostic rows keep Greybridge and Old Stair visibly present/useable on first launch in `core_playable`.
+- **Next action:** Run a manual `python play.py` smoke to confirm the C6 minimal `core_playable` campaign scene stays sparse/legible (player + Greybridge + Old Stair + one patrol) after startup and after `F4` new simulation reset.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,13 +104,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Identified and fixed the live-play root cause: `python play.py` preferred an existing canonical save over updated map content, so stale saves could keep campaign-site anchors/visibility out of sync even after renderer fixes; launcher now rebuilds when save world hash mismatches map world hash.
-- Scoped stale-save auto-refresh to the **default canonical startup path** (`DEFAULT_SAVE_PATH` + `DEFAULT_MAP_PATH`) so explicit user-provided save paths are not silently replaced.
-- Added a dedicated **campaign-site render truth path** in the viewer (campaign role): site projections are computed from site identity + anchor/fallback world coordinates and then drawn directly, bypassing generic marker scatter/slotting for major campaign sites.
-- Unified Enter/E site resolution with the same site world-position contract (explicit anchor first, deterministic legacy fallback) and added bounded read-only campaign-site diagnostics (loaded, world coords, projected screen coords, on-screen visibility), plus targeted tests for fallback/use parity and diagnostics bounds.
+- Added a C6 campaign presentation reset for default `core_playable`: explicit campaign render layer ordering in code, plus a sparse default scene contract that preserves only major-site readability and actor visibility on launch.
+- Added deterministic default-scene composition guardrails in viewer bootstrap/new-sim: `core_playable` now guarantees one visible hostile patrol entity plus the two major sites (Greybridge + Old Stair), and this same composition is preserved on `F4` new simulation.
+- Corrected save-load boundary behavior: loading an existing save in `core_playable` now preserves saved patrol/world composition (no forced demo-scene normalization on load), with a targeted regression test.
+- Quarantined incidental campaign-map marker noise from the default `core_playable` presentation surface (signals/tracks/spawn descriptors), while preserving those systems behind non-default profiles (for example `experimental_world`) and keeping interior/editor expansion in later scope.
 
 ## Core-playable clarity note (this pass)
-- Campaign sites in the default `core_playable` path now use a **single visible/render-truth contract** (campaign-site projection + marker + Enter/E against the same site identity), rather than mixed marker-only vs interaction-only assumptions.
+- Campaign sites in the default `core_playable` path now use a **single visible/render-truth contract** (campaign-site projection + marker + Enter/E against the same site identity), with explicit campaign render-layer ownership so site icons/labels do not get visually buried by incidental map overlays.
 - Full town/dungeon interior authoring and broad editor workflows remain later scope; this pass keeps towns as service nodes and dungeon entry as a campaign-to-local transition seam.
 
 ## Runtime profile note (C1)
