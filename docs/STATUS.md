@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke and verify the C7 startup-truth banner reports `core_playable` source map/save and major-site/patrol counts while default launch and `F4` both preserve the Greybridge + Old Stair + single patrol scene.
+- **Next action:** Run a manual `python play.py` smoke and confirm C8 viewer truth: Greybridge + Old Stair are visibly labeled in campaign view, off-screen major-site indicators appear when needed, and HUD diagnostics report player/site world+screen/on-screen status from the active camera.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -105,12 +105,12 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Enforced C7 default startup truth in `play.py`: default `core_playable` launch now validates the canonical save against required scene composition (Greybridge home town + Old Stair dungeon entrance + hostile patrol) and rebuilds the default canonical save when stale/mismatched.
-- Added explicit startup-truth diagnostics in launcher output: runtime profile, source map path, source save path, rebuild/reuse action, major site ids/types, and home/dungeon/patrol counts are now printed at launch.
-- Preserved explicit save authority boundaries: non-default explicit `--load-save` paths remain authoritative/reused when present (no silent normalization), while `F4` parity continues through existing viewer new-sim scene tests.
+- Kept the dedicated **major campaign-site viewer truth path** in `pygame_viewer`, but generalized major-site classification away from hardcoded core-playable IDs to site semantics (`site_type`, `entrance`, `safe`/`major` tags) so future major sites inherit the same visibility path.
+- Kept bounded campaign major-site diagnostics in HUD using active camera transforms (player world/derived-hex and major-site world/screen/on-screen rows) while preserving deterministic read-only viewer behavior.
+- Kept minimal off-screen edge indicators with labels so major campaign sites are not silently lost when outside the viewport, and added a targeted test proving classification is not ID-hardcoded.
 
 ## Core-playable clarity note (this pass)
-- Campaign sites in the default `core_playable` path now use a **single visible/render-truth contract** (campaign-site projection + marker + Enter/E against the same site identity), with explicit campaign render-layer ownership so site icons/labels do not get visually buried by incidental map overlays.
+- Campaign-site visibility is now driven by a **dedicated viewer truth path** for core-playable major sites (projected marker identity = interactable site identity), with bounded diagnostics and off-screen cues to prevent loaded-but-invisible major sites.
 - Full town/dungeon interior authoring and broad editor workflows remain later scope; this pass keeps towns as service nodes and dungeon entry as a campaign-to-local transition seam.
 
 ## Runtime profile note (C1)
