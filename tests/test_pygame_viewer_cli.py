@@ -42,6 +42,8 @@ from hexcrawler.cli.pygame_viewer import (
     _marker_cell_center,
     _marker_cell_from_location,
     _marker_payload_id,
+    _major_campaign_site_projections,
+    _major_site_visibility_diagnostic_rows,
     _player_feedback_lines,
     _queue_local_attack_for_click,
     _queue_selection_command_for_click,
@@ -384,6 +386,107 @@ def test_campaign_site_diagnostics_report_loaded_sites_and_are_bounded() -> None
     assert "world=(" in rows[1]
     assert "screen=(" in rows[1]
     assert "on_screen=yes" in rows[1]
+
+
+def test_major_campaign_site_projection_contains_core_playable_sites() -> None:
+    class ClipRect:
+        def collidepoint(self, point: tuple[int, int]) -> bool:
+            x, y = point
+            return 0 <= x <= 1280 and 0 <= y <= 720
+
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    rows = _major_campaign_site_projections(sim, center=(640.0, 360.0), zoom_scale=1.0, clip_rect=ClipRect())
+    ids = {row.site_id for row in rows}
+
+    assert "home_greybridge" in ids
+    assert "demo_dungeon_entrance" in ids
+
+
+def test_major_campaign_projection_is_not_hardcoded_to_core_site_ids() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    sim.state.world.sites["outpost:stonewatch"] = SiteRecord(
+        site_id="outpost:stonewatch",
+        site_type="town",
+        location={
+            "space_id": "overworld",
+            "topology_type": "overworld_hex",
+            "coord": {"q": 1, "r": 0},
+            "campaign_anchor": {"x": 1.2, "y": 0.4},
+        },
+        name="Stonewatch",
+        tags=[],
+    )
+
+    projected = _major_campaign_site_projections(sim, center=(640.0, 360.0), zoom_scale=1.0)
+    projected_ids = {row.site_id for row in projected}
+
+    assert "outpost:stonewatch" in projected_ids
+
+
+def test_major_site_markers_bypass_scatter_slotting_path() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    center = (640.0, 360.0)
+    site = sim.state.world.sites["home_greybridge"]
+    anchor = _site_campaign_anchor_world(site)
+    assert anchor is not None
+    expected_x, expected_y = viewer_module._world_to_pixel(anchor[0], anchor[1], center, 1.0)
+
+    original_slotter = viewer_module._slot_markers_for_hex
+    viewer_module._slot_markers_for_hex = lambda *_args, **_kwargs: ([], 0)  # type: ignore[assignment]
+    try:
+        placements = _world_marker_placements(sim, center=center, zoom_scale=1.0)
+    finally:
+        viewer_module._slot_markers_for_hex = original_slotter  # type: ignore[assignment]
+
+    placement = next(current for current in placements if current.marker.marker_id == "site:home_greybridge")
+    assert placement.x == int(round(expected_x))
+    assert placement.y == int(round(expected_y))
+
+
+def test_major_site_visibility_diagnostics_include_player_and_required_sites() -> None:
+    class ClipRect:
+        def collidepoint(self, point: tuple[int, int]) -> bool:
+            x, y = point
+            return 0 <= x <= 1280 and 0 <= y <= 720
+
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    rows = _major_site_visibility_diagnostic_rows(
+        sim,
+        center=(640.0, 360.0),
+        zoom_scale=1.0,
+        clip_rect=ClipRect(),
+    )
+
+    assert rows[0].startswith("campaign_major_sites player_world=")
+    assert "player_hex=" in rows[0]
+    assert any("major_site id=home_greybridge" in row and "screen=(" in row and "on_screen=yes" in row for row in rows[1:])
+    assert any("major_site id=demo_dungeon_entrance" in row and "screen=(" in row and "on_screen=yes" in row for row in rows[1:])
+
+
+def test_major_site_render_and_use_share_identity() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    player = sim.state.entities[PLAYER_ID]
+    projected = _major_campaign_site_projections(sim, center=(640.0, 360.0), zoom_scale=1.0)
+    projected_ids = {row.site_id for row in projected}
+    assert "demo_dungeon_entrance" in projected_ids
+
+    dungeon_anchor = _site_campaign_anchor_world(sim.state.world.sites["demo_dungeon_entrance"])
+    assert dungeon_anchor is not None
+    player.position_x = dungeon_anchor[0]
+    player.position_y = dungeon_anchor[1]
+
+    message, selected_site_id, open_site_panel = _use_campaign_site(
+        sim,
+        controller,
+        player=player,
+        selected_site_id="demo_dungeon_entrance",
+    )
+
+    assert "entering site" in message
+    assert open_site_panel is False
+    assert selected_site_id in projected_ids
+    assert sim.input_log[-1].params == {"site_id": selected_site_id}
 
 
 def test_viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites() -> None:
