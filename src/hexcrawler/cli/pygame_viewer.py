@@ -140,6 +140,20 @@ HOME_MARKER_RADIUS = 18
 HOME_MARKER_RING_RADIUS = 28
 HOME_MARKER_RING_WIDTH = 3
 
+CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
+CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
+CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE = "campaign_danger_patrol"
+CORE_PLAYABLE_DEFAULT_PATROL_SPEED = 0.14
+CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION: tuple[float, float] = (1.10, 0.42)
+CAMPAIGN_RENDER_LAYER_ORDER: tuple[str, ...] = (
+    "map_base",
+    "site_icons",
+    "site_labels",
+    "actors",
+    "overlays_selection",
+    "hud_panels_modals",
+)
+
 MARKER_SCATTER_RADIUS_MIN = 8.0
 MARKER_SCATTER_RADIUS_MAX = 18.0
 MARKER_SCATTER_STEP = 3.0
@@ -1358,7 +1372,13 @@ def _section_entries(rows: list[str], *, entry_limit: int = PANEL_SECTION_ENTRY_
     return list(reversed(rows[-entry_limit:]))
 
 
-def _collect_world_markers(sim: Simulation, active_space_id: str, active_location_topology: str) -> dict[MarkerCellRef, list[MarkerRecord]]:
+def _collect_world_markers(
+    sim: Simulation,
+    active_space_id: str,
+    active_location_topology: str,
+    *,
+    include_incidental_records: bool,
+) -> dict[MarkerCellRef, list[MarkerRecord]]:
     markers_by_cell: dict[MarkerCellRef, list[MarkerRecord]] = {}
 
     def add_marker(cell: MarkerCellRef | None, marker: MarkerRecord) -> None:
@@ -1477,45 +1497,46 @@ def _collect_world_markers(sim: Simulation, active_space_id: str, active_locatio
                         ),
                     )
 
-    for index, record in enumerate(sim.state.world.spawn_descriptors):
-        action_uid = str(record.get("action_uid", "?"))
-        add_marker(
-            _marker_cell_from_location(record.get("location"), active_location_topology),
-            MarkerRecord(
-                priority=2,
-                marker_id=f"spawn_desc:{action_uid}:{index}",
-                marker_kind="spawn_desc",
-                color=(96, 198, 255),
-                radius=4,
-                label="spawn",
-            ),
-        )
+    if include_incidental_records:
+        for index, record in enumerate(sim.state.world.spawn_descriptors):
+            action_uid = str(record.get("action_uid", "?"))
+            add_marker(
+                _marker_cell_from_location(record.get("location"), active_location_topology),
+                MarkerRecord(
+                    priority=2,
+                    marker_id=f"spawn_desc:{action_uid}:{index}",
+                    marker_kind="spawn_desc",
+                    color=(96, 198, 255),
+                    radius=4,
+                    label="spawn",
+                ),
+            )
 
-    for record in sim.state.world.signals:
-        add_marker(
-            _marker_cell_from_location(record.get("location"), active_location_topology),
-            MarkerRecord(
-                priority=3,
-                marker_id=f"signal:{record.get('signal_uid', '')}",
-                marker_kind="signal",
-                color=(255, 202, 96),
-                radius=4,
-                label=_truncate_label(str(record.get("template_id", "sig")) if record.get("template_id") else "sig"),
-            ),
-        )
+        for record in sim.state.world.signals:
+            add_marker(
+                _marker_cell_from_location(record.get("location"), active_location_topology),
+                MarkerRecord(
+                    priority=3,
+                    marker_id=f"signal:{record.get('signal_uid', '')}",
+                    marker_kind="signal",
+                    color=(255, 202, 96),
+                    radius=4,
+                    label=_truncate_label(str(record.get("template_id", "sig")) if record.get("template_id") else "sig"),
+                ),
+            )
 
-    for record in sim.state.world.tracks:
-        add_marker(
-            _marker_cell_from_location(record.get("location"), active_location_topology),
-            MarkerRecord(
-                priority=4,
-                marker_id=f"track:{record.get('track_uid', '')}",
-                marker_kind="track",
-                color=(205, 183, 255),
-                radius=3,
-                label=_truncate_label(str(record.get("template_id", "trk")) if record.get("template_id") else "trk"),
-            ),
-        )
+        for record in sim.state.world.tracks:
+            add_marker(
+                _marker_cell_from_location(record.get("location"), active_location_topology),
+                MarkerRecord(
+                    priority=4,
+                    marker_id=f"track:{record.get('track_uid', '')}",
+                    marker_kind="track",
+                    color=(205, 183, 255),
+                    radius=3,
+                    label=_truncate_label(str(record.get("template_id", "trk")) if record.get("template_id") else "trk"),
+                ),
+            )
 
     for cell, markers in markers_by_cell.items():
         markers.sort(key=lambda row: (row.priority, row.marker_id))
@@ -1573,7 +1594,13 @@ def _slot_markers_for_hex(center_x: float, center_y: float, markers: list[Marker
     return placements, 0
 
 
-def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_scale: float = 1.0) -> list[MarkerPlacement]:
+def _world_marker_placements(
+    sim: Simulation,
+    center: tuple[float, float],
+    zoom_scale: float = 1.0,
+    *,
+    include_incidental_records: bool = True,
+) -> list[MarkerPlacement]:
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is None:
@@ -1606,6 +1633,7 @@ def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_
         sim,
         active_space.space_id,
         projection_topology,
+        include_incidental_records=include_incidental_records,
     )
     for cell in sorted(markers_by_cell, key=lambda current: (current.space_id, current.topology_type, current.coord_key)):
         cell_markers = markers_by_cell[cell]
@@ -1625,22 +1653,22 @@ def _world_marker_placements(sim: Simulation, center: tuple[float, float], zoom_
     return placements
 
 
-def _draw_world_markers(
+def _draw_site_markers_and_labels(
     screen: pygame.Surface,
-    sim: Simulation,
-    center: tuple[float, float],
+    placements: list[MarkerPlacement],
     font: pygame.font.Font,
-    zoom_scale: float = 1.0,
 ) -> None:
-    for placement in _world_marker_placements(sim, center, zoom_scale):
-        if placement.marker.marker_kind == "site" and placement.marker.radius >= 11:
+    for placement in placements:
+        if placement.marker.marker_kind != "site":
+            continue
+        if placement.marker.radius >= 11:
             pygame.draw.circle(screen, (255, 248, 180), (placement.x, placement.y), HOME_MARKER_RING_RADIUS, HOME_MARKER_RING_WIDTH)
             pygame.draw.circle(screen, (36, 28, 12), (placement.x, placement.y), HOME_MARKER_RING_RADIUS + 1, 1)
         pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
         pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
         label_surface = font.render(placement.marker.label, True, (248, 250, 255))
         outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
-        if placement.marker.marker_kind == "site" and placement.marker.radius >= 11:
+        if placement.marker.radius >= 11:
             label_box = label_surface.get_rect()
             label_box.topleft = (placement.x + 10, placement.y - 10)
             padded = pygame.Rect(label_box.left - 4, label_box.top - 2, label_box.width + 8, label_box.height + 4)
@@ -1649,6 +1677,45 @@ def _draw_world_markers(
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
         screen.blit(label_surface, (placement.x + 8, placement.y - 8))
+
+
+def _draw_non_site_markers(
+    screen: pygame.Surface,
+    placements: list[MarkerPlacement],
+    font: pygame.font.Font,
+) -> None:
+    for placement in placements:
+        if placement.marker.marker_kind == "site":
+            continue
+        pygame.draw.circle(screen, placement.marker.color, (placement.x, placement.y), placement.marker.radius)
+        pygame.draw.circle(screen, (14, 24, 30), (placement.x, placement.y), placement.marker.radius, 1)
+        label_surface = font.render(placement.marker.label, True, (248, 250, 255))
+        outline_surface = font.render(placement.marker.label, True, (18, 20, 25))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            screen.blit(outline_surface, (placement.x + 8 + dx, placement.y - 8 + dy))
+        screen.blit(label_surface, (placement.x + 8, placement.y - 8))
+
+
+def _draw_world_markers(
+    screen: pygame.Surface,
+    sim: Simulation,
+    center: tuple[float, float],
+    font: pygame.font.Font,
+    zoom_scale: float = 1.0,
+) -> None:
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    include_incidental_records = True
+    if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
+        include_incidental_records = sim.get_rule_module("signal_propagation") is not None
+    placements = _world_marker_placements(
+        sim,
+        center,
+        zoom_scale,
+        include_incidental_records=include_incidental_records,
+    )
+    _draw_site_markers_and_labels(screen, placements, font)
+    _draw_non_site_markers(screen, placements, font)
 
 
 def _draw_world(
@@ -1698,6 +1765,83 @@ def _draw_world(
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
         _draw_world_markers(screen, sim, center, marker_font, zoom_scale)
     screen.set_clip(old_clip)
+
+
+def _draw_frame_layers(
+    *,
+    screen: pygame.Surface,
+    sim: Simulation,
+    world_center: tuple[float, float],
+    world_zoom_scale: float,
+    viewport_rect: pygame.Rect,
+    marker_font: pygame.font.Font,
+    font: pygame.font.Font,
+    debug_font: pygame.font.Font,
+    status_message: str,
+    hover_message: str | None,
+    runtime_state: ViewerRuntimeState,
+    follow_state: FollowSelectionState,
+    show_local_arena_overlay: bool,
+    layout: ViewerLayout,
+    inspector_scroll: int,
+    panel_scroll: dict[str, int],
+    active_panel_section: str,
+    rumor_panel_state: RumorPanelState,
+    debug_filter_state: DebugFilterState,
+    debug_panel_cache: DebugPanelRenderCache,
+    home_panel_state: HomePanelState,
+    context_menu: ContextMenuState | None,
+    previous_snapshot: RenderSnapshot,
+    current_snapshot: RenderSnapshot,
+    current_space_id: str,
+    alpha: float,
+) -> tuple[pygame.Rect | None, int, dict[str, pygame.Rect], dict[str, int], dict[str, pygame.Rect]]:
+    # Explicit campaign render-layer ownership:
+    # 1) map_base, 2) site_icons, 3) site_labels, 4) actors/moving groups,
+    # 5) overlays/selection, 6) HUD/panels/modals.
+    _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale)
+    pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
+
+    for entity_id in sorted(sim.state.entities):
+        entity = sim.state.entities[entity_id]
+        if not _is_in_current_space(_entity_space_id(entity), current_space_id):
+            continue
+        interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
+        if interpolated is None:
+            continue
+        if entity_id == PLAYER_ID:
+            _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+        else:
+            _draw_spawned_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+
+    _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
+    _draw_hud(screen, sim, font, status_message, hover_message, runtime_state, layout.world_view, follow_state)
+    if show_local_arena_overlay:
+        _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
+    inspector_content_rect, inspector_total_lines = _draw_inspector_panel(
+        screen,
+        sim,
+        debug_font,
+        layout.inspector_panel,
+        inspector_scroll,
+        follow_state,
+    )
+    panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
+        screen,
+        sim,
+        debug_font,
+        panel_scroll,
+        active_panel_section,
+        rumor_panel_state,
+        debug_filter_state,
+        layout.debug_panel,
+        debug_panel_cache,
+    )
+    _draw_context_menu(screen, font, context_menu, viewport_rect)
+    offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect)
+    if home_panel_state.visible:
+        _draw_home_panel(screen, sim, font, viewport_rect)
+    return inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons
 
 
 def _draw_entity(
@@ -3335,6 +3479,38 @@ def _configure_simulation_modules(
     configure_non_encounter_viewer_modules(sim)
 
 
+def _ensure_core_playable_default_scene(sim: Simulation, *, runtime_profile: RuntimeProfile) -> None:
+    if runtime_profile != CORE_PLAYABLE:
+        return
+    patrol_ids = sorted(
+        entity.entity_id
+        for entity in sim.state.entities.values()
+        if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE and entity.entity_id != PLAYER_ID
+    )
+    if not patrol_ids:
+        patrol = EntityState(
+            entity_id=CORE_PLAYABLE_DEFAULT_PATROL_ID,
+            position_x=CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0],
+            position_y=CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1],
+            speed_per_tick=CORE_PLAYABLE_DEFAULT_PATROL_SPEED,
+            template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+            stats={"faction_id": "hostile", "role": "patrol"},
+        )
+        sim.add_entity(patrol)
+        patrol_ids = [patrol.entity_id]
+
+    keep_patrol_id = patrol_ids[0]
+    for patrol_id in patrol_ids[1:]:
+        sim.state.entities.pop(patrol_id, None)
+    patrol = sim.state.entities.get(keep_patrol_id)
+    if patrol is not None:
+        patrol.template_id = CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE
+        patrol.space_id = "overworld"
+        patrol.stats = dict(patrol.stats) if isinstance(patrol.stats, dict) else {}
+        patrol.stats["faction_id"] = "hostile"
+        patrol.stats["role"] = "patrol"
+
+
 def _build_viewer_simulation(
     map_path: str,
     *,
@@ -3347,6 +3523,7 @@ def _build_viewer_simulation(
     sim.add_entity(EntityState.from_hex(entity_id=PLAYER_ID, hex_coord=HexCoord(0, 0), speed_per_tick=0.22))
     resolved_profile = _resolve_runtime_profile(runtime_profile=runtime_profile, with_encounters=with_encounters)
     _configure_simulation_modules(sim, runtime_profile=resolved_profile, with_encounters=with_encounters)
+    _ensure_core_playable_default_scene(sim, runtime_profile=resolved_profile)
     return sim
 
 
@@ -4048,46 +4225,34 @@ def run_pygame_viewer(
             hover_message = _hover_readout(sim, mouse_pos, world_center, world_zoom_scale)
 
         screen.fill((17, 18, 25))
-        _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale)
-        pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
-        for entity_id in sorted(sim.state.entities):
-            entity = sim.state.entities[entity_id]
-            if not _is_in_current_space(_entity_space_id(entity), current_space_id):
-                continue
-            interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
-            if interpolated is None:
-                continue
-            if entity_id == PLAYER_ID:
-                _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
-            else:
-                _draw_spawned_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
-        _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
-        _draw_hud(screen, sim, font, status_message, hover_message, runtime_state, layout.world_view, follow_state)
-        if show_local_arena_overlay:
-            _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
-        inspector_content_rect, inspector_total_lines = _draw_inspector_panel(
-            screen,
-            sim,
-            debug_font,
-            layout.inspector_panel,
-            inspector_scroll,
-            follow_state,
+        inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons = _draw_frame_layers(
+            screen=screen,
+            sim=sim,
+            world_center=world_center,
+            world_zoom_scale=world_zoom_scale,
+            viewport_rect=viewport_rect,
+            marker_font=marker_font,
+            font=font,
+            debug_font=debug_font,
+            status_message=status_message,
+            hover_message=hover_message,
+            runtime_state=runtime_state,
+            follow_state=follow_state,
+            show_local_arena_overlay=show_local_arena_overlay,
+            layout=layout,
+            inspector_scroll=inspector_scroll,
+            panel_scroll=panel_scroll,
+            active_panel_section=active_panel_section,
+            rumor_panel_state=rumor_panel_state,
+            debug_filter_state=debug_filter_state,
+            debug_panel_cache=debug_panel_cache,
+            home_panel_state=home_panel_state,
+            context_menu=context_menu,
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            current_space_id=current_space_id,
+            alpha=alpha,
         )
-        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
-            screen,
-            sim,
-            debug_font,
-            panel_scroll,
-            active_panel_section,
-            rumor_panel_state,
-            debug_filter_state,
-            layout.debug_panel,
-            debug_panel_cache,
-        )
-        _draw_context_menu(screen, font, context_menu, viewport_rect)
-        offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect)
-        if home_panel_state.visible:
-            _draw_home_panel(screen, sim, font, viewport_rect)
         pygame_module.display.flip()
 
     pygame_module.quit()
