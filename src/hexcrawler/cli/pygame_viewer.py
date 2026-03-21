@@ -759,6 +759,7 @@ class MarkerRecord:
     radius: int
     label: str
     world_position: tuple[float, float] | None = None
+    is_major_campaign_site: bool = False
 
 
 @dataclass(frozen=True)
@@ -784,6 +785,16 @@ class CampaignSiteProjection:
     world_position: tuple[float, float]
     screen_position: tuple[int, int]
     on_screen: bool
+
+
+@dataclass(frozen=True)
+class MajorSiteEdgeIndicator:
+    site_id: str
+    site_name: str
+    marker_color: tuple[int, int, int]
+    position: tuple[int, int]
+    label_position: tuple[int, int]
+    label: str
 
 
 def _is_major_campaign_site(site: SiteRecord) -> bool:
@@ -1419,7 +1430,95 @@ def _major_site_visibility_diagnostic_rows(
         )
     if len(lines) == 1:
         lines.append("major_site none")
+    greybridge = sim.state.world.sites.get("home_greybridge")
+    if greybridge is not None:
+        greybridge_world, _ = _site_world_position(greybridge)
+        if greybridge_world is not None:
+            gx, gy = _world_to_pixel(greybridge_world[0], greybridge_world[1], center, zoom_scale)
+            point = (int(round(gx)), int(round(gy)))
+            lines.append(
+                "major_site_focus "
+                "id=home_greybridge "
+                f"world=({greybridge_world[0]:.2f},{greybridge_world[1]:.2f}) "
+                f"screen=({point[0]},{point[1]}) "
+                f"on_screen={'yes' if clip_rect.collidepoint(point) else 'no'}"
+            )
+    dungeon_site: SiteRecord | None = None
+    for site in sorted(sim.state.world.sites.values(), key=lambda row: row.site_id):
+        if site.entrance is not None or site.site_type in {"dungeon", "dungeon_entrance"}:
+            dungeon_site = site
+            break
+    if dungeon_site is not None:
+        dungeon_world, _ = _site_world_position(dungeon_site)
+        if dungeon_world is not None:
+            dx, dy = _world_to_pixel(dungeon_world[0], dungeon_world[1], center, zoom_scale)
+            point = (int(round(dx)), int(round(dy)))
+            lines.append(
+                "major_site_focus "
+                f"id={dungeon_site.site_id} "
+                f"world=({dungeon_world[0]:.2f},{dungeon_world[1]:.2f}) "
+                f"screen=({point[0]},{point[1]}) "
+                f"on_screen={'yes' if clip_rect.collidepoint(point) else 'no'}"
+            )
     return lines
+
+
+def _major_site_label_offset(
+    site_screen: tuple[int, int],
+    player_screen: tuple[int, int] | None,
+) -> tuple[int, int, bool]:
+    if player_screen is None:
+        return (12, -16, False)
+    if math.dist((float(site_screen[0]), float(site_screen[1])), (float(player_screen[0]), float(player_screen[1]))) <= 24.0:
+        return (22, -34, True)
+    return (12, -16, False)
+
+
+def _major_site_edge_indicators(
+    sim: Simulation,
+    major_projections: list[CampaignSiteProjection],
+    *,
+    clip_rect: pygame.Rect,
+) -> list[MajorSiteEdgeIndicator]:
+    margin = 18
+    min_x = clip_rect.left + margin
+    max_x = clip_rect.right - margin
+    min_y = clip_rect.top + margin
+    max_y = clip_rect.bottom - margin
+    center_x = float(clip_rect.centerx)
+    center_y = float(clip_rect.centery)
+    indicators: list[MajorSiteEdgeIndicator] = []
+    for projection in major_projections:
+        if projection.on_screen:
+            continue
+        site = sim.state.world.sites.get(projection.site_id)
+        if site is None:
+            continue
+        marker_color, _ = _site_marker_style(site)
+        raw_x = projection.screen_position[0]
+        raw_y = projection.screen_position[1]
+        clamped_x = max(min_x, min(max_x, raw_x))
+        clamped_y = max(min_y, min(max_y, raw_y))
+        label = _truncate_label(f"{projection.site_name} ↗", max_length=18)
+        if raw_x < center_x:
+            label_x = clamped_x + 10
+        else:
+            label_x = clamped_x - 120
+        if raw_y < center_y:
+            label_y = clamped_y + 8
+        else:
+            label_y = clamped_y - 18
+        indicators.append(
+            MajorSiteEdgeIndicator(
+                site_id=projection.site_id,
+                site_name=projection.site_name,
+                marker_color=marker_color,
+                position=(clamped_x, clamped_y),
+                label_position=(label_x, label_y),
+                label=label,
+            )
+        )
+    return indicators
 
 
 def _clamp_scroll_offset(current: int, delta: int, total_count: int, page_size: int) -> int:
@@ -1691,6 +1790,7 @@ def _world_marker_placements(
                     radius=marker_radius,
                     label=_site_label_for_marker(site),
                     world_position=site_projection.world_position,
+                    is_major_campaign_site=True,
                 ),
                 x=site_projection.screen_position[0],
                 y=site_projection.screen_position[1],
@@ -1750,42 +1850,59 @@ def _draw_major_site_edge_indicators(
     *,
     clip_rect: pygame.Rect,
 ) -> None:
-    margin = 18
-    min_x = clip_rect.left + margin
-    max_x = clip_rect.right - margin
-    min_y = clip_rect.top + margin
-    max_y = clip_rect.bottom - margin
-    center_x = float(clip_rect.centerx)
-    center_y = float(clip_rect.centery)
+    for indicator in _major_site_edge_indicators(sim, major_projections, clip_rect=clip_rect):
+        indicator_radius = 7
+        pygame.draw.circle(screen, (22, 24, 30), indicator.position, indicator_radius + 2)
+        pygame.draw.circle(screen, indicator.marker_color, indicator.position, indicator_radius)
+        pygame.draw.circle(screen, (248, 250, 255), indicator.position, indicator_radius, 1)
+        text_surface = font.render(indicator.label, True, (248, 250, 255))
+        outline_surface = font.render(indicator.label, True, (18, 20, 25))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            screen.blit(outline_surface, (indicator.label_position[0] + dx, indicator.label_position[1] + dy))
+        screen.blit(text_surface, indicator.label_position)
+
+
+def _draw_major_campaign_sites(
+    screen: pygame.Surface,
+    sim: Simulation,
+    center: tuple[float, float],
+    font: pygame.font.Font,
+    *,
+    clip_rect: pygame.Rect,
+    zoom_scale: float = 1.0,
+) -> None:
+    major_projections = _major_campaign_site_projections(sim, center, zoom_scale, clip_rect=clip_rect)
+    player = sim.state.entities.get(PLAYER_ID)
+    player_screen: tuple[int, int] | None = None
+    if player is not None:
+        px, py = _world_to_pixel(player.position_x, player.position_y, center, zoom_scale)
+        player_screen = (int(round(px)), int(round(py)))
     for projection in major_projections:
-        if projection.on_screen:
+        if not projection.on_screen:
             continue
         site = sim.state.world.sites.get(projection.site_id)
         if site is None:
             continue
-        marker_color, _ = _site_marker_style(site)
-        raw_x = projection.screen_position[0]
-        raw_y = projection.screen_position[1]
-        clamped_x = max(min_x, min(max_x, raw_x))
-        clamped_y = max(min_y, min(max_y, raw_y))
-        indicator_radius = 7
-        pygame.draw.circle(screen, (22, 24, 30), (clamped_x, clamped_y), indicator_radius + 2)
-        pygame.draw.circle(screen, marker_color, (clamped_x, clamped_y), indicator_radius)
-        pygame.draw.circle(screen, (248, 250, 255), (clamped_x, clamped_y), indicator_radius, 1)
-        label = _truncate_label(f"{projection.site_name} ↗", max_length=18)
-        if raw_x < center_x:
-            label_x = clamped_x + 10
-        else:
-            label_x = clamped_x - 120
-        if raw_y < center_y:
-            label_y = clamped_y + 8
-        else:
-            label_y = clamped_y - 18
-        text_surface = font.render(label, True, (248, 250, 255))
+        marker_color, marker_radius = _site_marker_style(site)
+        icon_pos = projection.screen_position
+        label_dx, label_dy, overlaps_player = _major_site_label_offset(icon_pos, player_screen)
+        ring_radius = max(HOME_MARKER_RING_RADIUS, marker_radius + 10) + (5 if overlaps_player else 0)
+        pygame.draw.circle(screen, (255, 248, 180), icon_pos, ring_radius, HOME_MARKER_RING_WIDTH)
+        pygame.draw.circle(screen, (36, 28, 12), icon_pos, ring_radius + 1, 1)
+        pygame.draw.circle(screen, marker_color, icon_pos, max(marker_radius + 2, 12))
+        pygame.draw.circle(screen, (10, 14, 20), icon_pos, max(marker_radius + 2, 12), 2)
+        label = _site_label_for_marker(site)
+        label_surface = font.render(label, True, (248, 250, 255))
         outline_surface = font.render(label, True, (18, 20, 25))
+        label_pos = (icon_pos[0] + label_dx, icon_pos[1] + label_dy)
+        label_box = label_surface.get_rect(topleft=label_pos)
+        padded = pygame.Rect(label_box.left - 4, label_box.top - 2, label_box.width + 8, label_box.height + 4)
+        pygame.draw.rect(screen, (32, 34, 40), padded, border_radius=4)
+        pygame.draw.rect(screen, marker_color, padded, 1, border_radius=4)
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            screen.blit(outline_surface, (label_x + dx, label_y + dy))
-        screen.blit(text_surface, (label_x, label_y))
+            screen.blit(outline_surface, (label_pos[0] + dx, label_pos[1] + dy))
+        screen.blit(label_surface, label_pos)
+    _draw_major_site_edge_indicators(screen, sim, major_projections, font, clip_rect=clip_rect)
 
 
 def _draw_site_markers_and_labels(
@@ -1795,6 +1912,8 @@ def _draw_site_markers_and_labels(
 ) -> None:
     for placement in placements:
         if placement.marker.marker_kind != "site":
+            continue
+        if placement.marker.is_major_campaign_site:
             continue
         if placement.marker.radius >= 11:
             pygame.draw.circle(screen, (255, 248, 180), (placement.x, placement.y), HOME_MARKER_RING_RADIUS, HOME_MARKER_RING_WIDTH)
@@ -1852,13 +1971,6 @@ def _draw_world_markers(
     )
     _draw_site_markers_and_labels(screen, placements, font)
     _draw_non_site_markers(screen, placements, font)
-    _draw_major_site_edge_indicators(
-        screen,
-        sim,
-        _major_campaign_site_projections(sim, center, zoom_scale, clip_rect=clip_rect),
-        font,
-        clip_rect=clip_rect,
-    )
 
 
 def _draw_world(
@@ -1956,6 +2068,17 @@ def _draw_frame_layers(
             _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
         else:
             _draw_spawned_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
+    if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
+        _draw_major_campaign_sites(
+            screen,
+            sim,
+            world_center,
+            marker_font,
+            clip_rect=viewport_rect,
+            zoom_scale=world_zoom_scale,
+        )
 
     _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
     _draw_hud(

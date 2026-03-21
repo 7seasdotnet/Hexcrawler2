@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke and confirm C8 viewer truth: Greybridge + Old Stair are visibly labeled in campaign view, off-screen major-site indicators appear when needed, and HUD diagnostics report player/site world+screen/on-screen status from the active camera.
+- **Next action:** Run a manual `python play.py` smoke and confirm C9 viewer truth: Greybridge + dungeon entrance remain visibly labeled even when overlapping the player marker, edge indicators appear for off-screen major sites, and HUD diagnostics include focused Greybridge/dungeon world+screen/on-screen rows from active camera projection.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -105,12 +105,12 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Kept the dedicated **major campaign-site viewer truth path** in `pygame_viewer`, but generalized major-site classification away from hardcoded core-playable IDs to site semantics (`site_type`, `entrance`, `safe`/`major` tags) so future major sites inherit the same visibility path.
-- Kept bounded campaign major-site diagnostics in HUD using active camera transforms (player world/derived-hex and major-site world/screen/on-screen rows) while preserving deterministic read-only viewer behavior.
-- Kept minimal off-screen edge indicators with labels so major campaign sites are not silently lost when outside the viewport, and added a targeted test proving classification is not ID-hardcoded.
+- Added a **direct major campaign-site render step** that draws major-site rings/icons/labels from the same site identity projection path used by Enter/E interaction, with overlap-safe label offsets when player and site are colocated.
+- Added deterministic off-screen major-site indicator row derivation and retained edge indicator drawing from that bounded row path, keeping major-site visibility explicit when sites are outside the viewport.
+- Expanded bounded diagnostics and tests to include focused Greybridge + dungeon world/screen/on-screen rows and overlap/off-screen render-truth behavior checks.
 
 ## Core-playable clarity note (this pass)
-- Campaign-site visibility is now driven by a **dedicated viewer truth path** for core-playable major sites (projected marker identity = interactable site identity), with bounded diagnostics and off-screen cues to prevent loaded-but-invisible major sites.
+- Campaign-site visibility is now driven by a **dedicated viewer truth path** for core-playable major sites (projected marker identity = interactable site identity), with direct post-actor major-site rendering, overlap-safe labeling, bounded diagnostics, and off-screen cues to prevent loaded-but-invisible major sites.
 - Full town/dungeon interior authoring and broad editor workflows remain later scope; this pass keeps towns as service nodes and dungeon entry as a campaign-to-local transition seam.
 
 ## Runtime profile note (C1)
