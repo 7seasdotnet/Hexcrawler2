@@ -47,6 +47,7 @@ from hexcrawler.cli.pygame_viewer import (
     _major_site_label_offset,
     _major_site_visibility_diagnostic_rows,
     _player_feedback_lines,
+    _player_facing_hud_lines,
     _queue_local_attack_for_click,
     _queue_selection_command_for_click,
     _refresh_rumor_query,
@@ -148,6 +149,14 @@ def test_core_playable_default_scene_is_sparse_and_contains_single_patrol() -> N
     patrols = [entity for entity in sim.state.entities.values() if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE]
     assert len(patrols) == 1
     assert patrols[0].stats.get("role") == "patrol"
+    home_anchor = _site_campaign_anchor_world(sim.state.world.sites["home_greybridge"])
+    dungeon_anchor = _site_campaign_anchor_world(sim.state.world.sites["demo_dungeon_entrance"])
+    assert home_anchor is not None
+    assert dungeon_anchor is not None
+    assert patrols[0].position_x == pytest.approx(-2.60)
+    assert patrols[0].position_y == pytest.approx(1.90)
+    assert ((home_anchor[0] - dungeon_anchor[0]) ** 2 + (home_anchor[1] - dungeon_anchor[1]) ** 2) ** 0.5 >= 3.0
+    assert ((home_anchor[0] - patrols[0].position_x) ** 2 + (home_anchor[1] - patrols[0].position_y) ** 2) ** 0.5 >= 2.5
 
 
 def test_core_playable_campaign_marker_surface_omits_incidental_world_records() -> None:
@@ -350,8 +359,10 @@ def test_enter_or_e_generic_site_use_uses_legacy_hex_fallback_when_anchor_missin
     player = sim.state.entities[PLAYER_ID]
     dungeon_site = sim.state.world.sites["demo_dungeon_entrance"]
     dungeon_site.location.pop("campaign_anchor", None)
-    player.position_x = 0.0
-    player.position_y = 0.0
+    fallback_anchor = _site_campaign_anchor_world(dungeon_site)
+    assert fallback_anchor is not None
+    player.position_x = fallback_anchor[0]
+    player.position_y = fallback_anchor[1]
 
     message, selected_site_id, open_site_panel = _use_campaign_site(
         sim,
@@ -547,6 +558,14 @@ def test_viewer_runtime_controller_new_simulation_preserves_core_playable_patrol
         entity.entity_id for entity in replaced.state.entities.values() if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE
     )
     assert len(patrol_ids) == 1
+    patrol = replaced.state.entities[patrol_ids[0]]
+    home_anchor = _site_campaign_anchor_world(replaced.state.world.sites["home_greybridge"])
+    dungeon_anchor = _site_campaign_anchor_world(replaced.state.world.sites["demo_dungeon_entrance"])
+    assert home_anchor is not None
+    assert dungeon_anchor is not None
+    assert patrol.position_x == pytest.approx(-2.60)
+    assert patrol.position_y == pytest.approx(1.90)
+    assert ((home_anchor[0] - dungeon_anchor[0]) ** 2 + (home_anchor[1] - dungeon_anchor[1]) ** 2) ** 0.5 >= 3.0
 
 
 def test_load_simulation_preserves_saved_patrol_composition_without_core_scene_normalization(tmp_path: Path) -> None:
@@ -1805,6 +1824,38 @@ def test_debug_filter_render_rows_are_bounded_and_stable() -> None:
     assert len(rows["encounters"]) <= 30
     assert any("action_uid=ctx-7" in row for row in rows["encounters"])
     assert all("action_uid=ctx-8" not in row for row in rows["encounters"])
+
+
+def test_player_facing_hud_lines_are_compact_and_exclude_world_projection_diagnostics() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    runtime_state = ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/viewer_map.json",
+        with_encounters=True,
+        current_save_path=None,
+        runtime_profile=CORE_PLAYABLE,
+    )
+
+    lines = _player_facing_hud_lines(sim, entity=sim.state.entities[PLAYER_ID], runtime_state=runtime_state)
+
+    assert any(line.startswith("condition=") for line in lines)
+    assert any("proof_token=" in line and "rations=" in line for line in lines)
+    assert any(line.startswith("time ") for line in lines)
+    assert all("player_world=" not in line for line in lines)
+    assert all("screen=(" not in line for line in lines)
+    assert all("campaign_sites loaded=" not in line for line in lines)
+
+
+def test_debug_sites_rows_include_major_site_and_patrol_scene_diagnostics() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+
+    rows = _debug_rows_by_section(sim, RumorPanelState(), DebugFilterState())
+    sites_rows = rows["sites"]
+
+    assert any(row.startswith("campaign_player world=") for row in sites_rows)
+    assert any("campaign_major_site id=home_greybridge" in row for row in sites_rows)
+    assert any("campaign_major_site id=demo_dungeon_entrance" in row for row in sites_rows)
+    assert any("campaign_patrol id=" in row and "template=campaign_danger_patrol" in row for row in sites_rows)
 
 
 def test_debug_sites_rows_include_site_pressure_expression() -> None:

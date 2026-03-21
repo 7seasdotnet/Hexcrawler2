@@ -17,7 +17,7 @@ DEFAULT_SEED = 7
 CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
 CORE_PLAYABLE_PATROL_TEMPLATE_ID = "campaign_danger_patrol"
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
-CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION: tuple[float, float] = (1.10, 0.42)
+CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION: tuple[float, float] = (-2.60, 1.90)
 CORE_PLAYABLE_DEFAULT_PATROL_SPEED = 0.14
 
 

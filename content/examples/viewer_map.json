@@ -1404,6 +1404,36 @@
   ],
   "schema_version": 1,
   "sites": {
+    "demo_dungeon_entrance": {
+      "description": "A weathered stone stair descends beneath cracked flagstones.",
+      "entrance": {
+        "spawn": {
+          "x": 1,
+          "y": 1
+        },
+        "target_space_id": "dungeon_demo"
+      },
+      "location": {
+        "campaign_anchor": {
+          "x": 3.45,
+          "y": -1.45
+        },
+        "coord": {
+          "q": 3,
+          "r": -2
+        },
+        "space_id": "overworld",
+        "topology_type": "overworld_hex"
+      },
+      "name": "Old Stair",
+      "site_id": "demo_dungeon_entrance",
+      "site_type": "dungeon_entrance",
+      "tags": [
+        "demo",
+        "dungeon",
+        "entrance"
+      ]
+    },
     "home_greybridge": {
       "description": "Greybridge is your known safe haven for recovery and resupply.",
       "location": {
@@ -1425,36 +1455,6 @@
         "home",
         "safe",
         "town"
-      ]
-    },
-    "demo_dungeon_entrance": {
-      "description": "A weathered stone stair descends beneath cracked flagstones.",
-      "entrance": {
-        "spawn": {
-          "x": 1,
-          "y": 1
-        },
-        "target_space_id": "dungeon_demo"
-      },
-      "location": {
-        "campaign_anchor": {
-          "x": 0.67,
-          "y": 0.31
-        },
-        "coord": {
-          "q": 0,
-          "r": 0
-        },
-        "space_id": "overworld",
-        "topology_type": "overworld_hex"
-      },
-      "name": "Old Stair",
-      "site_id": "demo_dungeon_entrance",
-      "site_type": "dungeon_entrance",
-      "tags": [
-        "demo",
-        "dungeon",
-        "entrance"
       ]
     }
   },
@@ -2891,5 +2891,5 @@
     "radius": 6
   },
   "topology_type": "hex_disk",
-  "world_hash": "af2e4b9de9f0497bf9a9adaa46ba2cdfe4acaba5789a9e3837fe7d448796ecab"
+  "world_hash": "00bb004a279d694e348830ee3d6a4d248ebfe37d2c41125a7977a8a64fca9898"
 }
