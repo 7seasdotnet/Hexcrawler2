@@ -144,7 +144,7 @@ CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeo
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
 CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE = "campaign_danger_patrol"
 CORE_PLAYABLE_DEFAULT_PATROL_SPEED = 0.14
-CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION: tuple[float, float] = (1.10, 0.42)
+CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION: tuple[float, float] = (-2.60, 1.90)
 CAMPAIGN_RENDER_LAYER_ORDER: tuple[str, ...] = (
     "map_base",
     "site_icons",
@@ -2425,6 +2425,41 @@ def _home_panel_buttons_for_click(
     return _home_panel_button_rects(panel_rect)
 
 
+def _player_facing_hud_lines(
+    sim: Simulation,
+    *,
+    entity: EntityState,
+    runtime_state: ViewerRuntimeState,
+) -> list[str]:
+    severity_total = wound_severity_total(entity.wounds)
+    movement_multiplier = movement_multiplier_from_wounds(entity.wounds)
+    incapacitated = is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+    condition = "incapacitated" if incapacitated else ("slowed" if movement_multiplier < 1.0 else "mobile")
+    proof_tokens, rations = _inventory_counts_for_entity(sim, entity)
+    pending_offer = _pending_encounter_offer(sim)
+    at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
+    calendar = _calendar_presentation(sim)
+    lines = [
+        "WASD move | Enter/E use site | Fight [F] / Flee [X] when offered | F4 new sim | F2 pause",
+        f"condition={condition} wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
+        f"inventory proof_token={proof_tokens} rations={rations}",
+        (
+            f"time {calendar['hour']:02d}:{calendar['minute']:02d} | {calendar['day_night']} | "
+            f"{calendar['month_name']} {calendar['day_of_month']} (day {calendar['day']}) | moon {calendar['moon_phase']}"
+        ),
+        f"runtime={'paused' if runtime_state.paused else 'running'} profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
+    ]
+    if pending_offer is not None:
+        lines.append(
+            f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
+        )
+    if _is_home_site(safe_site_id):
+        lines.append("site=Greybridge home services available (Recover / Turn In Proof)")
+    elif at_safe_site:
+        lines.append(f"site=safe ({safe_site_id if isinstance(safe_site_id, str) else '-'})")
+    return lines
+
+
 def _draw_hud(
     screen: pygame.Surface,
     sim: Simulation,
@@ -2439,99 +2474,13 @@ def _draw_hud(
     world_zoom_scale: float,
 ) -> None:
     entity = sim.state.entities[PLAYER_ID]
-    active_space = sim.state.world.spaces.get(entity.space_id)
-    if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
-        coord_text = f"x={math.floor(entity.position_x)},y={math.floor(entity.position_y)}"
-    else:
-        coord_text = f"q={entity.hex_coord.q},r={entity.hex_coord.r}"
-    context_line = f"space={entity.space_id} | {coord_text}"
-
-    severity_total = wound_severity_total(entity.wounds)
-    movement_multiplier = movement_multiplier_from_wounds(entity.wounds)
-    incapacitated = is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
-    condition = "incapacitated" if incapacitated else ("slowed" if movement_multiplier < 1.0 else "mobile")
-
-    pending_offer = _pending_encounter_offer(sim)
-    local_context = _get_return_context_for_space(sim, entity.space_id)
-    extraction_ready = local_context is not None and not _is_return_in_progress(sim, entity.space_id)
-
-    proof_tokens, rations = _inventory_counts_for_entity(sim, entity)
-    at_safe_site, safe_site_id, safe_site_type = _find_safe_site_status(sim, entity)
-    recovery_possible = at_safe_site and any(isinstance(w, dict) and w.get("severity") == 1 for w in entity.wounds)
-
-    recovery_outcome = _last_event_params(sim, RECOVERY_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
-    reward_outcome = _last_event_params(sim, REWARD_TURN_IN_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
-
-    lines = [
-        context_line,
-        "WASD move | LMB select/attack-local/site | SPACE attack selected-local | ENTER/E use selected-or-near site | RMB menu | F2 pause/resume | F4 new sim | F5 save | F6 save as | F8/F9 load | 1/2/3 advance | ESC quit",
-        "F7 focus selected entity | F12 toggle follow-selected",
-        f"runtime={'paused' if runtime_state.paused else 'running'} | runtime_profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
-        f"follow status={follow_state.status}",
-        f"condition={condition} | wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY} | move_mult={movement_multiplier:.2f}",
-    ]
-    calendar = _calendar_presentation(sim)
-    lines.append(
-        f"time {calendar['hour']:02d}:{calendar['minute']:02d} | {calendar['day_night']} | date {calendar['month_name']} {calendar['day_of_month']} (day {calendar['day']}) | moon {calendar['moon_phase']}"
-    )
-
-    if pending_offer is not None:
-        lines.append(
-            f"encounter_offer=PENDING source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
-        )
-
-    if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
-        lines.append(f"local_hostile_pressure=ACTIVE | extraction={'ready' if extraction_ready else 'blocked'}")
-        lines.append("local_attack=enabled (LMB hostile or SPACE on selected target)")
-        if local_context is not None:
-            return_exit_coord = local_context.get("return_exit_coord")
-            if isinstance(return_exit_coord, dict):
-                lines.append(f"extraction_marker=visible at ({return_exit_coord.get('x','?')},{return_exit_coord.get('y','?')})")
-        if _is_return_in_progress(sim, entity.space_id):
-            lines.append("return_state=processing")
-
-    safe_status = "yes" if at_safe_site else "no"
-    lines.append(f"safe_site={safe_status} site_id={safe_site_id or '-'} type={safe_site_type or '-'}")
-    if _is_home_site(safe_site_id):
-        lines.append("home_node=Greybridge (campaign safe site) services=recover+turn_in+prep_surface town_interior=not_implemented")
-    lines.append(
-        f"recovery={'available' if recovery_possible else 'unavailable'} requires={SAFE_RECOVERY_INTENT_COMMAND_TYPE} light_wound=severity1 ration_required=no"
-    )
-    lines.append(
-        f"turn_in={'available' if (at_safe_site and proof_tokens > 0) else 'unavailable'} requires={TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE} proof_token>=1"
-    )
-    lines.append(f"inventory proof_token={proof_tokens} rations={rations}")
-
-    if recovery_outcome is not None:
-        lines.append(f"last_recovery outcome={recovery_outcome.get('outcome','?')} reason={recovery_outcome.get('reason','?')}")
-    if reward_outcome is not None:
-        lines.append(f"last_turn_in applied={reward_outcome.get('applied','?')} reason={reward_outcome.get('reason','?')}")
-    lines.extend(_player_feedback_lines(sim, entity=entity))
+    lines = _player_facing_hud_lines(sim, entity=entity, runtime_state=runtime_state)
+    lines.append(f"follow={follow_state.status} | debug data in inspector/debug panel")
 
     if status_message:
         lines.append(f"status: {status_message}")
     if hover_message:
         lines.append(hover_message)
-    topology_diagnostic = _viewer_topology_diagnostic(active_space)
-    if topology_diagnostic is not None:
-        lines.append(f"viewer: {topology_diagnostic}")
-    if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
-        lines.extend(
-            _campaign_site_diagnostic_rows(
-                sim,
-                center=world_center,
-                zoom_scale=world_zoom_scale,
-                clip_rect=world_rect,
-            )
-        )
-        lines.extend(
-            _major_site_visibility_diagnostic_rows(
-                sim,
-                center=world_center,
-                zoom_scale=world_zoom_scale,
-                clip_rect=world_rect,
-            )
-        )
     old_clip = screen.get_clip()
     screen.set_clip(world_rect)
     y = world_rect.y + 8
@@ -3032,11 +2981,31 @@ def _debug_rows_by_section(sim: Simulation, rumor_state: RumorPanelState, debug_
     site_rows: list[str] = []
     player = sim.state.entities.get(PLAYER_ID)
     if player is not None:
+        site_rows.append(f"campaign_player world=({player.position_x:.2f},{player.position_y:.2f}) hex=({player.hex_coord.q},{player.hex_coord.r})")
         coord = {"x": math.floor(player.position_x), "y": math.floor(player.position_y)}
         if sim.state.world.spaces.get(player.space_id) is None or sim.state.world.spaces[player.space_id].topology_type == OVERWORLD_HEX_TOPOLOGY:
             coord = player.hex_coord.to_dict()
         for site in sim.state.world.get_sites_at_location({"space_id": player.space_id, "coord": coord}):
             site_rows.extend(_site_debug_rows(site))
+        for site in sorted(sim.state.world.sites.values(), key=lambda row: row.site_id):
+            if not _is_major_campaign_site(site):
+                continue
+            anchor, anchor_source = _site_world_position(site)
+            if anchor is None:
+                continue
+            site_rows.append(
+                f"campaign_major_site id={site.site_id} type={site.site_type} "
+                f"anchor={anchor_source} world=({anchor[0]:.2f},{anchor[1]:.2f})"
+            )
+        patrols = [
+            entity
+            for entity in sorted(sim.state.entities.values(), key=lambda row: row.entity_id)
+            if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE and entity.entity_id != PLAYER_ID
+        ]
+        for patrol in patrols[:2]:
+            site_rows.append(
+                f"campaign_patrol id={patrol.entity_id} world=({patrol.position_x:.2f},{patrol.position_y:.2f}) template={patrol.template_id}"
+            )
 
     entity_rows = _section_entries([
         (
@@ -3794,6 +3763,8 @@ def _ensure_core_playable_default_scene(sim: Simulation, *, runtime_profile: Run
     if patrol is not None:
         patrol.template_id = CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE
         patrol.space_id = "overworld"
+        patrol.position_x = CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0]
+        patrol.position_y = CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1]
         patrol.stats = dict(patrol.stats) if isinstance(patrol.stats, dict) else {}
         patrol.stats["faction_id"] = "hostile"
         patrol.stats["role"] = "patrol"
