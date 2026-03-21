@@ -43,6 +43,8 @@ from hexcrawler.cli.pygame_viewer import (
     _marker_cell_from_location,
     _marker_payload_id,
     _major_campaign_site_projections,
+    _major_site_edge_indicators,
+    _major_site_label_offset,
     _major_site_visibility_diagnostic_rows,
     _player_feedback_lines,
     _queue_local_attack_for_click,
@@ -461,6 +463,8 @@ def test_major_site_visibility_diagnostics_include_player_and_required_sites() -
     assert "player_hex=" in rows[0]
     assert any("major_site id=home_greybridge" in row and "screen=(" in row and "on_screen=yes" in row for row in rows[1:])
     assert any("major_site id=demo_dungeon_entrance" in row and "screen=(" in row and "on_screen=yes" in row for row in rows[1:])
+    assert any("major_site_focus id=home_greybridge" in row for row in rows)
+    assert any("major_site_focus id=demo_dungeon_entrance" in row for row in rows)
 
 
 def test_major_site_render_and_use_share_identity() -> None:
@@ -487,6 +491,42 @@ def test_major_site_render_and_use_share_identity() -> None:
     assert open_site_panel is False
     assert selected_site_id in projected_ids
     assert sim.input_log[-1].params == {"site_id": selected_site_id}
+
+
+def test_major_site_label_offset_switches_to_overlap_safe_offset_when_player_colocated() -> None:
+    offset_x, offset_y, overlaps_player = _major_site_label_offset((640, 360), (642, 358))
+
+    assert overlaps_player is True
+    assert (offset_x, offset_y) == (22, -34)
+
+    far_x, far_y, far_overlap = _major_site_label_offset((640, 360), (780, 500))
+
+    assert far_overlap is False
+    assert (far_x, far_y) == (12, -16)
+
+
+def test_major_site_offscreen_indicator_rows_exist_for_hidden_major_sites() -> None:
+    class ClipRect:
+        left = 0
+        right = 1280
+        top = 0
+        bottom = 720
+        centerx = 640
+        centery = 360
+
+        def collidepoint(self, point: tuple[int, int]) -> bool:
+            x, y = point
+            return self.left <= x <= self.right and self.top <= y <= self.bottom
+
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    indicators = _major_site_edge_indicators(
+        sim,
+        _major_campaign_site_projections(sim, center=(-800.0, -600.0), zoom_scale=1.0, clip_rect=ClipRect()),
+        clip_rect=ClipRect(),
+    )
+
+    assert indicators
+    assert all("↗" in row.label for row in indicators)
 
 
 def test_viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites() -> None:
