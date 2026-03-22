@@ -1,21 +1,40 @@
 import pygame
+from types import SimpleNamespace
 
 from hexcrawler.cli.pygame_viewer import (
     FOLLOW_STATUS_INACTIVE,
     FOLLOW_STATUS_OFF,
     FOLLOW_STATUS_ON,
     HEX_SIZE,
+    LOCAL_INTERPOLATION_SNAP_DISTANCE,
     PLAYER_ID,
     FollowSelectionState,
     _apply_follow_selected_camera,
     _build_viewer_simulation,
+    compute_interpolation_alpha,
     _drain_sim_accumulator,
     _focus_camera_on_selected,
+    interpolate_entity_position,
     _single_player_offer_pause,
     _selected_entity_lines,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.hash import simulation_hash, world_hash
+
+
+def test_compute_interpolation_alpha_uses_eased_curve() -> None:
+    alpha = compute_interpolation_alpha(elapsed_seconds=0.05, tick_duration_seconds=0.1)
+
+    assert alpha == 0.5
+
+
+def test_interpolate_entity_position_snaps_small_deltas_to_current() -> None:
+    prev_snapshot = {"scout": SimpleNamespace(x=1.0, y=2.0)}
+    curr_snapshot = {"scout": SimpleNamespace(x=1.0 + (LOCAL_INTERPOLATION_SNAP_DISTANCE * 0.5), y=2.0)}
+
+    interpolated = interpolate_entity_position(prev_snapshot, curr_snapshot, "scout", alpha=0.1)
+
+    assert interpolated == (curr_snapshot["scout"].x, curr_snapshot["scout"].y)
 
 
 def test_drain_sim_accumulator_handles_invalid_values() -> None:
