@@ -1482,9 +1482,47 @@ def test_player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution() -
 
     lines = _player_feedback_lines(sim, entity=scout)
 
+    assert any("melee_state=ready" in line for line in lines)
     assert any("PROOF TOKEN GAINED +1" in line for line in lines)
     assert any("RATIONS GAINED +1" in line for line in lines)
     assert any("attack_feedback=HIT" in line and "neutralized=yes" in line for line in lines)
+
+
+def test_player_feedback_lines_surface_target_moved_and_recovery_block_reasons() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    scout = sim.state.entities[PLAYER_ID]
+
+    sim.schedule_event_at(
+        tick=sim.state.tick,
+        event_type="combat_outcome",
+        params={
+            "tick": sim.state.tick,
+            "attacker_id": PLAYER_ID,
+            "target_id": "hostile:test",
+            "applied": False,
+            "reason": "target_moved",
+        },
+    )
+    sim.advance_ticks(1)
+
+    lines = _player_feedback_lines(sim, entity=scout)
+    assert any("attack_feedback=MISS" in line and "target_moved_before_strike" in line for line in lines)
+
+    sim.schedule_event_at(
+        tick=sim.state.tick,
+        event_type="combat_outcome",
+        params={
+            "tick": sim.state.tick,
+            "attacker_id": PLAYER_ID,
+            "target_id": "hostile:test",
+            "applied": False,
+            "reason": "cooldown_blocked",
+        },
+    )
+    sim.advance_ticks(1)
+
+    lines = _player_feedback_lines(sim, entity=scout)
+    assert any("attack_feedback=BLOCKED" in line and "reason=recovering" in line for line in lines)
 
 
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:
@@ -1839,6 +1877,7 @@ def test_player_facing_hud_lines_are_compact_and_exclude_world_projection_diagno
     lines = _player_facing_hud_lines(sim, entity=sim.state.entities[PLAYER_ID], runtime_state=runtime_state)
 
     assert any(line.startswith("condition=") for line in lines)
+    assert any(line.startswith("melee_state=") for line in lines)
     assert any("proof_token=" in line and "rations=" in line for line in lines)
     assert any(line.startswith("time ") for line in lines)
     assert all("player_world=" not in line for line in lines)

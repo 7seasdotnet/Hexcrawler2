@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke and tune campaign traversal/combat feel in local encounters now that the default `core_playable` campaign startup scene has clearer spacing and a compact player HUD.
+- **Next action:** Run a manual `python play.py` smoke and tune/validate the new local melee cadence + hit readability in active `core_playable` encounters (movement legibility, windup/resolve/recovery clarity, enemy reaction visibility).
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -105,14 +105,16 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Re-spaced the default `core_playable` campaign composition so Greybridge (home), Old Stair (dungeon entrance), and the default hostile patrol spawn with meaningful travel distance between anchors.
-- Decluttered the player-facing campaign HUD to a compact set of essentials (condition, proof/rations, time/day-night/moon, encounter/home status) while preserving Enter/E and Fight/Flee interaction truth.
-- Moved verbose campaign diagnostics off the main map overlay into bounded debug panel sections (`sites`) and added focused tests for scene spacing + HUD/debug separation.
+- Tuned the authoritative committed melee cadence in `core_playable` local-role combat to make commitment clearer and reduce mashy repeat attacks (windup + resolve + longer recovery gate on the same combat seam).
+- Added compact player-facing local combat readability lines (`melee_state` ready/recovering + clearer hit/miss/block/target-moved outcomes) and surfaced them directly in the main HUD.
+- Reduced local movement presentation jitter with bounded interpolation snap/easing and added short, bounded enemy hit-reaction ring feedback to make hit/incapacitation state changes easier to perceive.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
 - Verbose diagnostics remain available through read-only bounded debug surfaces, preserving observability without crowding the main player map view.
 - Full town/dungeon interiors and expanded in-game editor authoring remain later scope.
+- This commit is a **local combat feel/readability pass in `core_playable`** (melee cadence + local HUD feedback + local visual readability), not a new combat architecture pass.
+- Projectile/ranged combat remains explicitly out of scope for this pass; melee-only authoritative combat path remains unchanged.
 
 ## Runtime profile note (C1)
 - Default play now uses `core_playable` (narrow playable-loop module set).

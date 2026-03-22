@@ -157,7 +157,7 @@ def test_player_attack_intent_can_incapacitate_hostile_and_grant_reward_token() 
     assert player.space_id == local_space_id
     assert hostile.space_id == local_space_id
 
-    for offset in (0, 6, 12):
+    for offset in (0, 8, 16):
         sim.append_command(
             SimCommand(
                 tick=sim.state.tick + offset,
@@ -171,7 +171,7 @@ def test_player_attack_intent_can_incapacitate_hostile_and_grant_reward_token() 
                 },
             )
         )
-    sim.advance_ticks(20)
+    sim.advance_ticks(30)
     assert len(hostile.wounds) >= 3
 
     exit_coord = begin["params"]["return_exit_coord"]

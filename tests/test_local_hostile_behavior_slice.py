@@ -107,7 +107,7 @@ def test_hostile_engages_via_combat_seam_and_wounds_player() -> None:
     sim.advance_ticks(3)
 
     assert sim.state.combat_log
-    first = sim.state.combat_log[0]
+    first = next(row for row in sim.state.combat_log if row.get("applied") is True)
     assert first["intent"] == ATTACK_INTENT_COMMAND_TYPE
     assert first["attacker_id"].startswith("encounter_participant:")
     assert first["target_id"] == DEFAULT_PLAYER_ENTITY_ID
@@ -313,7 +313,7 @@ def test_local_contact_reengage_after_separation_emits_next_attack() -> None:
 
     hostile.position_x = player.position_x + 1.0
     hostile.position_y = player.position_y
-    sim.advance_ticks(4)
+    sim.advance_ticks(10)
 
     second_count = len([row for row in sim.state.combat_log if row.get("applied") is True])
     assert second_count >= 2

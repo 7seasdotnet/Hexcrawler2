@@ -19,7 +19,7 @@ ATTACK_RESOLVE_EVENT_TYPE = "attack_resolve"
 DEFAULT_CALLED_REGION = "torso"
 MELEE_WINDUP_TICKS = 2
 MELEE_ACTIVE_WINDOW_TICKS = 1
-MELEE_RECOVERY_TICKS = 3
+MELEE_RECOVERY_TICKS = 5
 MELEE_TOTAL_COMMIT_TICKS = MELEE_WINDUP_TICKS + MELEE_ACTIVE_WINDOW_TICKS + MELEE_RECOVERY_TICKS
 DEFAULT_WOUND_SEVERITY = 1
 
@@ -152,6 +152,28 @@ class CombatExecutionModule(RuleModule):
                             applied = True
                             attacker.cooldown_until_tick = int(command.tick) + MELEE_TOTAL_COMMIT_TICKS
                             resolve_tick = int(command.tick) + MELEE_WINDUP_TICKS
+                            sim.append_combat_outcome(
+                                {
+                                    "tick": int(command.tick),
+                                    "intent": ATTACK_INTENT_COMMAND_TYPE,
+                                    "action_uid": f"{command.tick}:{command_index}",
+                                    "attacker_id": attacker_id,
+                                    "target_id": resolved_target_id,
+                                    "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
+                                    "mode": mode,
+                                    "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+                                    "called_region": called_region,
+                                    "region_hit": None,
+                                    "applied": False,
+                                    "reason": "windup_started",
+                                    "strike_phase": "windup",
+                                    "resolve_tick": resolve_tick,
+                                    "recovery_until_tick": attacker.cooldown_until_tick,
+                                    "wound_deltas": [],
+                                    "roll_trace": [],
+                                    "tags": list(tags),
+                                }
+                            )
                             sim.schedule_event_at(
                                 tick=resolve_tick,
                                 event_type=ATTACK_RESOLVE_EVENT_TYPE,

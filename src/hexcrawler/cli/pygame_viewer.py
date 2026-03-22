@@ -139,6 +139,9 @@ HOME_PANEL_BUTTON_HEIGHT = 34
 HOME_MARKER_RADIUS = 18
 HOME_MARKER_RING_RADIUS = 28
 HOME_MARKER_RING_WIDTH = 3
+LOCAL_INTERPOLATION_SNAP_DISTANCE = 0.08
+RECENT_COMBAT_FEEDBACK_TICK_WINDOW = 20
+RECENT_HIT_FLASH_TICK_WINDOW = 4
 
 CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
@@ -820,7 +823,8 @@ def compute_interpolation_alpha(*, elapsed_seconds: float, tick_duration_seconds
         return 0.0
     if not math.isfinite(tick_duration_seconds) or tick_duration_seconds <= 0.0:
         return 1.0
-    return clamp01(elapsed_seconds / tick_duration_seconds)
+    linear_alpha = clamp01(elapsed_seconds / tick_duration_seconds)
+    return (linear_alpha * linear_alpha) * (3.0 - (2.0 * linear_alpha))
 
 
 def lerp(start: float, end: float, alpha: float) -> float:
@@ -848,6 +852,8 @@ def interpolate_entity_position(
         return (current.x, current.y)
     if current is None:
         return (previous.x, previous.y)
+    if math.hypot(current.x - previous.x, current.y - previous.y) <= LOCAL_INTERPOLATION_SNAP_DISTANCE:
+        return (current.x, current.y)
     return (lerp(previous.x, current.x, alpha), lerp(previous.y, current.y, alpha))
 
 
@@ -2067,7 +2073,16 @@ def _draw_frame_layers(
         if entity_id == PLAYER_ID:
             _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
         else:
-            _draw_spawned_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+            _draw_spawned_entity(
+                screen,
+                sim,
+                entity,
+                interpolated[0],
+                interpolated[1],
+                world_center,
+                world_zoom_scale,
+                clip_rect=viewport_rect,
+            )
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
@@ -2144,6 +2159,7 @@ def _draw_entity(
 
 def _draw_spawned_entity(
     screen: pygame.Surface,
+    sim: Simulation,
     entity: EntityState,
     world_x: float,
     world_y: float,
@@ -2167,6 +2183,9 @@ def _draw_spawned_entity(
             marker_radius = 8
     pygame.draw.circle(screen, marker_color, (x, y), marker_radius)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
+    last_impact_tick = _last_combat_impact_tick_for_entity(sim, entity_id=entity.entity_id)
+    if isinstance(last_impact_tick, int) and (int(sim.state.tick) - last_impact_tick) <= RECENT_HIT_FLASH_TICK_WINDOW:
+        pygame.draw.circle(screen, (255, 220, 120), (x, y), marker_radius + 4, 2)
     if str(entity.template_id or "") == "encounter_hostile_v1" and is_incapacitated_from_wounds(
         entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY
     ):
@@ -2275,6 +2294,23 @@ def _last_combat_outcome_for_entity(sim: Simulation, *, entity_id: str) -> dict[
     return None
 
 
+def _last_combat_impact_tick_for_entity(sim: Simulation, *, entity_id: str) -> int | None:
+    for entry in reversed(sim.get_event_trace()):
+        if entry.get("event_type") != COMBAT_OUTCOME_EVENT_TYPE:
+            continue
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            continue
+        if params.get("target_id") != entity_id:
+            continue
+        if params.get("applied") is not True:
+            continue
+        tick = params.get("tick")
+        if isinstance(tick, int):
+            return tick
+    return None
+
+
 def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]:
     lines: list[str] = []
     reward_event = _last_event_params(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE, entity_id=entity.entity_id)
@@ -2297,8 +2333,14 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
         else:
             lines.append(f"turn_in_feedback=No ration gain ({turn_in_event.get('reason', 'unknown')})")
 
+    cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
+    lines.append(f"melee_state={'recovering' if cooldown_remaining > 0 else 'ready'} recovery_ticks={cooldown_remaining}")
+
     combat_event = _last_combat_outcome_for_entity(sim, entity_id=entity.entity_id)
     if combat_event is not None:
+        event_tick = combat_event.get("tick")
+        if isinstance(event_tick, int) and (int(sim.state.tick) - event_tick) > RECENT_COMBAT_FEEDBACK_TICK_WINDOW:
+            return lines
         applied = bool(combat_event.get("applied"))
         attacker_id = combat_event.get("attacker_id")
         target_id = combat_event.get("target_id")
@@ -2315,6 +2357,12 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
                 lines.append(
                     f"attack_feedback=COMMIT target={target_label} phase=windup resolve_tick={resolve_tick if isinstance(resolve_tick, int) else '?'}"
                 )
+                return lines
+            if reason == "target_moved":
+                lines.append(f"attack_feedback=MISS target={target_label} reason=target_moved_before_strike")
+                return lines
+            if reason == "cooldown_blocked":
+                lines.append(f"attack_feedback=BLOCKED target={target_label} reason=recovering")
                 return lines
             lines.append(
                 f"attack_feedback={'HIT' if applied else 'MISS'} target={target_label} "
@@ -2449,6 +2497,7 @@ def _player_facing_hud_lines(
         ),
         f"runtime={'paused' if runtime_state.paused else 'running'} profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
     ]
+    lines.extend(_player_feedback_lines(sim, entity=entity))
     if pending_offer is not None:
         lines.append(
             f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"

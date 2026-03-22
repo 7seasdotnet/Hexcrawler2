@@ -61,6 +61,14 @@ def _attack_command(*, tick: int, target_id: str | None = "target", target_cell=
     return SimCommand(tick=tick, command_type=ATTACK_INTENT_COMMAND_TYPE, params=params)
 
 
+def _first_outcome_with_reason(sim: Simulation, reason: str) -> dict[str, object]:
+    return next(entry for entry in sim.state.combat_log if entry.get("reason") == reason)
+
+
+def _first_applied_outcome(sim: Simulation) -> dict[str, object]:
+    return next(entry for entry in sim.state.combat_log if entry.get("applied") is True)
+
+
 def test_attack_intent_has_no_authoritative_effect_before_tick_executes() -> None:
     sim = _build_sim()
     sim.append_command(_attack_command(tick=2))
@@ -110,7 +118,7 @@ def test_applied_attack_populates_affected_target_fields() -> None:
     sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": 0}}))
     sim.advance_ticks(3)
 
-    outcome = sim.state.combat_log[0]
+    outcome = _first_applied_outcome(sim)
     assert outcome["applied"] is True
     assert "affected" in outcome
     assert outcome["reason"] == "resolved"
@@ -165,7 +173,7 @@ def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
     sim.advance_ticks(8)
 
     reasons = [entry["reason"] for entry in sim.state.combat_log]
-    assert reasons == ["cooldown_blocked", "cooldown_blocked", "resolved"]
+    assert reasons == ["windup_started", "cooldown_blocked", "cooldown_blocked", "resolved"]
 
 
 def test_combat_state_round_trip_and_hash_is_stable() -> None:
@@ -334,12 +342,12 @@ def test_absent_vs_explicit_default_entity_fields_have_matching_hash() -> None:
 def test_called_region_defaults_to_canonical_torso_for_omitted_and_null_target_region() -> None:
     sim = _build_sim()
     omitted = _attack_command(tick=0)
-    explicit_null = _attack_command(tick=6)
+    explicit_null = _attack_command(tick=8)
     explicit_null.params["target_region"] = None
 
     sim.append_command(omitted)
     sim.append_command(explicit_null)
-    sim.advance_ticks(10)
+    sim.advance_ticks(12)
 
     resolved = [entry for entry in sim.state.combat_log if entry.get("applied") is True]
     first, second = resolved
@@ -477,7 +485,7 @@ def test_melee_arc_gate_allows_front_arc_and_rejects_behind() -> None:
     front.append_command(_attack_command(tick=0, target_id="target"))
     front.advance_ticks(3)
 
-    front_outcome = front.state.combat_log[0]
+    front_outcome = _first_applied_outcome(front)
     assert front_outcome["applied"] is True
     assert front_outcome["reason"] == "resolved"
     assert "affected" in front_outcome
@@ -488,7 +496,7 @@ def test_melee_arc_gate_allows_front_arc_and_rejects_behind() -> None:
     behind.append_command(_attack_command(tick=0, target_id="target"))
     behind.advance_ticks(3)
 
-    behind_outcome = behind.state.combat_log[0]
+    behind_outcome = _first_outcome_with_reason(behind, "invalid_arc")
     assert behind_outcome["applied"] is False
     assert behind_outcome["reason"] == "invalid_arc"
     assert "affected" not in behind_outcome
@@ -582,7 +590,7 @@ def test_tactical_permission_depends_on_space_role_not_topology() -> None:
     local_hex = _build_sim()
     local_hex.append_command(_attack_command(tick=0, target_id="target"))
     local_hex.advance_ticks(3)
-    assert local_hex.state.combat_log[0]["applied"] is True
+    assert _first_applied_outcome(local_hex)["applied"] is True
 
     local_square = _build_sim()
     local_square.state.world.spaces["local_square"] = SpaceState(
@@ -599,7 +607,7 @@ def test_tactical_permission_depends_on_space_role_not_topology() -> None:
     local_square.state.entities["target"].position_y = 0.0
     local_square.append_command(_attack_command(tick=0, target_id="target"))
     local_square.advance_ticks(3)
-    assert local_square.state.combat_log[0]["applied"] is True
+    assert _first_applied_outcome(local_square)["applied"] is True
 
     campaign_square = _build_sim()
     campaign_square.state.world.spaces["campaign_square"] = SpaceState(
@@ -616,8 +624,7 @@ def test_tactical_permission_depends_on_space_role_not_topology() -> None:
     campaign_square.state.entities["target"].position_y = 0.0
     campaign_square.append_command(_attack_command(tick=0, target_id="target"))
     campaign_square.advance_ticks(3)
-    assert campaign_square.state.combat_log[0]["applied"] is False
-    assert campaign_square.state.combat_log[0]["reason"] == "tactical_not_allowed_in_campaign_space"
+    assert _first_outcome_with_reason(campaign_square, "tactical_not_allowed_in_campaign_space")["applied"] is False
 
 
 def test_legacy_world_payload_defaults_space_roles_deterministically() -> None:
