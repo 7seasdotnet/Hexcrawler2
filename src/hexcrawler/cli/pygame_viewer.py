@@ -50,6 +50,7 @@ from hexcrawler.sim.exploration import (
 )
 from hexcrawler.sim.interactions import INTERACTION_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.supplies import SUPPLY_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.signals import distance_between_locations
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import (
     axial_to_world_xy,

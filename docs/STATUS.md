@@ -100,15 +100,16 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_soak_bounds_slice.py tests/test_soak_audit_slice.py`
 - `PYTHONPATH=src python - <<'PY' ... collect_soak_metrics headless/viewer 20000-tick comparison ... PY`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
 - `python play.py --headless`
 - `python play.py --headless --runtime-profile experimental_world`
 - `python play.py --headless --runtime-profile soak_audit`
 - `python play.py`
 
 ## What changed in this commit
-- Tuned `LocalHostileBehaviorModule` local-role first-enemy contact cadence to include a short deterministic telegraph window and longer repeat-attack cooldown, improving punish-window readability without adding new combat systems.
-- Expanded viewer combat legibility lines to show explicit player melee availability timing (`attack_available_in_ticks`), nearest enemy loop phase (`approach/telegraph/commit/recover`), and compact normalized outcome reasons.
-- Updated local combat/viewer tests for the new cadence and readability surface expectations while preserving deterministic save/load/hash safety checks in the existing combat seam suite.
+- Fixed a `python play.py` startup regression in the viewer HUD/readability path by wiring `_nearest_local_hostile` to the existing canonical `distance_between_locations` helper used across simulation systems.
+- Added a focused regression test that executes `_player_feedback_lines` in a local-role space with a hostile present and asserts enemy loop line generation, covering the prior NameError path.
+- Re-verified startup/headless commands for default `core_playable` runtime profile and retained phase focus on manual combat readability smoke validation (no new mechanics).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
