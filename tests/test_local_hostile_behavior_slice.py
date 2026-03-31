@@ -91,7 +91,7 @@ def test_hostile_engages_via_combat_seam_and_wounds_player() -> None:
     sim = _build_handoff_sim(seed=402)
     _schedule_request(sim)
 
-    sim.advance_ticks(3)
+    sim.advance_ticks(6)
     begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
     local_space_id = begin["to_space_id"]
     hostile_id = sorted(
@@ -104,7 +104,7 @@ def test_hostile_engages_via_combat_seam_and_wounds_player() -> None:
     hostile.position_x = player.position_x + 1.0
     hostile.position_y = player.position_y
 
-    sim.advance_ticks(3)
+    sim.advance_ticks(6)
 
     assert sim.state.combat_log
     first = next(row for row in sim.state.combat_log if row.get("applied") is True)
@@ -146,7 +146,7 @@ def test_local_hostile_pressure_reaches_explicit_incapacitation_deterministicall
 def test_wound_consequence_persists_through_return_and_save_load() -> None:
     sim = _build_handoff_sim(seed=403)
     _schedule_request(sim)
-    sim.advance_ticks(3)
+    sim.advance_ticks(6)
     begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
     local_space_id = begin["to_space_id"]
     return_exit_coord = begin["return_exit_coord"]
@@ -160,7 +160,7 @@ def test_wound_consequence_persists_through_return_and_save_load() -> None:
     hostile.position_x = player.position_x + 1.0
     hostile.position_y = player.position_y
 
-    sim.advance_ticks(3)
+    sim.advance_ticks(6)
 
     player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
     wounded_speed = player.speed_per_tick * movement_multiplier_from_wounds(player.wounds)
@@ -241,11 +241,11 @@ def test_local_contact_cooldown_limits_same_contact_hit_rate() -> None:
         for row in sim.state.combat_log
         if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("applied") is True
     ]
-    assert 1 <= len(applied_melee) <= 25
+    assert 1 <= len(applied_melee) <= 8
     assert len(sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].wounds) == len(applied_melee)
 
 
-def test_local_contact_attack_cooldown_allows_player_reposition_between_hits() -> None:
+def test_local_contact_attack_cooldown_allows_player_reposition_between_swings() -> None:
     sim = _build_handoff_sim(seed=406)
     _schedule_request(sim)
     sim.advance_ticks(3)
@@ -264,7 +264,7 @@ def test_local_contact_attack_cooldown_allows_player_reposition_between_hits() -
     hostile.position_y = player.position_y
     start_x = player.position_x
 
-    for _ in range(6):
+    for _ in range(10):
         sim.append_command(
             SimCommand(
                 tick=sim.state.tick,
@@ -277,12 +277,42 @@ def test_local_contact_attack_cooldown_allows_player_reposition_between_hits() -
 
     assert sim.state.entities[DEFAULT_PLAYER_ENTITY_ID].position_x > start_x
 
-    applied_melee = [
+    hostile_swings = [
         row
         for row in sim.state.combat_log
-        if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("applied") is True
+        if row.get("intent") == ATTACK_INTENT_COMMAND_TYPE and row.get("attacker_id") == hostile_id
     ]
-    assert applied_melee
+    assert hostile_swings
+    applied_melee = [row for row in hostile_swings if row.get("applied") is True]
+    assert len(applied_melee) <= 1
+
+
+def test_local_contact_telegraph_requires_brief_contact_before_first_attack() -> None:
+    sim = _build_handoff_sim(seed=409)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+
+    begin = _trace_by_type(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]["params"]
+    local_space_id = begin["to_space_id"]
+    hostile_id = sorted(
+        entity_id
+        for entity_id, entity in sim.state.entities.items()
+        if entity.space_id == local_space_id and entity.template_id == HOSTILE_TEMPLATE_ID
+    )[0]
+    hostile = sim.state.entities[hostile_id]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+
+    hostile.position_x = player.position_x + 1.0
+    hostile.position_y = player.position_y
+    contact_tick = sim.state.tick
+
+    sim.advance_ticks(1)
+    assert not [row for row in sim.state.combat_log if row.get("attacker_id") == hostile_id]
+
+    sim.advance_ticks(3)
+    hostile_outcomes = [row for row in sim.state.combat_log if row.get("attacker_id") == hostile_id]
+    assert hostile_outcomes
+    assert hostile_outcomes[0]["tick"] >= contact_tick + 2
 
 
 def test_local_contact_reengage_after_separation_emits_next_attack() -> None:
