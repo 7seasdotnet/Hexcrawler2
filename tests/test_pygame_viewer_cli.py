@@ -1526,6 +1526,34 @@ def test_player_feedback_lines_surface_target_moved_and_recovery_block_reasons()
     assert any("attack_feedback=BLOCKED" in line and "reason=cooldown_blocked" in line for line in lines)
 
 
+def test_player_feedback_lines_include_enemy_loop_line_in_local_space() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    scout = sim.state.entities[PLAYER_ID]
+    local_space_id = "local:test_loop"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 8, "height": 8, "origin": {"x": 0, "y": 0}},
+    )
+    scout.space_id = local_space_id
+    scout.position_x = 1.0
+    scout.position_y = 1.0
+
+    hostile = EntityState(
+        entity_id="hostile:nearby",
+        position_x=3.0,
+        position_y=1.0,
+        space_id=local_space_id,
+        template_id=HOSTILE_TEMPLATE_ID,
+    )
+    sim.add_entity(hostile)
+
+    lines = _player_feedback_lines(sim, entity=scout)
+
+    assert any("enemy_loop=approach enemy=hostile:nearby distance=2.00" in line for line in lines)
+
+
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:
     viewer_module._ensure_pygame_imported()
     viewer_module.pygame.font.init()
