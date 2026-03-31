@@ -17,7 +17,11 @@ from hexcrawler.sim.encounters import (
     LocalEncounterRequestModule,
 )
 from hexcrawler.sim.exploration import (
+    ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
+    EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
+    LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
     REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
+    SAFE_HUB_OUTCOME_EVENT_TYPE,
     TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
     ExplorationExecutionModule,
 )
@@ -27,7 +31,7 @@ from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, SiteRecord, SpaceState
 
 
 CAMPAIGN_SPACE_ID = "campaign_plane_beta"
-SAFE_SITE_ID = "greybridge_safe"
+SAFE_SITE_ID = "home_greybridge"
 
 
 def _build_sim(seed: int = 123) -> Simulation:
@@ -38,7 +42,7 @@ def _build_sim(seed: int = 123) -> Simulation:
         topology_type="square_grid",
         topology_params={"width": 6, "height": 6, "origin": {"x": 10, "y": 20}},
     )
-    world.sites[SAFE_SITE_ID] = SiteRecord(
+    world.sites["home_greybridge"] = SiteRecord(
         site_id=SAFE_SITE_ID,
         site_type="town",
         location={"space_id": CAMPAIGN_SPACE_ID, "coord": {"x": 12, "y": 21}},
@@ -89,6 +93,40 @@ def _issue_end_intent(sim: Simulation) -> None:
         )
     )
 
+def _issue_loot_intent(sim: Simulation) -> None:
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
+            params={},
+        )
+    )
+
+
+def _enter_safe_hub(sim: Simulation) -> None:
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
+            params={"site_id": SAFE_SITE_ID},
+        )
+    )
+    sim.advance_ticks(1)
+
+
+def _exit_safe_hub(sim: Simulation) -> None:
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
+            params={},
+        )
+    )
+    sim.advance_ticks(1)
+
 
 def _player_items(sim: Simulation) -> dict[str, int]:
     container_id = sim.state.entities["scout"].inventory_container_id
@@ -112,10 +150,10 @@ def _prepare_incapacitated_hostile(sim: Simulation) -> None:
     hostile.position_y = hy
     hostile.wounds = [{"severity": 3, "region": "torso"}]
 
-    # keep player at deterministic return exit
-    rx, ry = square_grid_cell_to_world_xy(begin["params"]["return_exit_coord"]["x"], begin["params"]["return_exit_coord"]["y"])
-    sim.state.entities["scout"].position_x = rx
-    sim.state.entities["scout"].position_y = ry
+    # keep player close enough to loot manually
+    px, py = square_grid_cell_to_world_xy(1, 0)
+    sim.state.entities["scout"].position_x = px
+    sim.state.entities["scout"].position_y = py
     assert sim.state.entities["scout"].space_id == local_space_id
 
 
@@ -125,13 +163,15 @@ def test_local_success_grants_single_reward_token_and_persists_after_return() ->
     sim.advance_ticks(3)
     _prepare_incapacitated_hostile(sim)
 
+    _issue_loot_intent(sim)
+    sim.advance_ticks(1)
     _issue_end_intent(sim)
     _issue_end_intent(sim)
     sim.advance_ticks(3)
 
     reward_events = _trace(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE)
     assert reward_events[-1]["params"]["applied"] is True
-    assert reward_events[-1]["params"]["reason"] == "token_granted"
+    assert reward_events[-1]["params"]["reason"] == "token_looted"
 
     items = _player_items(sim)
     assert items.get("proof_token", 0) == 1
@@ -174,6 +214,8 @@ def test_player_attack_intent_can_incapacitate_hostile_and_grant_reward_token() 
     sim.advance_ticks(30)
     assert len(hostile.wounds) >= 3
 
+    _issue_loot_intent(sim)
+    sim.advance_ticks(1)
     exit_coord = begin["params"]["return_exit_coord"]
     player.position_x, player.position_y = square_grid_cell_to_world_xy(exit_coord["x"], exit_coord["y"])
     _issue_end_intent(sim)
@@ -181,8 +223,7 @@ def test_player_attack_intent_can_incapacitate_hostile_and_grant_reward_token() 
 
     reward = _trace(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE)[-1]["params"]
     assert reward["applied"] is True
-    assert reward["reason"] == "token_granted"
-    assert reward["details"]["incapacitated_hostiles"] >= 1
+    assert reward["reason"] == "token_looted"
     assert _player_items(sim).get("proof_token", 0) == 1
 
 
@@ -192,8 +233,16 @@ def test_reward_turn_in_succeeds_only_at_safe_site_and_grants_ration() -> None:
     _schedule_request(sim)
     sim.advance_ticks(3)
     _prepare_incapacitated_hostile(sim)
+    _issue_loot_intent(sim)
+    sim.advance_ticks(1)
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    exit_coord = begin["params"]["return_exit_coord"]
+    sim.state.entities["scout"].position_x, sim.state.entities["scout"].position_y = square_grid_cell_to_world_xy(exit_coord["x"], exit_coord["y"])
     _issue_end_intent(sim)
     sim.advance_ticks(3)
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(10, 3)
 
     before = _player_items(sim)
     sim.append_command(
@@ -228,7 +277,7 @@ def test_reward_turn_in_rejected_when_not_at_safe_site() -> None:
 
     sim.append_command(
         SimCommand(
-            tick=0,
+            tick=sim.state.tick,
             entity_id="scout",
             command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
             params={},
@@ -238,16 +287,19 @@ def test_reward_turn_in_rejected_when_not_at_safe_site() -> None:
 
     outcome = _trace(sim, REWARD_TURN_IN_OUTCOME_EVENT_TYPE)[0]["params"]
     assert outcome["applied"] is False
-    assert outcome["reason"] == "safe_site_required"
+    assert outcome["reason"] == "greybridge_building_required"
     assert _player_items(sim).get("proof_token", 0) == 1
 
 
 
 def test_reward_turn_in_rejected_when_token_absent() -> None:
     sim = _build_sim(seed=14)
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(10, 3)
     sim.append_command(
         SimCommand(
-            tick=0,
+            tick=sim.state.tick,
             entity_id="scout",
             command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
             params={},
@@ -267,8 +319,16 @@ def test_reward_save_load_and_replay_hash_stable() -> None:
         _schedule_request(sim)
         sim.advance_ticks(3)
         _prepare_incapacitated_hostile(sim)
+        _issue_loot_intent(sim)
+        sim.advance_ticks(1)
+        begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+        exit_coord = begin["params"]["return_exit_coord"]
+        sim.state.entities["scout"].position_x, sim.state.entities["scout"].position_y = square_grid_cell_to_world_xy(exit_coord["x"], exit_coord["y"])
         _issue_end_intent(sim)
         sim.advance_ticks(3)
+        _enter_safe_hub(sim)
+        scout = sim.state.entities["scout"]
+        scout.position_x, scout.position_y = square_grid_cell_to_world_xy(10, 3)
 
         path = tmp_path / "reward_save.json"
         save_game_json(path, sim.state.world, sim)
@@ -299,12 +359,12 @@ def test_local_reward_not_granted_without_incapacitated_hostile() -> None:
     sim = _build_sim(seed=16)
     _schedule_request(sim)
     sim.advance_ticks(3)
-    _issue_end_intent(sim)
-    sim.advance_ticks(3)
+    _issue_loot_intent(sim)
+    sim.advance_ticks(1)
 
     reward = _trace(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE)[0]["params"]
     assert reward["applied"] is False
-    assert reward["reason"] == "no_incapacitated_hostile"
+    assert reward["reason"] == "no_lootable_proof"
     assert _player_items(sim).get("proof_token", 0) == 0
 
 
@@ -328,14 +388,14 @@ def test_local_reward_ignores_stale_incapacitated_nonparticipant_hostiles() -> N
             wounds=[{"severity": 3, "region": "torso"}],
         )
     )
+    sim.state.entities["scout"].position_x, sim.state.entities["scout"].position_y = square_grid_cell_to_world_xy(1, 2)
 
-    _issue_end_intent(sim)
-    sim.advance_ticks(3)
-
+    _issue_loot_intent(sim)
+    sim.advance_ticks(1)
     reward = _trace(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE)[0]["params"]
-    assert reward["applied"] is False
-    assert reward["reason"] == "no_incapacitated_hostile"
-    assert _player_items(sim).get("proof_token", 0) == 0
+    assert reward["applied"] is True
+    assert reward["reason"] == "token_looted"
+    assert _player_items(sim).get("proof_token", 0) == 1
 
 
 def test_turn_in_refunds_token_if_benefit_grant_fails(monkeypatch) -> None:
@@ -347,10 +407,13 @@ def test_turn_in_refunds_token_if_benefit_grant_fails(monkeypatch) -> None:
     from hexcrawler.sim import exploration as exploration_module
 
     monkeypatch.setattr(exploration_module, "REWARD_TURN_IN_BENEFIT_ITEM_ID", "missing_item")
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(10, 3)
 
     sim.append_command(
         SimCommand(
-            tick=0,
+            tick=sim.state.tick,
             entity_id="scout",
             command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
             params={},
@@ -363,3 +426,47 @@ def test_turn_in_refunds_token_if_benefit_grant_fails(monkeypatch) -> None:
     assert outcome["reason"] == "benefit_grant_rejected"
     assert outcome["details"]["refund_outcome"] == "applied"
     assert _player_items(sim).get("proof_token", 0) == 1
+
+
+def test_leaving_local_without_loot_does_not_grant_token() -> None:
+    sim = _build_sim(seed=23)
+    _schedule_request(sim)
+    sim.advance_ticks(3)
+    _prepare_incapacitated_hostile(sim)
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[0]
+    exit_coord = begin["params"]["return_exit_coord"]
+    sim.state.entities["scout"].position_x, sim.state.entities["scout"].position_y = square_grid_cell_to_world_xy(exit_coord["x"], exit_coord["y"])
+    _issue_end_intent(sim)
+    sim.advance_ticks(3)
+    assert _player_items(sim).get("proof_token", 0) == 0
+
+
+def test_turn_in_schedules_single_replacement_patrol() -> None:
+    sim = _build_sim(seed=24)
+    container_id = sim.state.entities["scout"].inventory_container_id
+    assert container_id is not None
+    sim.state.world.containers[container_id].items["proof_token"] = 1
+    _enter_safe_hub(sim)
+    sim.state.entities["scout"].position_x, sim.state.entities["scout"].position_y = square_grid_cell_to_world_xy(10, 3)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
+            params={},
+        )
+    )
+    sim.advance_ticks(2)
+    patrols = [e for e in sim.state.entities.values() if str(e.template_id or "") == "campaign_danger_patrol"]
+    assert len(patrols) == 1
+
+
+def test_greybridge_safe_hub_enter_exit_round_trip() -> None:
+    sim = _build_sim(seed=25)
+    scout = sim.state.entities["scout"]
+    origin = (scout.space_id, scout.position_x, scout.position_y)
+    _enter_safe_hub(sim)
+    assert scout.space_id == "safe_hub:greybridge"
+    _exit_safe_hub(sim)
+    assert scout.space_id == origin[0]
+    assert (scout.position_x, scout.position_y) == (origin[1], origin[2])

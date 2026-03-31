@@ -242,7 +242,7 @@ def test_safe_recovery_role_gating_rejects_local_space() -> None:
     sim.advance_ticks(2)
 
     recovery_events = [entry for entry in sim.get_event_trace() if entry.get("event_type") == "recovery_outcome"]
-    assert recovery_events[0]["params"]["reason"] == "campaign_space_required"
+    assert recovery_events[0]["params"]["reason"] == "recovery_building_required"
 
 
 def test_safe_recovery_execute_requeue_is_idempotent_for_same_action_uid() -> None:
