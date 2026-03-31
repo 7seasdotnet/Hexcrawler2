@@ -93,6 +93,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src python - <<'PY' ... core_playable scripted smoke (patrol contact -> Fight -> local pressure -> return) ... PY`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py -k "deterministic or hash or round_trip or cooldown_gate_blocks_repeat_attack_in_same_tick"`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_pygame_viewer_cli.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_encounter_controller_smoke_slice.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k local_contact_and_return_smoke_slice`
@@ -105,9 +106,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Tuned the authoritative committed melee cadence in `core_playable` local-role combat to make commitment clearer and reduce mashy repeat attacks (windup + resolve + longer recovery gate on the same combat seam).
-- Added compact player-facing local combat readability lines (`melee_state` ready/recovering + clearer hit/miss/block/target-moved outcomes) and surfaced them directly in the main HUD.
-- Reduced local movement presentation jitter with bounded interpolation snap/easing and added short, bounded enemy hit-reaction ring feedback to make hit/incapacitation state changes easier to perceive.
+- Tuned `LocalHostileBehaviorModule` local-role first-enemy contact cadence to include a short deterministic telegraph window and longer repeat-attack cooldown, improving punish-window readability without adding new combat systems.
+- Expanded viewer combat legibility lines to show explicit player melee availability timing (`attack_available_in_ticks`), nearest enemy loop phase (`approach/telegraph/commit/recover`), and compact normalized outcome reasons.
+- Updated local combat/viewer tests for the new cadence and readability surface expectations while preserving deterministic save/load/hash safety checks in the existing combat seam suite.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

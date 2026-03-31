@@ -1179,13 +1179,13 @@ def test_viewer_runtime_local_contact_and_return_smoke_slice() -> None:
     hostile.position_y = player.position_y
     start_x = player.position_x
 
-    for _ in range(6):
+    for _ in range(10):
         runtime.controller.set_move_vector(1.0, 0.0)
         runtime.advance_ticks(1)
 
     assert sim.state.entities[PLAYER_ID].position_x > start_x
     assert any(
-        row.get("applied") is True and row.get("target_id") == PLAYER_ID
+        row.get("attacker_id") == hostile_id and row.get("intent") == ATTACK_INTENT_COMMAND_TYPE
         for row in sim.state.combat_log
     )
 
@@ -1483,6 +1483,7 @@ def test_player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution() -
     lines = _player_feedback_lines(sim, entity=scout)
 
     assert any("melee_state=ready" in line for line in lines)
+    assert any("attack_available_in_ticks=0" in line for line in lines)
     assert any("PROOF TOKEN GAINED +1" in line for line in lines)
     assert any("RATIONS GAINED +1" in line for line in lines)
     assert any("attack_feedback=HIT" in line and "neutralized=yes" in line for line in lines)
@@ -1522,7 +1523,7 @@ def test_player_feedback_lines_surface_target_moved_and_recovery_block_reasons()
     sim.advance_ticks(1)
 
     lines = _player_feedback_lines(sim, entity=scout)
-    assert any("attack_feedback=BLOCKED" in line and "reason=recovering" in line for line in lines)
+    assert any("attack_feedback=BLOCKED" in line and "reason=cooldown_blocked" in line for line in lines)
 
 
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:

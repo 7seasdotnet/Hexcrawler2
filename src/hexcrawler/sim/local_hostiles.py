@@ -12,7 +12,8 @@ from hexcrawler.sim.wounds import is_incapacitated_from_wounds
 
 HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
 MAX_TRACKED_ATTACKERS = 512
-LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS = 3
+LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS = 8
+LOCAL_CONTACT_TELEGRAPH_TICKS = 2
 
 
 class LocalHostileBehaviorModule(RuleModule):
@@ -24,6 +25,7 @@ class LocalHostileBehaviorModule(RuleModule):
 
     name = "local_hostile_behavior"
     _STATE_LAST_ATTACK_TICK_BY_ENTITY = "last_attack_tick_by_entity"
+    _STATE_CONTACT_START_TICK_BY_ENTITY = "contact_start_tick_by_entity"
 
     def on_simulation_start(self, sim: Simulation) -> None:
         sim.set_rules_state(self.name, self._rules_state(sim))
@@ -31,6 +33,7 @@ class LocalHostileBehaviorModule(RuleModule):
     def on_tick_start(self, sim: Simulation, tick: int) -> None:
         state = self._rules_state(sim)
         last_attack_tick_by_entity = dict(state[self._STATE_LAST_ATTACK_TICK_BY_ENTITY])
+        contact_start_tick_by_entity = dict(state[self._STATE_CONTACT_START_TICK_BY_ENTITY])
 
         player = sim.state.entities.get(DEFAULT_PLAYER_ENTITY_ID)
         if player is None:
@@ -57,6 +60,12 @@ class LocalHostileBehaviorModule(RuleModule):
                 # Hold hostile movement while in melee contact so command ordering
                 # cannot re-introduce same-cell shove loops before combat intent resolves.
                 self._append_move_intent(sim, tick=tick, entity_id=entity_id, move_x=0.0, move_y=0.0)
+                contact_start_tick = contact_start_tick_by_entity.get(entity_id)
+                if not isinstance(contact_start_tick, int):
+                    contact_start_tick_by_entity[entity_id] = tick
+                    continue
+                if (tick - contact_start_tick) < LOCAL_CONTACT_TELEGRAPH_TICKS:
+                    continue
                 last_attack_tick = last_attack_tick_by_entity.get(entity_id)
                 if isinstance(last_attack_tick, int) and (tick - last_attack_tick) < LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS:
                     continue
@@ -74,7 +83,9 @@ class LocalHostileBehaviorModule(RuleModule):
                     )
                 )
                 last_attack_tick_by_entity[entity_id] = tick
+                contact_start_tick_by_entity[entity_id] = tick
                 continue
+            contact_start_tick_by_entity.pop(entity_id, None)
 
             delta_x = player.position_x - entity.position_x
             delta_y = player.position_y - entity.position_y
@@ -84,6 +95,11 @@ class LocalHostileBehaviorModule(RuleModule):
         state[self._STATE_LAST_ATTACK_TICK_BY_ENTITY] = {
             key: int(value)
             for key, value in sorted(last_attack_tick_by_entity.items())[-MAX_TRACKED_ATTACKERS:]
+            if isinstance(key, str) and key and isinstance(value, int)
+        }
+        state[self._STATE_CONTACT_START_TICK_BY_ENTITY] = {
+            key: int(value)
+            for key, value in sorted(contact_start_tick_by_entity.items())[-MAX_TRACKED_ATTACKERS:]
             if isinstance(key, str) and key and isinstance(value, int)
         }
         sim.set_rules_state(self.name, state)
@@ -114,7 +130,20 @@ class LocalHostileBehaviorModule(RuleModule):
             normalized[entity_id] = tick_value
         if len(normalized) > MAX_TRACKED_ATTACKERS:
             normalized = dict(list(normalized.items())[-MAX_TRACKED_ATTACKERS:])
+        raw_contact_start_tick_by_entity = state.get(self._STATE_CONTACT_START_TICK_BY_ENTITY, {})
+        if not isinstance(raw_contact_start_tick_by_entity, dict):
+            raise ValueError("local_hostile_behavior.contact_start_tick_by_entity must be an object")
+        normalized_contact_start: dict[str, int] = {}
+        for entity_id, tick_value in sorted(raw_contact_start_tick_by_entity.items()):
+            if not isinstance(entity_id, str) or not entity_id:
+                continue
+            if not isinstance(tick_value, int) or tick_value < 0:
+                raise ValueError("local_hostile_behavior.contact_start_tick_by_entity values must be non-negative integers")
+            normalized_contact_start[entity_id] = tick_value
+        if len(normalized_contact_start) > MAX_TRACKED_ATTACKERS:
+            normalized_contact_start = dict(list(normalized_contact_start.items())[-MAX_TRACKED_ATTACKERS:])
 
         return {
             self._STATE_LAST_ATTACK_TICK_BY_ENTITY: normalized,
+            self._STATE_CONTACT_START_TICK_BY_ENTITY: normalized_contact_start,
         }

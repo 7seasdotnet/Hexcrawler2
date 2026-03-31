@@ -2311,6 +2311,58 @@ def _last_combat_impact_tick_for_entity(sim: Simulation, *, entity_id: str) -> i
     return None
 
 
+def _combat_reason_label(reason: str) -> str:
+    mapping = {
+        "resolved": "hit",
+        "invalid_arc": "blocked",
+        "target_moved": "target_moved",
+        "out_of_range": "out_of_range",
+        "cooldown_blocked": "cooldown_blocked",
+        "ineligible": "ineligible",
+    }
+    return mapping.get(reason, reason)
+
+
+def _nearest_local_hostile(sim: Simulation, *, entity: EntityState) -> tuple[str, EntityState, float] | None:
+    if entity.space_id not in sim.state.world.spaces:
+        return None
+    space = sim.state.world.spaces[entity.space_id]
+    if space.role != LOCAL_SPACE_ROLE:
+        return None
+    entity_location = sim._entity_location_ref(entity)
+    nearest: tuple[str, EntityState, float] | None = None
+    for candidate_id in sorted(sim.state.entities):
+        candidate = sim.state.entities[candidate_id]
+        if candidate.space_id != entity.space_id:
+            continue
+        if str(candidate.template_id or "") != "encounter_hostile_v1":
+            continue
+        distance = distance_between_locations(entity_location, sim._entity_location_ref(candidate))
+        if distance is None:
+            continue
+        if nearest is None or distance < nearest[2]:
+            nearest = (candidate_id, candidate, float(distance))
+    return nearest
+
+
+def _enemy_loop_phase_line(sim: Simulation, *, entity: EntityState) -> str | None:
+    nearest = _nearest_local_hostile(sim, entity=entity)
+    if nearest is None:
+        return None
+    hostile_id, hostile, distance = nearest
+    phase = "approach"
+    hostile_event = _last_combat_outcome_for_entity(sim, entity_id=hostile_id)
+    if hostile_event is not None and hostile_event.get("attacker_id") == hostile_id:
+        reason = str(hostile_event.get("reason", ""))
+        if reason == "windup_started":
+            phase = "telegraph"
+        elif hostile_event.get("strike_phase") in {"active", "active_miss"}:
+            phase = "commit"
+    if phase == "approach" and int(hostile.cooldown_until_tick) > int(sim.state.tick):
+        phase = "recover"
+    return f"enemy_loop={phase} enemy={hostile_id} distance={distance:.2f}"
+
+
 def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]:
     lines: list[str] = []
     reward_event = _last_event_params(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE, entity_id=entity.entity_id)
@@ -2334,7 +2386,13 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
             lines.append(f"turn_in_feedback=No ration gain ({turn_in_event.get('reason', 'unknown')})")
 
     cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
-    lines.append(f"melee_state={'recovering' if cooldown_remaining > 0 else 'ready'} recovery_ticks={cooldown_remaining}")
+    lines.append(
+        f"melee_state={'recovering' if cooldown_remaining > 0 else 'ready'} "
+        f"recovery_ticks={cooldown_remaining} attack_available_in_ticks={cooldown_remaining}"
+    )
+    enemy_loop_line = _enemy_loop_phase_line(sim, entity=entity)
+    if enemy_loop_line is not None:
+        lines.append(enemy_loop_line)
 
     combat_event = _last_combat_outcome_for_entity(sim, entity_id=entity.entity_id)
     if combat_event is not None:
@@ -2362,16 +2420,17 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
                 lines.append(f"attack_feedback=MISS target={target_label} reason=target_moved_before_strike")
                 return lines
             if reason == "cooldown_blocked":
-                lines.append(f"attack_feedback=BLOCKED target={target_label} reason=recovering")
+                lines.append(f"attack_feedback=BLOCKED target={target_label} reason=cooldown_blocked")
                 return lines
             lines.append(
                 f"attack_feedback={'HIT' if applied else 'MISS'} target={target_label} "
-                f"reason={reason} neutralized={'yes' if neutralized else 'no'}"
+                f"reason={_combat_reason_label(reason)} neutralized={'yes' if neutralized else 'no'}"
             )
         elif target_id == entity.entity_id:
             lines.append(
                 f"incoming_feedback={'HIT' if applied else 'MISS'} "
-                f"by={attacker_id if isinstance(attacker_id, str) else '?'} reason={combat_event.get('reason', '?')}"
+                f"by={attacker_id if isinstance(attacker_id, str) else '?'} "
+                f"reason={_combat_reason_label(str(combat_event.get('reason', '?')))}"
             )
     return lines
 
