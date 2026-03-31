@@ -41,10 +41,14 @@ from hexcrawler.sim.campaign_danger import (
 from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.exploration import (
+    ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
+    EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
+    LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
     EXPLORATION_OUTCOME_EVENT_TYPE,
     RECOVERY_OUTCOME_EVENT_TYPE,
     REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
     REWARD_TOKEN_ITEM_ID,
+    SAFE_HUB_OUTCOME_EVENT_TYPE,
     SAFE_RECOVERY_INTENT_COMMAND_TYPE,
     TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
 )
@@ -336,6 +340,36 @@ class SimulationController:
                 tick=self.sim.state.tick,
                 entity_id=self.entity_id,
                 command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
+                params={},
+            )
+        )
+
+    def enter_safe_hub_intent(self, site_id: str) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
+                params={"site_id": site_id},
+            )
+        )
+
+    def exit_safe_hub_intent(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
+                params={},
+            )
+        )
+
+    def loot_local_proof_intent(self) -> None:
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
                 params={},
             )
         )
@@ -2072,7 +2106,7 @@ def _draw_frame_layers(
         if interpolated is None:
             continue
         if entity_id == PLAYER_ID:
-            _draw_entity(screen, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+            _draw_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
         else:
             _draw_spawned_entity(
                 screen,
@@ -2139,6 +2173,7 @@ def _draw_frame_layers(
 
 def _draw_entity(
     screen: pygame.Surface,
+    entity: EntityState,
     world_x: float,
     world_y: float,
     center: tuple[float, float],
@@ -2153,6 +2188,7 @@ def _draw_entity(
     y = int(center[1] + world_y * size)
     pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
     pygame.draw.circle(screen, (15, 15, 15), (x, y), 8, 1)
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(40, 40, 24))
     screen.set_clip(old_clip)
 
 
@@ -2184,6 +2220,7 @@ def _draw_spawned_entity(
             marker_radius = 8
     pygame.draw.circle(screen, marker_color, (x, y), marker_radius)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(18, 24, 28))
     last_impact_tick = _last_combat_impact_tick_for_entity(sim, entity_id=entity.entity_id)
     if isinstance(last_impact_tick, int) and (int(sim.state.tick) - last_impact_tick) <= RECENT_HIT_FLASH_TICK_WINDOW:
         pygame.draw.circle(screen, (255, 220, 120), (x, y), marker_radius + 4, 2)
@@ -2193,6 +2230,14 @@ def _draw_spawned_entity(
         pygame.draw.line(screen, (30, 32, 38), (x - 4, y - 4), (x + 4, y + 4), 2)
         pygame.draw.line(screen, (30, 32, 38), (x + 4, y - 4), (x - 4, y + 4), 2)
     screen.set_clip(old_clip)
+
+
+def _draw_facing_wedge(screen: pygame.Surface, *, x: int, y: int, facing: int, color: tuple[int, int, int]) -> None:
+    angle = (int(facing) % 6) * (math.pi / 3.0)
+    tip = (int(x + math.cos(angle) * 12), int(y + math.sin(angle) * 12))
+    left = (int(x + math.cos(angle + 2.4) * 5), int(y + math.sin(angle + 2.4) * 5))
+    right = (int(x + math.cos(angle - 2.4) * 5), int(y + math.sin(angle - 2.4) * 5))
+    pygame.draw.polygon(screen, color, [tip, left, right])
 
 
 def _draw_top_control_bar(
@@ -2366,13 +2411,17 @@ def _enemy_loop_phase_line(sim: Simulation, *, entity: EntityState) -> str | Non
 
 def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]:
     lines: list[str] = []
+    safe_hub_event = _last_event_params(sim, SAFE_HUB_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
+    if safe_hub_event is not None:
+        lines.append(
+            f"greybridge_hub_feedback={'ENTERED' if bool(safe_hub_event.get('applied')) else 'NO_CHANGE'} reason={safe_hub_event.get('reason', 'unknown')}"
+        )
+
     reward_event = _last_event_params(sim, LOCAL_ENCOUNTER_REWARD_EVENT_TYPE, entity_id=entity.entity_id)
     if reward_event is not None:
         details = reward_event.get("details") if isinstance(reward_event.get("details"), dict) else {}
-        quantity = int(details.get("quantity", 0)) if isinstance(details.get("quantity"), int) else 0
-        incapacitated = int(details.get("incapacitated_hostiles", 0)) if isinstance(details.get("incapacitated_hostiles"), int) else 0
-        if bool(reward_event.get("applied")) and quantity > 0:
-            lines.append(f"reward_feedback=PROOF TOKEN GAINED +{quantity} (local neutralized={incapacitated})")
+        if bool(reward_event.get("applied")):
+            lines.append("reward_feedback=PROOF TOKEN LOOTED +1 (manual loot confirmed)")
         else:
             lines.append(f"reward_feedback=No proof token ({reward_event.get('reason', 'unknown')})")
 
@@ -2385,6 +2434,20 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
             lines.append(f"turn_in_feedback=RATIONS GAINED +{granted_quantity} (proof converted at home)")
         else:
             lines.append(f"turn_in_feedback=No ration gain ({turn_in_event.get('reason', 'unknown')})")
+        if isinstance(details.get("next_patrol_reason"), str):
+            lines.append(f"patrol_feedback=NEXT PATROL: {details['next_patrol_reason']}")
+
+    recovery_event = _last_event_params(sim, RECOVERY_OUTCOME_EVENT_TYPE, entity_id=entity.entity_id)
+    if recovery_event is not None:
+        details = recovery_event.get("details") if isinstance(recovery_event.get("details"), dict) else {}
+        if recovery_event.get("outcome") == "scheduled":
+            lines.append(
+                "recovery_feedback=Recover costs 0 rations, advances 60 ticks, and can clear one light wound at inn/infirmary."
+            )
+        before = details.get("wound_severity_before")
+        after = details.get("wound_severity_after")
+        if isinstance(before, int) and isinstance(after, int):
+            lines.append(f"recovery_wounds={before}->{after} reason={recovery_event.get('reason', 'unknown')}")
 
     cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
     lines.append(
@@ -2548,7 +2611,7 @@ def _player_facing_hud_lines(
     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
     calendar = _calendar_presentation(sim)
     lines = [
-        "WASD move | Enter/E use site | Fight [F] / Flee [X] when offered | F4 new sim | F2 pause",
+        "WASD move | Enter/E use site | F fight offer | X flee offer | L loot proof | Q exit Greybridge hub",
         f"condition={condition} wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
         f"inventory proof_token={proof_tokens} rations={rations}",
         (
@@ -2562,8 +2625,10 @@ def _player_facing_hud_lines(
         lines.append(
             f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
         )
-    if _is_home_site(safe_site_id):
-        lines.append("site=Greybridge home services available (Recover / Turn In Proof)")
+    if entity.space_id == "safe_hub:greybridge":
+        lines.append("site=Greybridge hub: Watch Hall (turn-in) and Inn/Infirmary (recover)")
+    elif _is_home_site(safe_site_id):
+        lines.append("site=Greybridge entrance nearby (Enter/E to step into local hub)")
     elif at_safe_site:
         lines.append(f"site=safe ({safe_site_id if isinstance(safe_site_id, str) else '-'})")
     return lines
@@ -3606,7 +3671,8 @@ def _use_campaign_site(
         controller.enter_site(site.site_id)
         return f"entering site: {site.name if site.name else site.site_id}", site.site_id, False
     if site.site_type == "town" or "safe" in site.tags:
-        return f"site services opened: {site.name if site.name else site.site_id}", site.site_id, True
+        controller.enter_safe_hub_intent(site.site_id)
+        return f"entering Greybridge hub: {site.name if site.name else site.site_id}", site.site_id, False
     return f"site selected: {site.name if site.name else site.site_id} (no Enter/E action yet)", site.site_id, False
 
 
@@ -4307,6 +4373,12 @@ def run_pygame_viewer(
                         status_message = f"encounter offer fled (resolved in {advanced} ticks)"
                     else:
                         status_message = f"encounter offer flee pending after {advanced} ticks (cap reached)"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_l:
+                controller.loot_local_proof_intent()
+                status_message = "loot proof intent queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_q:
+                controller.exit_safe_hub_intent()
+                status_message = "exit Greybridge hub intent queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_SPACE:
                 player = sim.state.entities.get(PLAYER_ID)
                 selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
@@ -4325,15 +4397,20 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_RETURN, pygame_module.K_e):
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None:
-                    status_message, selected_site_id, open_site_panel = _use_campaign_site(
-                        sim,
-                        controller,
-                        player=player,
-                        selected_site_id=selected_site_id,
-                    )
-                    if open_site_panel:
-                        home_panel_state.visible = True
-                        home_panel_state.site_id = selected_site_id
+                    active_space = sim.state.world.spaces.get(player.space_id)
+                    if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
+                        status_message, selected_site_id, open_site_panel = _use_campaign_site(
+                            sim,
+                            controller,
+                            player=player,
+                            selected_site_id=selected_site_id,
+                        )
+                        if open_site_panel:
+                            home_panel_state.visible = True
+                            home_panel_state.site_id = selected_site_id
+                    else:
+                        controller.exit_safe_hub_intent()
+                        status_message = "exit Greybridge hub intent queued"
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_PAGEUP, pygame_module.K_PAGEDOWN):
                 delta = -1 if event.key == pygame_module.K_PAGEUP else 1
                 panel_scroll.scroll(

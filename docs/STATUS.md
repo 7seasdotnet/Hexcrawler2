@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a manual `python play.py` smoke and tune/validate the new local melee cadence + hit readability in active `core_playable` encounters (movement legibility, windup/resolve/recovery clarity, enemy reaction visibility).
+- **Next action:** Run a manual `python play.py` loop smoke for the bounded Greybridge legibility pass: enter Greybridge hub, manually loot proof from local patrol kill, turn in at Watch Hall, recover at Inn/Infirmary, and verify deterministic single-patrol replacement visibility.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -74,8 +74,10 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Combat/tactical intents currently executed through the authoritative seam: `attack_intent`, `turn_intent` (local-role gated).
 - Provisional deterministic encounter action intents currently executed: `signal_intent`, `track_intent`.
 - Campaign encounter-control intents currently executed through the authoritative seam: `accept_encounter_offer`, `flee_encounter_offer`.
-- Campaign recovery intent currently executed through rule-module command/event seam: `safe_recovery_intent` (campaign-role and safe-site gated).
-- Campaign reward turn-in intent currently executed through rule-module command/event seam: `turn_in_reward_token_intent` (campaign-role and safe-site gated).
+- Recovery intent currently executed through rule-module command/event seam: `safe_recovery_intent` (campaign safe-site context **or** Greybridge local-hub Inn/Infirmary context; deterministic context-gated admissibility).
+- Reward turn-in intent currently executed through rule-module command/event seam: `turn_in_reward_token_intent` (Greybridge local-hub Watch Hall building context; deterministic context-gated admissibility).
+- Safe-hub traversal intents currently executed through rule-module command/event seam: `enter_safe_hub_intent`, `exit_safe_hub_intent`.
+- Local manual loot intent currently executed through rule-module command/event seam: `loot_local_proof_intent`.
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -87,7 +89,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_play_launcher.py tests/test_pygame_viewer_cli.py -k "core_playable_default_scene_is_sparse_and_contains_single_patrol or play_launcher_default_core_playable_rebuilds_when_scene_is_missing or play_launcher_startup_truth_log_includes_scene_and_paths or viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites"`
-- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py tests/test_reward_turn_in_loop_p5.py tests/test_calendar_time.py`
+- `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_pygame_viewer_cli.py -k "reward_turn_in_loop_p5 or enter_or_e_generic_site_use_opens_town_services_via_generic_path or player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution"`
 - `PYTHONPATH=src python - <<'PY' ... core_playable visible-loop smoke (home visibility + local attack intent + hostile incapacitation + reward turn-in + calendar tie-to-tick) ... PY`
 - `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py tests/test_pygame_viewer_cli.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py tests/test_reward_turn_in_loop_p5.py`
 - `PYTHONPATH=src python - <<'PY' ... core_playable scripted smoke (patrol contact -> Fight -> local pressure -> return) ... PY`
@@ -99,7 +101,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k local_contact_and_return_smoke_slice`
 - `PYTHONPATH=src pytest -q tests/test_soak_bounds_slice.py tests/test_soak_audit_slice.py`
 - `PYTHONPATH=src python - <<'PY' ... collect_soak_metrics headless/viewer 20000-tick comparison ... PY`
-- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_pygame_viewer_runtime.py tests/test_pygame_viewer_layout.py tests/test_pygame_viewer_cli.py`
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py src/hexcrawler/sim/exploration.py src/hexcrawler/sim/encounters.py tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
 - `python play.py --headless`
 - `python play.py --headless --runtime-profile experimental_world`
@@ -107,9 +109,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Fixed a `python play.py` startup regression in the viewer HUD/readability path by wiring `_nearest_local_hostile` to the existing canonical `distance_between_locations` helper used across simulation systems.
-- Added a focused regression test that executes `_player_feedback_lines` in a local-role space with a hostile present and asserts enemy loop line generation, covering the prior NameError path.
-- Re-verified startup/headless commands for default `core_playable` runtime profile and retained phase focus on manual combat readability smoke validation (no new mechanics).
+- Implemented a bounded loop-legibility pass for default `core_playable`: Greybridge now enters a minimal local safe hub; turn-in is gated to the Watch Hall building; recovery messaging is clarified for Inn/Infirmary use; and explicit hub enter/exit intents remain authoritative and deterministic.
+- Replaced automatic patrol-proof grant with explicit manual local loot intent (`loot_local_proof_intent`) and added deterministic feedback surfaces/tests for loot/no-loot outcomes.
+- Added deterministic post turn-in replacement patrol scheduling (single active authored patrol target in core_playable) and reduced random encounter noise in `core_playable` by setting encounter-check chance to zero in the default profile only.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

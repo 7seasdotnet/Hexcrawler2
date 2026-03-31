@@ -13,6 +13,9 @@ def test_core_playable_profile_excludes_quarantined_modules() -> None:
     assert sim.get_rule_module("rumor_query") is None
     assert sim.get_rule_module("interaction_execution") is None
     assert sim.get_rule_module("signal_propagation") is None
+    encounter_check = sim.get_rule_module("encounter_check")
+    assert encounter_check is not None
+    assert getattr(encounter_check, "_encounter_chance_percent", None) == 0
 
 
 def test_experimental_world_profile_includes_quarantined_modules() -> None:

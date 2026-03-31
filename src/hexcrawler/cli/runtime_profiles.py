@@ -81,7 +81,7 @@ def _register(sim: Simulation, module: object) -> None:
 
 
 def _register_core_playable_modules(sim: Simulation) -> None:
-    _register(sim, EncounterCheckModule())
+    _register(sim, EncounterCheckModule(encounter_chance_percent=0))
     _register(sim, EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
     _register(sim, EncounterActionModule())
     _register(sim, EncounterActionExecutionModule())
@@ -98,7 +98,20 @@ def _register_core_playable_modules(sim: Simulation) -> None:
 
 
 def _register_experimental_world_modules(sim: Simulation) -> None:
-    _register_core_playable_modules(sim)
+    _register(sim, EncounterCheckModule())
+    _register(sim, EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
+    _register(sim, EncounterActionModule())
+    _register(sim, EncounterActionExecutionModule())
+    _register(sim, LocalEncounterRequestModule())
+    _register(sim, LocalEncounterInstanceModule())
+    _register(sim, LocalHostileBehaviorModule())
+    _register(sim, CampaignDangerModule())
+    _register(sim, SpawnMaterializationModule())
+    _register(sim, GroupMovementModule())
+    _register(sim, ExplorationExecutionModule())
+    _register(sim, EntityStatsExecutionModule())
+    _register(sim, CombatExecutionModule())
+    _register(sim, SupplyConsumptionModule())
     _register(sim, InteractionExecutionModule())
     _register(sim, SignalPropagationModule())
     _register(sim, SiteEcologyModule())
@@ -108,7 +121,20 @@ def _register_experimental_world_modules(sim: Simulation) -> None:
 
 
 def _register_soak_audit_modules(sim: Simulation) -> None:
-    _register_core_playable_modules(sim)
+    _register(sim, EncounterCheckModule())
+    _register(sim, EncounterSelectionModule(load_encounter_table_json(DEFAULT_ENCOUNTER_TABLE_PATH)))
+    _register(sim, EncounterActionModule())
+    _register(sim, EncounterActionExecutionModule())
+    _register(sim, LocalEncounterRequestModule())
+    _register(sim, LocalEncounterInstanceModule())
+    _register(sim, LocalHostileBehaviorModule())
+    _register(sim, CampaignDangerModule())
+    _register(sim, SpawnMaterializationModule())
+    _register(sim, GroupMovementModule())
+    _register(sim, ExplorationExecutionModule())
+    _register(sim, EntityStatsExecutionModule())
+    _register(sim, CombatExecutionModule())
+    _register(sim, SupplyConsumptionModule())
     _register(sim, SignalPropagationModule())
     _register(sim, RumorQueryModule())
 

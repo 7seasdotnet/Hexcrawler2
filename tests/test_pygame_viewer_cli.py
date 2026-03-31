@@ -325,8 +325,9 @@ def test_enter_or_e_generic_site_use_opens_town_services_via_generic_path() -> N
     )
 
     assert selected_site_id == "home_greybridge"
-    assert open_site_panel is True
-    assert "site services opened" in message
+    assert open_site_panel is False
+    assert "entering Greybridge hub" in message
+    assert sim.input_log[-1].command_type == "enter_safe_hub_intent"
 
 
 def test_enter_or_e_generic_site_use_reaches_dungeon_entrance_path() -> None:
@@ -1484,7 +1485,7 @@ def test_player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution() -
 
     assert any("melee_state=ready" in line for line in lines)
     assert any("attack_available_in_ticks=0" in line for line in lines)
-    assert any("PROOF TOKEN GAINED +1" in line for line in lines)
+    assert any("PROOF TOKEN LOOTED +1" in line for line in lines)
     assert any("RATIONS GAINED +1" in line for line in lines)
     assert any("attack_feedback=HIT" in line and "neutralized=yes" in line for line in lines)
 
