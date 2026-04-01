@@ -1,5 +1,7 @@
 from hexcrawler.cli.pygame_viewer import (
     RenderEntitySnapshot,
+    _facing_angle_radians,
+    _swing_facing_angle,
     clamp01,
     extract_render_snapshot,
     interpolate_entity_position,
@@ -104,3 +106,11 @@ def test_truncate_text_to_pixel_width_is_deterministic() -> None:
     assert _truncate_text_to_pixel_width("abcdefghijk", font, max_width=49) == "abcd..."
     assert _truncate_text_to_pixel_width(" short ", font, max_width=70) == "short"
     assert _truncate_text_to_pixel_width("", font, max_width=70) == "?"
+
+
+def test_facing_swing_moves_toward_target_without_snapping() -> None:
+    current = _facing_angle_radians(0)
+    target = _facing_angle_radians(3)
+    stepped = _swing_facing_angle(current, target, max_step=0.1)
+    assert stepped != current
+    assert stepped != target

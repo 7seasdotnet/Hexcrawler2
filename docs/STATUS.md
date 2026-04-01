@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual `python play.py` affordance-truth smoke for `core_playable`: verify on-world Enter/E Greybridge prompt, building signage/use prompts (Watch Hall/Inn), truthful facing changes during movement/combat, explicit corpse loot prompt/collection, and turn-in confirmation that the next single patrol is stirred.
+- **Next action:** Run focused live `python play.py` smoke for Greybridge loop reliability: campaign->enter Greybridge->traverse bounded rooms/doors/gate->recover/turn-in with explicit ration/wound deltas->exit back to campaign repeatedly while confirming single-patrol loop continuity.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -109,9 +109,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added a bounded `core_playable` affordance-truth pass in the viewer: on-world Greybridge enter prompt, inside-hub banner/building signage, and direct key prompts (`T` turn-in / `R` recover / `L` loot / `Q/E` exit) to make the loop discoverable without panel hunting.
-- Fixed facing truth by deriving authoritative entity facing from deterministic movement vectors; facing now round-trips through save/load and remains hash-covered authoritative state.
-- Added targeted tests for Greybridge prompt-range entry, explicit hub building marker labels, lootable-corpse targeting visibility helper behavior, and facing save/load stability.
+- Fixed Greybridge exit reliability in the authoritative exploration seam by adding deterministic fallback return-to-origin restoration when safe-hub context is missing, with explicit forensic outcome reasons and regression coverage.
+- Spatialized Greybridge as a tiny bounded hub presentation (Watch Hall room, Inn/Infirmary room, gate approach, door/opening hints, and explicit gate marker/prompt) while keeping simulation mutation command/event-only.
+- Added presentation-only facing swing interpolation plus clearer recovery feedback (rations before/after, time advanced, wound before/after, and explicit no-visible-improvement reason), and documented the recurring exit regression in `docs/LEGENDARY_PROBLEMS.md`.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

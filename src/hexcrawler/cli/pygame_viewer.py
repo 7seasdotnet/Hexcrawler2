@@ -150,6 +150,7 @@ RECENT_HIT_FLASH_TICK_WINDOW = 4
 GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
+FACING_SWING_RADIANS_PER_SECOND = 10.0
 
 CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
@@ -867,6 +868,24 @@ def compute_interpolation_alpha(*, elapsed_seconds: float, tick_duration_seconds
 
 def lerp(start: float, end: float, alpha: float) -> float:
     return start + (end - start) * alpha
+
+
+def _facing_angle_radians(facing: int) -> float:
+    return (int(facing) % 6) * (math.pi / 3.0)
+
+
+def _normalize_angle_signed(angle: float) -> float:
+    wrapped = (angle + math.pi) % (2.0 * math.pi)
+    return wrapped - math.pi
+
+
+def _swing_facing_angle(current_angle: float, target_angle: float, *, max_step: float) -> float:
+    if not math.isfinite(current_angle):
+        return target_angle
+    delta = _normalize_angle_signed(target_angle - current_angle)
+    if abs(delta) <= max_step:
+        return target_angle
+    return current_angle + math.copysign(max_step, delta)
 
 
 def extract_render_snapshot(sim: Simulation) -> RenderSnapshot:
@@ -1643,6 +1662,10 @@ def _collect_world_markers(
                 marker_color = (170, 226, 186)
                 marker_radius = 7
                 label = "Inn/Infirmary (Recover)"
+            elif interactable_id == "town_gate_exit":
+                marker_color = (238, 200, 124)
+                marker_radius = 7
+                label = "Gate (Exit to Campaign)"
             add_marker(
                 _marker_cell_from_location(
                     {"space_id": active_space_id, "topology_type": space.topology_type, "coord": interactable.coord},
@@ -2057,6 +2080,7 @@ def _draw_world(
             rect = pygame.Rect(int(pixel_x - cell_size / 2), int(pixel_y - cell_size / 2), int(cell_size), int(cell_size))
             pygame.draw.rect(screen, (58, 58, 64), rect)
             pygame.draw.rect(screen, (35, 35, 40), rect, 1)
+        _draw_greybridge_hub_bounds(screen, active_space=active_space, center=center, zoom_scale=zoom_scale)
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
         screen.set_clip(old_clip)
         return
@@ -2080,6 +2104,36 @@ def _draw_world(
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
     screen.set_clip(old_clip)
+
+
+def _draw_greybridge_hub_bounds(
+    screen: pygame.Surface,
+    *,
+    active_space: Any,
+    center: tuple[float, float],
+    zoom_scale: float,
+) -> None:
+    if getattr(active_space, "space_id", "") != "safe_hub:greybridge":
+        return
+    cell_size = HEX_SIZE * zoom_scale
+
+    def to_px(x: float, y: float) -> tuple[int, int]:
+        return (int(center[0] + x * cell_size), int(center[1] + y * cell_size))
+
+    def draw_room(x0: int, y0: int, x1: int, y1: int) -> None:
+        left, top = to_px(float(x0), float(y0))
+        right, bottom = to_px(float(x1), float(y1))
+        rect = pygame.Rect(min(left, right), min(top, bottom), abs(right - left), abs(bottom - top))
+        pygame.draw.rect(screen, (84, 86, 98), rect, 2)
+
+    draw_room(8, 1, 13, 5)  # Watch Hall bounds.
+    draw_room(8, 5, 13, 9)  # Inn/Infirmary bounds.
+    draw_room(0, 4, 3, 7)   # Gate approach bounds.
+
+    # Door/opening hints.
+    for door_x, door_y in ((8, 3), (8, 7), (1, 5)):
+        px, py = to_px(float(door_x) + 0.5, float(door_y) + 0.5)
+        pygame.draw.rect(screen, (212, 189, 96), pygame.Rect(px - 6, py - 3, 12, 6))
 
 
 def _draw_frame_layers(
@@ -2110,6 +2164,7 @@ def _draw_frame_layers(
     current_snapshot: RenderSnapshot,
     current_space_id: str,
     alpha: float,
+    visual_facing_by_entity: dict[str, float],
 ) -> tuple[pygame.Rect | None, int, dict[str, pygame.Rect], dict[str, int], dict[str, pygame.Rect]]:
     # Explicit campaign render-layer ownership:
     # 1) map_base, 2) site_icons, 3) site_labels, 4) actors/moving groups,
@@ -2124,8 +2179,18 @@ def _draw_frame_layers(
         interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
         if interpolated is None:
             continue
+        facing_angle = visual_facing_by_entity.get(entity_id)
         if entity_id == PLAYER_ID:
-            _draw_entity(screen, entity, interpolated[0], interpolated[1], world_center, world_zoom_scale, clip_rect=viewport_rect)
+            _draw_entity(
+                screen,
+                entity,
+                interpolated[0],
+                interpolated[1],
+                world_center,
+                world_zoom_scale,
+                clip_rect=viewport_rect,
+                facing_angle=facing_angle,
+            )
         else:
             _draw_spawned_entity(
                 screen,
@@ -2136,6 +2201,7 @@ def _draw_frame_layers(
                 world_center,
                 world_zoom_scale,
                 clip_rect=viewport_rect,
+                facing_angle=facing_angle,
             )
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
@@ -2207,6 +2273,7 @@ def _draw_entity(
     zoom_scale: float = 1.0,
     *,
     clip_rect: pygame.Rect,
+    facing_angle: float | None = None,
 ) -> None:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
@@ -2215,7 +2282,7 @@ def _draw_entity(
     y = int(center[1] + world_y * size)
     pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
     pygame.draw.circle(screen, (15, 15, 15), (x, y), 8, 1)
-    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(40, 40, 24))
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(40, 40, 24), angle_override=facing_angle)
     screen.set_clip(old_clip)
 
 
@@ -2231,6 +2298,7 @@ def _draw_spawned_entity(
     zoom_scale: float = 1.0,
     *,
     clip_rect: pygame.Rect,
+    facing_angle: float | None = None,
 ) -> None:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
@@ -2247,7 +2315,7 @@ def _draw_spawned_entity(
             marker_radius = 8
     pygame.draw.circle(screen, marker_color, (x, y), marker_radius)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
-    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(18, 24, 28))
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(18, 24, 28), angle_override=facing_angle)
     last_impact_tick = _last_combat_impact_tick_for_entity(sim, entity_id=entity.entity_id)
     if isinstance(last_impact_tick, int) and (int(sim.state.tick) - last_impact_tick) <= RECENT_HIT_FLASH_TICK_WINDOW:
         pygame.draw.circle(screen, (255, 220, 120), (x, y), marker_radius + 4, 2)
@@ -2259,8 +2327,16 @@ def _draw_spawned_entity(
     screen.set_clip(old_clip)
 
 
-def _draw_facing_wedge(screen: pygame.Surface, *, x: int, y: int, facing: int, color: tuple[int, int, int]) -> None:
-    angle = (int(facing) % 6) * (math.pi / 3.0)
+def _draw_facing_wedge(
+    screen: pygame.Surface,
+    *,
+    x: int,
+    y: int,
+    facing: int,
+    color: tuple[int, int, int],
+    angle_override: float | None = None,
+) -> None:
+    angle = _facing_angle_radians(facing) if angle_override is None else float(angle_override)
     tip = (int(x + math.cos(angle) * 12), int(y + math.sin(angle) * 12))
     left = (int(x + math.cos(angle + 2.4) * 5), int(y + math.sin(angle + 2.4) * 5))
     right = (int(x + math.cos(angle - 2.4) * 5), int(y + math.sin(angle - 2.4) * 5))
@@ -2468,13 +2544,30 @@ def _player_feedback_lines(sim: Simulation, *, entity: EntityState) -> list[str]
     if recovery_event is not None:
         details = recovery_event.get("details") if isinstance(recovery_event.get("details"), dict) else {}
         if recovery_event.get("outcome") == "scheduled":
-            lines.append(
-                "recovery_feedback=Recover costs 0 rations, advances 60 ticks, and can clear one light wound at inn/infirmary."
-            )
+            lines.append("recovery_feedback=Recover at Inn/Infirmary costs 0 rations, advances 60 ticks, clears up to one light wound.")
+            rations_before = details.get("rations_before")
+            if isinstance(rations_before, int):
+                lines.append(f"recovery_rations=current={rations_before} cost=0")
         before = details.get("wound_severity_before")
         after = details.get("wound_severity_after")
+        count_before = details.get("wound_count_before")
+        count_after = details.get("wound_count_after")
+        time_advanced = details.get("time_advanced_ticks")
+        rations_before = details.get("rations_before")
+        rations_after = details.get("rations_after")
         if isinstance(before, int) and isinstance(after, int):
-            lines.append(f"recovery_wounds={before}->{after} reason={recovery_event.get('reason', 'unknown')}")
+            lines.append(f"recovery_wounds=severity {before}->{after} count {count_before}->{count_after}")
+        if isinstance(rations_before, int) and isinstance(rations_after, int):
+            lines.append(f"recovery_rations={rations_before}->{rations_after} (cost {max(0, rations_before-rations_after)})")
+        if isinstance(time_advanced, int):
+            lines.append(f"recovery_time_advanced_ticks={time_advanced}")
+        reason = str(recovery_event.get("reason", "unknown"))
+        if reason == "no_recoverable_wound":
+            lines.append("recovery_result=no visible improvement (no recoverable light wound present)")
+        elif reason == "light_wound_recovered":
+            lines.append("recovery_result=one light wound recovered")
+        else:
+            lines.append(f"recovery_result={reason}")
 
     cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
     lines.append(
@@ -2653,7 +2746,7 @@ def _player_facing_hud_lines(
             f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
         )
     if entity.space_id == "safe_hub:greybridge":
-        lines.append("site=INSIDE Greybridge hub | Watch Hall: turn in [T] | Inn/Infirmary: recover [R] | leave [Q/E]")
+        lines.append("site=INSIDE Greybridge hub | Watch Hall [T] | Inn/Infirmary [R] | Gate exit [Q/E]")
     elif _is_home_site(safe_site_id):
         lines.append("site=OUTSIDE Greybridge on campaign map | Enter/E to step into local hub")
     elif at_safe_site:
@@ -2713,23 +2806,29 @@ def _draw_world_affordance_prompts(
         screen.blit(banner, (world_rect.x + 10, world_rect.y + 32))
         interactables = getattr(active_space, "interactables", {})
         if isinstance(interactables, dict):
-            for interactable_id in ("watch_hall", "inn_infirmary"):
+            for interactable_id in ("watch_hall", "inn_infirmary", "town_gate_exit"):
                 interactable = interactables.get(interactable_id)
                 if interactable is None or not isinstance(getattr(interactable, "coord", None), dict):
                     continue
                 world_x = float(interactable.coord.get("x", 0.0)) + 0.5
                 world_y = float(interactable.coord.get("y", 0.0)) + 0.5
                 px, py = _world_to_pixel(world_x, world_y, world_center, world_zoom_scale)
-                title = "WATCH HALL (TURN-IN)" if interactable_id == "watch_hall" else "INN / INFIRMARY (RECOVER)"
+                if interactable_id == "watch_hall":
+                    title = "WATCH HALL (TURN-IN)"
+                elif interactable_id == "inn_infirmary":
+                    title = "INN / INFIRMARY (RECOVER)"
+                else:
+                    title = "TOWN GATE (EXIT)"
                 title_surface = font.render(title, True, (240, 245, 255))
                 screen.blit(title_surface, (int(px) - (title_surface.get_width() // 2), int(py) - 26))
                 distance = math.dist((player.position_x, player.position_y), (world_x, world_y))
                 if distance <= BUILDING_USE_PROMPT_RANGE:
-                    prompt = (
-                        "Press T: Turn in proof token"
-                        if interactable_id == "watch_hall"
-                        else "Press R: Recover (0 rations, +60 ticks, heals one light wound)"
-                    )
+                    if interactable_id == "watch_hall":
+                        prompt = "Press T: Turn in proof token"
+                    elif interactable_id == "inn_infirmary":
+                        prompt = "Press R: Recover (cost 0 rations, +60 ticks, heal one light wound)"
+                    else:
+                        prompt = "Press Q or E: Exit Greybridge to campaign origin"
                     prompt_surface = font.render(prompt, True, (255, 246, 188))
                     screen.blit(prompt_surface, (int(px) - (prompt_surface.get_width() // 2), int(py) - 44))
     if str(getattr(active_space, "role", "")) == "local":
@@ -4368,6 +4467,7 @@ def run_pygame_viewer(
     status_message: str | None = None
     last_sent_move_vector = (0.0, 0.0)
     selected_site_id: str | None = None
+    visual_facing_by_entity: dict[str, float] = {}
 
     while running:
         target_fps = 30 if runtime_state.paused else 60
@@ -4787,6 +4887,16 @@ def run_pygame_viewer(
         if viewport_rect.collidepoint(mouse_pos):
             hover_message = _hover_readout(sim, mouse_pos, world_center, world_zoom_scale)
 
+        max_facing_step = max(0.0, float(dt)) * FACING_SWING_RADIANS_PER_SECOND
+        tracked_ids = set(sim.state.entities.keys())
+        for stale_id in tuple(visual_facing_by_entity.keys()):
+            if stale_id not in tracked_ids:
+                visual_facing_by_entity.pop(stale_id, None)
+        for entity_id, entity in sim.state.entities.items():
+            target_angle = _facing_angle_radians(entity.facing)
+            current_angle = visual_facing_by_entity.get(entity_id, target_angle)
+            visual_facing_by_entity[entity_id] = _swing_facing_angle(current_angle, target_angle, max_step=max_facing_step)
+
         screen.fill((17, 18, 25))
         inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons = _draw_frame_layers(
             screen=screen,
@@ -4815,6 +4925,7 @@ def run_pygame_viewer(
             current_snapshot=current_snapshot,
             current_space_id=current_space_id,
             alpha=alpha,
+            visual_facing_by_entity=visual_facing_by_entity,
         )
         pygame_module.display.flip()
 

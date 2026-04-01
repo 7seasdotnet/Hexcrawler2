@@ -35,6 +35,7 @@ GREYBRIDGE_PATROL_TEMPLATE_ID = "campaign_danger_patrol"
 GREYBRIDGE_PATROL_RESPAWN_EVENT_TYPE = "greybridge_patrol_respawn"
 GREYBRIDGE_PATROL_SPAWN_X = -2.60
 GREYBRIDGE_PATROL_SPAWN_Y = 1.90
+GREYBRIDGE_SAFE_HUB_GATE_ID = "town_gate_exit"
 
 
 class ExplorationExecutionModule(RuleModule):
@@ -155,6 +156,7 @@ class ExplorationExecutionModule(RuleModule):
                     "duration_ticks": self._CAMPAIGN_RECOVERY_DURATION_TICKS,
                     "ration_cost": 0,
                     "rations_purpose": "Rations support expedition pressure; recovery here consumes time, not rations.",
+                    "rations_before": self._rations_for_entity(entity=sim.state.entities[command.entity_id], sim=sim),
                     "wound_severity_before": _wound_severity_total(sim.state.entities[command.entity_id].wounds),
                     "wound_count_before": len(sim.state.entities[command.entity_id].wounds),
                 },
@@ -289,6 +291,8 @@ class ExplorationExecutionModule(RuleModule):
                             "wound_count_after": len(updated_wounds),
                             "time_advanced_ticks": self._CAMPAIGN_RECOVERY_DURATION_TICKS,
                             "ration_cost": 0,
+                            "rations_before": self._rations_for_entity(entity=entity, sim=sim),
+                            "rations_after": self._rations_for_entity(entity=entity, sim=sim),
                         },
                     )
                 else:
@@ -309,6 +313,8 @@ class ExplorationExecutionModule(RuleModule):
                             "wound_count_after": len(updated_wounds),
                             "time_advanced_ticks": self._CAMPAIGN_RECOVERY_DURATION_TICKS,
                             "ration_cost": 0,
+                            "rations_before": self._rations_for_entity(entity=entity, sim=sim),
+                            "rations_after": self._rations_for_entity(entity=entity, sim=sim),
                         },
                     )
 
@@ -424,6 +430,14 @@ class ExplorationExecutionModule(RuleModule):
                     state={"building": "inn_infirmary"},
                     metadata={"label": "Inn / Infirmary"},
                 ),
+                GREYBRIDGE_SAFE_HUB_GATE_ID: InteractableRecord(
+                    interactable_id=GREYBRIDGE_SAFE_HUB_GATE_ID,
+                    space_id=GREYBRIDGE_SAFE_HUB_SPACE_ID,
+                    coord={"x": 1, "y": 5},
+                    kind="gate",
+                    state={"building": "town_gate"},
+                    metadata={"label": "Greybridge Gate / Exit"},
+                ),
             }
             sim.state.world.spaces[GREYBRIDGE_SAFE_HUB_SPACE_ID] = safe_hub
 
@@ -457,13 +471,24 @@ class ExplorationExecutionModule(RuleModule):
         state = sim.get_rules_state(self.name)
         active = state.get("safe_hub_active_by_entity", {})
         context = active.get(entity.entity_id) if isinstance(active, dict) else None
-        if entity.space_id != GREYBRIDGE_SAFE_HUB_SPACE_ID or not isinstance(context, dict):
+        if entity.space_id != GREYBRIDGE_SAFE_HUB_SPACE_ID:
             self._schedule_safe_hub_outcome(
                 sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="not_in_safe_hub"
             )
             return
-        origin_space_id = str(context.get("origin_space_id", "overworld"))
-        origin_position = context.get("origin_position", {"x": 0.0, "y": 0.0})
+        if not isinstance(context, dict):
+            fallback_origin = self._resolve_safe_hub_origin_fallback(sim=sim)
+            if fallback_origin is None:
+                self._schedule_safe_hub_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="missing_return_context"
+                )
+                return
+            origin_space_id, origin_position = fallback_origin
+            outcome_reason = "exited_safe_hub_fallback_origin"
+        else:
+            origin_space_id = str(context.get("origin_space_id", "overworld"))
+            origin_position = context.get("origin_position", {"x": 0.0, "y": 0.0})
+            outcome_reason = "exited_safe_hub"
         entity.space_id = origin_space_id
         entity.position_x = float(origin_position.get("x", 0.0))
         entity.position_y = float(origin_position.get("y", 0.0))
@@ -471,7 +496,7 @@ class ExplorationExecutionModule(RuleModule):
         state["safe_hub_active_by_entity"] = trimmed
         sim.set_rules_state(self.name, state)
         self._schedule_safe_hub_outcome(
-            sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="exited_safe_hub"
+            sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason=outcome_reason
         )
 
     def _handle_loot_local_proof_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
@@ -866,6 +891,37 @@ class ExplorationExecutionModule(RuleModule):
         if not isinstance(coord, dict):
             return False
         return math.dist((entity.position_x, entity.position_y), (float(coord.get("x", 0.0)) + 0.5, float(coord.get("y", 0.0)) + 0.5)) <= 1.8
+
+    @staticmethod
+    def _resolve_safe_hub_origin_fallback(sim: Simulation) -> tuple[str, dict[str, float]] | None:
+        site = sim.state.world.sites.get(GREYBRIDGE_SITE_ID)
+        if site is None:
+            return None
+        location = site.location if isinstance(site.location, dict) else {}
+        origin_space_id = location.get("space_id")
+        coord = location.get("coord")
+        if not isinstance(origin_space_id, str) or not origin_space_id or not isinstance(coord, dict):
+            return None
+        if "x" in coord and "y" in coord:
+            return origin_space_id, {"x": float(coord["x"]) + 0.5, "y": float(coord["y"]) + 0.5}
+        if "q" in coord and "r" in coord:
+            from hexcrawler.sim.movement import axial_to_world_xy
+            from hexcrawler.sim.world import HexCoord
+
+            world_x, world_y = axial_to_world_xy(HexCoord(q=int(coord["q"]), r=int(coord["r"])))
+            return origin_space_id, {"x": float(world_x), "y": float(world_y)}
+        return None
+
+    @staticmethod
+    def _rations_for_entity(*, entity: EntityState, sim: Simulation) -> int:
+        container_id = entity.inventory_container_id
+        if container_id is None:
+            return 0
+        container = sim.state.world.containers.get(container_id)
+        if container is None:
+            return 0
+        rations = container.items.get("rations", 0)
+        return int(rations) if isinstance(rations, int) and rations > 0 else 0
 
     def _schedule_recovery_outcome(
         self,

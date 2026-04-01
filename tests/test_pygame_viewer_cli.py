@@ -1949,6 +1949,7 @@ def test_hub_markers_include_explicit_watch_hall_and_infirmary_labels() -> None:
     labels = {row.marker.label for row in placements if row.marker.marker_kind == "interactable"}
     assert any("Watch Hall" in label for label in labels)
     assert any("Inn/Infirmary" in label for label in labels)
+    assert any("Gate" in label for label in labels)
 
 
 def test_nearest_lootable_hostile_only_returns_incapacitated_unlooted_target() -> None:
