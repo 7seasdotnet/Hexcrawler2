@@ -1743,6 +1743,73 @@ class GroupRecord:
 
 
 @dataclass
+class CampaignPatrolRecord:
+    patrol_id: str
+    template_id: str
+    space_id: str
+    spawn_position: dict[str, float]
+    route_anchors: list[dict[str, float]] = field(default_factory=list)
+    label: str | None = None
+    tags: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.patrol_id, str) or not self.patrol_id:
+            raise ValueError("patrol_id must be a non-empty string")
+        if not isinstance(self.template_id, str) or not self.template_id:
+            raise ValueError("template_id must be a non-empty string")
+        if not isinstance(self.space_id, str) or not self.space_id:
+            raise ValueError("space_id must be a non-empty string")
+        self.spawn_position = _normalize_campaign_xy(self.spawn_position, field_name="campaign_patrol.spawn_position")
+        if self.label is not None and not isinstance(self.label, str):
+            raise ValueError("label must be a string when present")
+        if not isinstance(self.route_anchors, list):
+            raise ValueError("route_anchors must be a list")
+        self.route_anchors = [
+            _normalize_campaign_xy(row, field_name=f"campaign_patrol.route_anchors[{index}]")
+            for index, row in enumerate(self.route_anchors)
+        ]
+        if not isinstance(self.tags, list):
+            raise ValueError("tags must be a list")
+        self.tags = sorted({str(tag) for tag in self.tags if str(tag).strip()})
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "patrol_id": self.patrol_id,
+            "template_id": self.template_id,
+            "space_id": self.space_id,
+            "spawn_position": dict(self.spawn_position),
+            "route_anchors": [dict(row) for row in self.route_anchors],
+            "tags": list(self.tags),
+        }
+        if self.label is not None:
+            payload["label"] = self.label
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CampaignPatrolRecord":
+        return cls(
+            patrol_id=str(data["patrol_id"]),
+            template_id=str(data["template_id"]),
+            space_id=str(data["space_id"]),
+            spawn_position=dict(data.get("spawn_position", {})),
+            route_anchors=[dict(row) for row in data.get("route_anchors", [])],
+            label=(str(data["label"]) if data.get("label") is not None else None),
+            tags=[str(tag) for tag in data.get("tags", [])],
+        )
+
+
+def _normalize_campaign_xy(value: Any, *, field_name: str) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    try:
+        x = float(value["x"])
+        y = float(value["y"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError(f"{field_name} must contain numeric x/y")
+    return {"x": x, "y": y}
+
+
+@dataclass
 class WorldState:
     hexes: dict[HexCoord, HexRecord] = field(default_factory=dict)
     topology_type: str = "custom"
@@ -1755,6 +1822,7 @@ class WorldState:
     rumors: list[dict[str, Any]] = field(default_factory=list)
     containers: dict[str, ContainerState] = field(default_factory=dict)
     sites: dict[str, SiteRecord] = field(default_factory=dict)
+    campaign_patrols: dict[str, CampaignPatrolRecord] = field(default_factory=dict)
     groups: dict[str, GroupRecord] = field(default_factory=dict)
     claim_opportunities: list[dict[str, Any]] = field(default_factory=list)
     rumor_ttl_config: dict[str, Any] = field(default_factory=lambda: _normalize_rumor_ttl_config(DEFAULT_RUMOR_TTL_CONFIG))
@@ -1876,6 +1944,11 @@ class WorldState:
                 site_id: self.sites[site_id].to_dict()
                 for site_id in sorted(self.sites)
             }
+        if self.campaign_patrols:
+            payload["campaign_patrols"] = {
+                patrol_id: self.campaign_patrols[patrol_id].to_dict()
+                for patrol_id in sorted(self.campaign_patrols)
+            }
         if self.groups:
             payload["groups"] = {
                 group_id: self.groups[group_id].to_dict()
@@ -1978,6 +2051,11 @@ class WorldState:
             payload["sites"] = {
                 site_id: self.sites[site_id].to_dict()
                 for site_id in sorted(self.sites)
+            }
+        if self.campaign_patrols:
+            payload["campaign_patrols"] = {
+                patrol_id: self.campaign_patrols[patrol_id].to_dict()
+                for patrol_id in sorted(self.campaign_patrols)
             }
         if self.groups:
             payload["groups"] = {
@@ -2148,6 +2226,21 @@ class WorldState:
             if site.site_id != site_id:
                 raise ValueError(f"site key/id mismatch for '{site_id}'")
             world.sites[site_id] = site
+
+        raw_campaign_patrols = data.get("campaign_patrols", {})
+        if not isinstance(raw_campaign_patrols, dict):
+            raise ValueError("campaign_patrols must be an object")
+        world.campaign_patrols = {}
+        for patrol_id in sorted(raw_campaign_patrols):
+            row = raw_campaign_patrols[patrol_id]
+            if not isinstance(row, dict):
+                raise ValueError(f"campaign patrol '{patrol_id}' must be an object")
+            if "patrol_id" not in row:
+                row = {**row, "patrol_id": patrol_id}
+            patrol = CampaignPatrolRecord.from_dict(row)
+            if patrol.patrol_id != patrol_id:
+                raise ValueError(f"campaign patrol key/id mismatch for '{patrol_id}'")
+            world.campaign_patrols[patrol_id] = patrol
 
         raw_groups = data.get("groups", {})
         if not isinstance(raw_groups, dict):

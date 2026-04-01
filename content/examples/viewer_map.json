@@ -1,4 +1,30 @@
 {
+  "campaign_patrols": {
+    "patrol:core_playable": {
+      "label": "Old Stair Approach Patrol",
+      "patrol_id": "patrol:core_playable",
+      "route_anchors": [
+        {
+          "x": -1.55,
+          "y": 2.4
+        },
+        {
+          "x": -3.2,
+          "y": 1.25
+        }
+      ],
+      "space_id": "overworld",
+      "spawn_position": {
+        "x": -2.6,
+        "y": 1.9
+      },
+      "tags": [
+        "core_playable",
+        "patrol"
+      ],
+      "template_id": "campaign_danger_patrol"
+    }
+  },
   "hexes": [
     {
       "coord": {
@@ -2891,5 +2917,5 @@
     "radius": 6
   },
   "topology_type": "hex_disk",
-  "world_hash": "00bb004a279d694e348830ee3d6a4d248ebfe37d2c41125a7977a8a64fca9898"
+  "world_hash": "8414fb215457217a7be7d84ed4262a39e0683ff20c8f5e6e0b72c5ba4c6687cd"
 }

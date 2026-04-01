@@ -9,7 +9,9 @@ from hexcrawler.sim.core import EntityState, SimCommand, SimEvent, Simulation
 from hexcrawler.sim.campaign_danger import DEFAULT_DANGER_ENTITY_ID
 from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay, normalize_structure_primitives
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.movement import world_xy_to_axial
 from hexcrawler.sim.rules import RuleModule
+from hexcrawler.sim.world import CampaignPatrolRecord, SiteRecord
 from hexcrawler.sim.wounds import is_incapacitated_from_wounds, recover_one_light_wound
 
 EXPLORE_INTENT_COMMAND_TYPE = "explore_intent"
@@ -41,6 +43,8 @@ GREYBRIDGE_PATROL_SPAWN_Y = 1.90
 GREYBRIDGE_SAFE_HUB_GATE_ID = "town_gate_exit"
 LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE = "local_structure_author_intent"
 LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE = "local_structure_author_outcome"
+CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE = "campaign_author_intent"
+CAMPAIGN_AUTHOR_OUTCOME_EVENT_TYPE = "campaign_author_outcome"
 
 
 class ExplorationExecutionModule(RuleModule):
@@ -67,6 +71,9 @@ class ExplorationExecutionModule(RuleModule):
             return True
         if command.command_type == LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE:
             self._handle_local_structure_author_intent(sim, command=command, command_index=command_index)
+            return True
+        if command.command_type == CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE:
+            self._handle_campaign_author_intent(sim, command=command, command_index=command_index)
             return True
 
         if command.command_type == TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE:
@@ -638,6 +645,234 @@ class ExplorationExecutionModule(RuleModule):
                 "details": dict(details or {}),
             },
         )
+
+    def _handle_campaign_author_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
+        action_uid = f"campaign_author:{command.tick}:{command_index}"
+        entity = sim.state.entities.get(command.entity_id or "")
+        if entity is None:
+            self._schedule_campaign_author_outcome(
+                sim, tick=command.tick, entity_id=command.entity_id, action_uid=action_uid, applied=False, reason="unknown_entity"
+            )
+            return
+        if entity.space_id != "overworld":
+            self._schedule_campaign_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="campaign_overworld_required"
+            )
+            return
+        operation = str(command.params.get("operation", "")).strip()
+        details: dict[str, Any] = {"operation": operation}
+
+        if operation in {"create_or_update_site", "move_site", "delete_site"}:
+            site_id = str(command.params.get("site_id", "")).strip()
+            details["site_id"] = site_id
+            if not site_id:
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="site_id_required", details=details
+                )
+                return
+            if operation == "delete_site":
+                if site_id not in sim.state.world.sites:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="site_not_found", details=details
+                    )
+                    return
+                sim.state.world.sites.pop(site_id, None)
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+                )
+                return
+            position = command.params.get("position", {})
+            if not isinstance(position, dict):
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_position", details=details
+                )
+                return
+            try:
+                world_x = float(position["x"])
+                world_y = float(position["y"])
+            except (KeyError, TypeError, ValueError):
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_position", details=details
+                )
+                return
+            coord = world_xy_to_axial(world_x, world_y).to_dict()
+            current = sim.state.world.sites.get(site_id)
+            if operation == "create_or_update_site":
+                site_kind = str(command.params.get("site_kind", "")).strip()
+                if site_kind not in {"town", "dungeon_entrance", "safe_home"}:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_site_kind", details=details
+                    )
+                    return
+                site_type = "town" if site_kind in {"town", "safe_home"} else "dungeon_entrance"
+                name = str(command.params.get("label", site_id)).strip() or site_id
+                tags = ["authored", site_kind]
+                if site_kind == "safe_home":
+                    tags.extend(["safe", "home"])
+                if current is not None:
+                    tags = sorted(set(list(current.tags) + tags))
+                site_kwargs: dict[str, Any] = {}
+                if current is not None:
+                    site_kwargs["entrance"] = current.entrance
+                    site_kwargs["site_state"] = current.site_state
+                sim.state.world.sites[site_id] = SiteRecord(
+                    site_id=site_id,
+                    site_type=site_type,
+                    location={
+                        "space_id": "overworld",
+                        "topology_type": OVERWORLD_HEX_TOPOLOGY,
+                        "coord": coord,
+                        "campaign_anchor": {"x": world_x, "y": world_y},
+                    },
+                    name=name,
+                    tags=tags,
+                    **site_kwargs,
+                )
+            else:
+                if current is None:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="site_not_found", details=details
+                    )
+                    return
+                current.location = {
+                    "space_id": "overworld",
+                    "topology_type": OVERWORLD_HEX_TOPOLOGY,
+                    "coord": coord,
+                    "campaign_anchor": {"x": world_x, "y": world_y},
+                }
+            self._schedule_campaign_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+            )
+            return
+
+        if operation in {"create_or_update_patrol", "move_patrol_spawn", "move_patrol_anchor", "delete_patrol"}:
+            patrol_id = str(command.params.get("patrol_id", "")).strip()
+            details["patrol_id"] = patrol_id
+            if not patrol_id:
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="patrol_id_required", details=details
+                )
+                return
+            current_patrol = sim.state.world.campaign_patrols.get(patrol_id)
+            if operation == "delete_patrol":
+                if current_patrol is None:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="patrol_not_found", details=details
+                    )
+                    return
+                sim.state.world.campaign_patrols.pop(patrol_id, None)
+                sim.state.entities.pop(patrol_id, None)
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+                )
+                return
+            if operation == "move_patrol_anchor":
+                if current_patrol is None:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="patrol_not_found", details=details
+                    )
+                    return
+                anchor_index = command.params.get("anchor_index")
+                if isinstance(anchor_index, bool) or not isinstance(anchor_index, int) or anchor_index < 0:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="anchor_index_required", details=details
+                    )
+                    return
+                position = command.params.get("position", {})
+                if not isinstance(position, dict):
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_position", details=details
+                    )
+                    return
+                try:
+                    world_x = float(position["x"])
+                    world_y = float(position["y"])
+                except (KeyError, TypeError, ValueError):
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_position", details=details
+                    )
+                    return
+                anchors = list(current_patrol.route_anchors)
+                while len(anchors) <= anchor_index:
+                    anchors.append(dict(current_patrol.spawn_position))
+                anchors[anchor_index] = {"x": world_x, "y": world_y}
+                current_patrol.route_anchors = anchors
+                sim.state.world.campaign_patrols[patrol_id] = current_patrol
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+                )
+                return
+            position = command.params.get("position", {})
+            if not isinstance(position, dict):
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_position", details=details
+                )
+                return
+            try:
+                world_x = float(position["x"])
+                world_y = float(position["y"])
+            except (KeyError, TypeError, ValueError):
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_position", details=details
+                )
+                return
+            if operation == "create_or_update_patrol":
+                route_anchors = command.params.get("route_anchors", [])
+                if not isinstance(route_anchors, list):
+                    route_anchors = []
+                sim.state.world.campaign_patrols[patrol_id] = CampaignPatrolRecord(
+                    patrol_id=patrol_id,
+                    template_id=str(command.params.get("template_id", GREYBRIDGE_PATROL_TEMPLATE_ID)),
+                    space_id="overworld",
+                    spawn_position={"x": world_x, "y": world_y},
+                    route_anchors=[dict(row) for row in route_anchors if isinstance(row, dict)],
+                    label=str(command.params.get("label", patrol_id)),
+                    tags=[str(tag) for tag in command.params.get("tags", [])] if isinstance(command.params.get("tags", []), list) else [],
+                )
+            else:
+                if current_patrol is None:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="patrol_not_found", details=details
+                    )
+                    return
+                current_patrol.spawn_position = {"x": world_x, "y": world_y}
+                sim.state.world.campaign_patrols[patrol_id] = current_patrol
+            if patrol_id in sim.state.entities:
+                patrol_entity = sim.state.entities[patrol_id]
+                patrol_entity.position_x = world_x
+                patrol_entity.position_y = world_y
+            self._schedule_campaign_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+            )
+            return
+
+        self._schedule_campaign_author_outcome(
+            sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="unsupported_operation", details=details
+        )
+
+    def _schedule_campaign_author_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        entity_id: str | None,
+        action_uid: str,
+        applied: bool,
+        reason: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=CAMPAIGN_AUTHOR_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": int(tick),
+                "entity_id": entity_id,
+                "action_uid": action_uid,
+                "applied": bool(applied),
+                "reason": str(reason),
+                "details": dict(details or {}),
+            },
+        )
     def _handle_exit_safe_hub_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
         action_uid = f"safe_hub_exit:{command.tick}:{command_index}"
         entity = sim.state.entities.get(command.entity_id or "")
@@ -952,14 +1187,26 @@ class ExplorationExecutionModule(RuleModule):
             sim.state.entities.pop(extra_id, None)
         if existing:
             return
-        next_id = DEFAULT_DANGER_ENTITY_ID
+        patrol_record = sim.state.world.campaign_patrols.get(DEFAULT_DANGER_ENTITY_ID)
+        if patrol_record is None:
+            patrol_record = CampaignPatrolRecord(
+                patrol_id=DEFAULT_DANGER_ENTITY_ID,
+                template_id=GREYBRIDGE_PATROL_TEMPLATE_ID,
+                space_id="overworld",
+                spawn_position={"x": GREYBRIDGE_PATROL_SPAWN_X, "y": GREYBRIDGE_PATROL_SPAWN_Y},
+                route_anchors=[],
+                label="Old Stair Patrol",
+                tags=["core_playable", "patrol"],
+            )
+            sim.state.world.campaign_patrols[DEFAULT_DANGER_ENTITY_ID] = patrol_record
+        next_id = patrol_record.patrol_id
         sim.add_entity(
             EntityState(
                 entity_id=next_id,
-                position_x=GREYBRIDGE_PATROL_SPAWN_X,
-                position_y=GREYBRIDGE_PATROL_SPAWN_Y,
+                position_x=float(patrol_record.spawn_position["x"]),
+                position_y=float(patrol_record.spawn_position["y"]),
                 speed_per_tick=0.14,
-                template_id=GREYBRIDGE_PATROL_TEMPLATE_ID,
+                template_id=patrol_record.template_id,
                 stats={"faction_id": "hostile", "role": "patrol", "spawn_reason": "old_stair_replacement"},
             )
         )

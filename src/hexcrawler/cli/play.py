@@ -10,6 +10,7 @@ from hexcrawler.cli.runtime_profiles import CORE_PLAYABLE, DEFAULT_RUNTIME_PROFI
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.core import EntityState, Simulation, WorldState
 from hexcrawler.sim.hash import world_hash
+from hexcrawler.sim.world import CampaignPatrolRecord
 
 DEFAULT_MAP_PATH = "content/examples/viewer_map.json"
 DEFAULT_SAVE_PATH = "saves/canonical_viewer_save.json"
@@ -77,12 +78,23 @@ def _core_playable_scene_valid(world: WorldState, sim: Simulation) -> bool:
 
 
 def _seed_core_playable_scene(sim: Simulation) -> None:
+    if CORE_PLAYABLE_DEFAULT_PATROL_ID not in sim.state.world.campaign_patrols:
+        sim.state.world.campaign_patrols[CORE_PLAYABLE_DEFAULT_PATROL_ID] = CampaignPatrolRecord(
+            patrol_id=CORE_PLAYABLE_DEFAULT_PATROL_ID,
+            template_id=CORE_PLAYABLE_PATROL_TEMPLATE_ID,
+            space_id="overworld",
+            spawn_position={"x": CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0], "y": CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1]},
+            route_anchors=[{"x": -1.55, "y": 2.4}, {"x": -3.2, "y": 1.25}],
+            label="Old Stair Approach Patrol",
+            tags=["core_playable", "patrol"],
+        )
+    patrol_record = sim.state.world.campaign_patrols[CORE_PLAYABLE_DEFAULT_PATROL_ID]
     patrol = EntityState(
-        entity_id=CORE_PLAYABLE_DEFAULT_PATROL_ID,
-        position_x=CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0],
-        position_y=CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1],
+        entity_id=patrol_record.patrol_id,
+        position_x=float(patrol_record.spawn_position["x"]),
+        position_y=float(patrol_record.spawn_position["y"]),
         speed_per_tick=CORE_PLAYABLE_DEFAULT_PATROL_SPEED,
-        template_id=CORE_PLAYABLE_PATROL_TEMPLATE_ID,
+        template_id=patrol_record.template_id,
         stats={"faction_id": "hostile", "role": "patrol"},
     )
     sim.add_entity(patrol)

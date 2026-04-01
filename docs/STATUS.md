@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run the next bounded authoring-spine pass that lifts this local structure proof toward campaign site placement/patrol placement/dungeon spawn placement tooling on the same authoritative command/event seam.
+- **Next action:** Build the next bounded authoring pass on top of the campaign authoring bridge: dungeon population/spawner authoring (still command/event-authoritative and save/load deterministic).
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -79,6 +79,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Safe-hub traversal intents currently executed through rule-module command/event seam: `enter_safe_hub_intent`, `exit_safe_hub_intent`.
 - Local manual loot intent currently executed through rule-module command/event seam: `loot_local_proof_intent`.
 - Local structure authoring proof intent currently executed through rule-module command/event seam: `local_structure_author_intent` (Greybridge local safe-hub only; create/move-opening/remove/delete bounded operations).
+- Campaign authoring bridge intent currently executed through rule-module command/event seam: `campaign_author_intent` (campaign overworld only; create/move/delete town+dungeon sites and create/move/delete patrol primitives/anchors).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -113,9 +114,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Formalized a reusable local structure primitive contract (id/room/bounds/openings/tags) and deterministic compile outputs (wall segments + openings + derived blocked cells), with Greybridge data using that primitive (`src/hexcrawler/sim/greybridge_layout.py`).
-- Added a bounded in-game local authoring bridge through authoritative command/event mutation (`local_structure_author_intent`) for create/move-opening/remove/delete + save/load persistence (`src/hexcrawler/sim/exploration.py`, `src/hexcrawler/sim/world.py`, `src/hexcrawler/cli/pygame_viewer.py`).
-- Converted Greybridge local structure rendering/collision to consume authored structure primitives (not chunky blocked-cell fill as visual truth) and added focused regression tests/docs (`tests/test_reward_turn_in_loop_p5.py`, `docs/LOCAL_STRUCTURE_OVERLAY.md`, `docs/LEGENDARY_PROBLEMS.md`).
+- Added a formal campaign patrol authoring primitive (`world.campaign_patrols`) with deterministic schema validation and canonical save/load/hash coverage, while keeping campaign site authored truth in `world.sites` with explicit campaign anchors (`src/hexcrawler/sim/world.py`).
+- Added a bounded in-game campaign authoring bridge through authoritative command/event mutation (`campaign_author_intent`) for create/move/delete town+dungeon sites and create/move/delete patrol spawn/route anchors (`src/hexcrawler/sim/exploration.py`, `src/hexcrawler/cli/pygame_viewer.py`).
+- Wired core_playable patrol bootstrap/respawn to compile from authored patrol primitives and added focused authoring persistence/regression tests + memo (`src/hexcrawler/cli/play.py`, `content/examples/viewer_map.json`, `tests/test_reward_turn_in_loop_p5.py`, `docs/CAMPAIGN_AUTHORING_BRIDGE.md`).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
