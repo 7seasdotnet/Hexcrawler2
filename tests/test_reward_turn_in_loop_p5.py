@@ -470,3 +470,20 @@ def test_greybridge_safe_hub_enter_exit_round_trip() -> None:
     _exit_safe_hub(sim)
     assert scout.space_id == origin[0]
     assert (scout.position_x, scout.position_y) == (origin[1], origin[2])
+
+
+def test_greybridge_safe_hub_exit_uses_site_origin_fallback_when_context_missing() -> None:
+    sim = _build_sim(seed=26)
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+    assert scout.space_id == "safe_hub:greybridge"
+
+    state = sim.get_rules_state(ExplorationExecutionModule.name)
+    state["safe_hub_active_by_entity"] = {}
+    sim.set_rules_state(ExplorationExecutionModule.name, state)
+
+    _exit_safe_hub(sim)
+    outcome = _trace(sim, SAFE_HUB_OUTCOME_EVENT_TYPE)[-1]["params"]
+    assert outcome["applied"] is True
+    assert outcome["reason"] == "exited_safe_hub_fallback_origin"
+    assert scout.space_id == CAMPAIGN_SPACE_ID
