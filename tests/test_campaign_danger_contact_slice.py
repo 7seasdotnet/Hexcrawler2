@@ -59,6 +59,7 @@ def test_campaign_contact_triggers_single_handoff_during_overlap() -> None:
     sim = _build_sim(seed=202)
 
     danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    danger.speed_per_tick = 0.0
     player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
     player.position_x = danger.position_x
     player.position_y = danger.position_y
@@ -201,6 +202,46 @@ def test_campaign_contact_overlap_state_survives_save_load_without_spam() -> Non
 
     loaded.advance_ticks(10)
     assert len(_events(loaded, ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE)) == 0
+
+
+def test_campaign_contact_retriggers_after_cooldown_while_overlap_persists_across_save_load() -> None:
+    sim = _build_sim(seed=304)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    player = sim.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    player.position_x = danger.position_x
+    player.position_y = danger.position_y
+    sim.advance_ticks(2)
+    assert isinstance(
+        sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID),
+        dict,
+    )
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id=DEFAULT_PLAYER_ENTITY_ID,
+            command_type=FLEE_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": DEFAULT_PLAYER_ENTITY_ID},
+        )
+    )
+    sim.advance_ticks(1)
+
+    payload = sim.simulation_payload()
+    loaded = Simulation.from_simulation_payload(payload)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CampaignDangerModule())
+
+    loaded_player = loaded.state.entities[DEFAULT_PLAYER_ENTITY_ID]
+    loaded_danger = loaded.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    loaded_danger.speed_per_tick = 0.0
+    loaded_player.position_x = loaded_danger.position_x
+    loaded_player.position_y = loaded_danger.position_y
+    loaded.advance_ticks(40)
+    assert isinstance(
+        loaded.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get(DEFAULT_PLAYER_ENTITY_ID),
+        dict,
+    )
 
 
 def test_campaign_contact_not_emitted_when_player_not_in_campaign_role() -> None:

@@ -12,10 +12,10 @@ GREYBRIDGE_BLOCKED_CELLS: tuple[tuple[int, int], ...] = (
     (8, 6), (13, 6),
     (8, 8), (13, 8),
     (8, 9), (9, 9), (10, 9), (11, 9), (12, 9), (13, 9),
-    # Gate walls (opening at 1,5).
+    # Gate walls (openings at 1,5 for campaign exit and 3,5 for interior traversal).
     (0, 4), (1, 4), (2, 4), (3, 4),
-    (0, 5), (3, 5),
+    (0, 5),
     (0, 6), (1, 6), (2, 6), (3, 6),
 )
 
-GREYBRIDGE_DOOR_CELLS: tuple[tuple[int, int], ...] = ((8, 3), (8, 7), (1, 5))
+GREYBRIDGE_DOOR_CELLS: tuple[tuple[int, int], ...] = ((8, 3), (8, 7), (1, 5), (3, 5))
