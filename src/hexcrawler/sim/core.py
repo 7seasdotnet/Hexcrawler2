@@ -19,6 +19,7 @@ from hexcrawler.sim.movement import (
     world_xy_to_axial,
     world_xy_to_square_grid_cell,
 )
+from hexcrawler.sim.greybridge_layout import GREYBRIDGE_BLOCKED_CELLS, GREYBRIDGE_SAFE_HUB_SPACE_ID
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import ContainerState, DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
@@ -1267,7 +1268,23 @@ class Simulation:
         if space.topology_type in HEX_TOPOLOGY_TYPES:
             return space.is_valid_cell(world_xy_to_axial(x, y).to_dict())
         if space.topology_type == SQUARE_GRID_TOPOLOGY:
-            return space.is_valid_cell(world_xy_to_square_grid_cell(x, y))
+            cell = world_xy_to_square_grid_cell(x, y)
+            if not space.is_valid_cell(cell):
+                return False
+            topology_params = getattr(space, "topology_params", {})
+            blocked_cells = topology_params.get("blocked_cells", []) if isinstance(topology_params, dict) else []
+            blocked_keys: set[tuple[int, int]] = set()
+            if isinstance(blocked_cells, list):
+                for row in blocked_cells:
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        blocked_keys.add((int(row["x"]), int(row["y"])))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+            if not blocked_keys and space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
+                blocked_keys = set(GREYBRIDGE_BLOCKED_CELLS)
+            return (int(cell["x"]), int(cell["y"])) not in blocked_keys
         return False
 
     def _entity_location_ref(self, entity: EntityState) -> LocationRef:

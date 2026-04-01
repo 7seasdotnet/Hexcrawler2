@@ -57,6 +57,7 @@ from hexcrawler.cli.pygame_viewer import (
     _selected_entity_lines,
     _selected_entity_recent_trace_rows,
     _slot_markers_for_hex,
+    _spatial_context_actions,
     _campaign_site_diagnostic_rows,
     _site_campaign_anchor_world,
     _use_campaign_site,
@@ -1993,6 +1994,49 @@ def test_nearest_lootable_hostile_only_returns_incapacitated_unlooted_target() -
     selected = _nearest_lootable_hostile_for_player(sim, entity=player)
     assert selected is not None
     assert selected.entity_id == "hostile:lootable"
+
+
+def test_spatial_context_actions_expose_loot_and_hub_interactions_as_intents() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ENTER_SAFE_HUB_INTENT_COMMAND_TYPE, params={"site_id": "home_greybridge"}))
+    sim.advance_ticks(1)
+    player = sim.state.entities[PLAYER_ID]
+
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(10, 3)
+    actions = _spatial_context_actions(sim, player=player)
+    assert any(row.action == "home_turn_in" for row in actions)
+
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(10, 7)
+    actions = _spatial_context_actions(sim, player=player)
+    assert any(row.action == "home_recover" for row in actions)
+
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(1, 5)
+    actions = _spatial_context_actions(sim, player=player)
+    assert any(row.action == "exit_safe_hub" for row in actions)
+
+    local_space_id = "local:test_loot_actions"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 6, "height": 6, "origin": {"x": 0, "y": 0}},
+    )
+    player.space_id = local_space_id
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(1, 1)
+    loot_x, loot_y = square_grid_cell_to_world_xy(2, 1)
+    sim.add_entity(
+        EntityState(
+            entity_id="hostile:loot-menu",
+            position_x=loot_x,
+            position_y=loot_y,
+            space_id=local_space_id,
+            template_id=LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
+            wounds=[{"severity": 4, "region": "torso"}],
+            stats={},
+        )
+    )
+    actions = _spatial_context_actions(sim, player=player)
+    assert any(row.action == "loot_local_proof" for row in actions)
 
 
 def test_debug_sites_rows_include_major_site_and_patrol_scene_diagnostics() -> None:

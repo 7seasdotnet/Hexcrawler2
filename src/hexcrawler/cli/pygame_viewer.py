@@ -40,6 +40,7 @@ from hexcrawler.sim.campaign_danger import (
 )
 from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
+from hexcrawler.sim.greybridge_layout import GREYBRIDGE_BLOCKED_CELLS, GREYBRIDGE_DOOR_CELLS, GREYBRIDGE_SAFE_HUB_SPACE_ID
 from hexcrawler.sim.exploration import (
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
@@ -2113,25 +2114,21 @@ def _draw_greybridge_hub_bounds(
     center: tuple[float, float],
     zoom_scale: float,
 ) -> None:
-    if getattr(active_space, "space_id", "") != "safe_hub:greybridge":
+    if getattr(active_space, "space_id", "") != GREYBRIDGE_SAFE_HUB_SPACE_ID:
         return
     cell_size = HEX_SIZE * zoom_scale
 
     def to_px(x: float, y: float) -> tuple[int, int]:
         return (int(center[0] + x * cell_size), int(center[1] + y * cell_size))
 
-    def draw_room(x0: int, y0: int, x1: int, y1: int) -> None:
-        left, top = to_px(float(x0), float(y0))
-        right, bottom = to_px(float(x1), float(y1))
+    for cell_x, cell_y in GREYBRIDGE_BLOCKED_CELLS:
+        left, top = to_px(float(cell_x), float(cell_y))
+        right, bottom = to_px(float(cell_x + 1), float(cell_y + 1))
         rect = pygame.Rect(min(left, right), min(top, bottom), abs(right - left), abs(bottom - top))
-        pygame.draw.rect(screen, (84, 86, 98), rect, 2)
+        pygame.draw.rect(screen, (72, 74, 86), rect)
+        pygame.draw.rect(screen, (104, 108, 126), rect, 1)
 
-    draw_room(8, 1, 13, 5)  # Watch Hall bounds.
-    draw_room(8, 5, 13, 9)  # Inn/Infirmary bounds.
-    draw_room(0, 4, 3, 7)   # Gate approach bounds.
-
-    # Door/opening hints.
-    for door_x, door_y in ((8, 3), (8, 7), (1, 5)):
+    for door_x, door_y in GREYBRIDGE_DOOR_CELLS:
         px, py = to_px(float(door_x) + 0.5, float(door_y) + 0.5)
         pygame.draw.rect(screen, (212, 189, 96), pygame.Rect(px - 6, py - 3, 12, 6))
 
@@ -2773,6 +2770,38 @@ def _nearest_lootable_hostile_for_player(sim: Simulation, *, entity: EntityState
         if best is None or (row[0], row[1]) < (best[0], best[1]):
             best = row
     return best[2] if best is not None else None
+
+
+def _spatial_context_actions(sim: Simulation, *, player: EntityState) -> list[ContextMenuItem]:
+    actions: list[ContextMenuItem] = []
+    space = sim.state.world.spaces.get(player.space_id)
+    if space is None:
+        return actions
+    role = str(getattr(space, "role", ""))
+    if role == "campaign":
+        nearest = _nearest_campaign_site_for_player(sim, player=player, max_distance_world=GREYBRIDGE_USE_PROMPT_RANGE)
+        if nearest is not None and nearest.site_id == "home_greybridge":
+            actions.append(ContextMenuItem(label="Enter Greybridge", action="enter_site", payload="home_greybridge"))
+    if role == "local":
+        lootable = _nearest_lootable_hostile_for_player(sim, entity=player)
+        if lootable is not None:
+            actions.append(ContextMenuItem(label=f"Loot proof token ({lootable.entity_id})", action="loot_local_proof"))
+    if player.space_id == "safe_hub:greybridge":
+        interactables = getattr(space, "interactables", {})
+        if isinstance(interactables, dict):
+            for interactable_id, action, label in (
+                ("watch_hall", "home_turn_in", "Watch Hall: Turn in token"),
+                ("inn_infirmary", "home_recover", "Inn/Infirmary: Recover"),
+                ("town_gate_exit", "exit_safe_hub", "Greybridge Gate: Exit to campaign"),
+            ):
+                interactable = interactables.get(interactable_id)
+                if interactable is None or not isinstance(getattr(interactable, "coord", None), dict):
+                    continue
+                world_x = float(interactable.coord.get("x", 0.0)) + 0.5
+                world_y = float(interactable.coord.get("y", 0.0)) + 0.5
+                if math.dist((player.position_x, player.position_y), (world_x, world_y)) <= BUILDING_USE_PROMPT_RANGE:
+                    actions.append(ContextMenuItem(label=label, action=action))
+    return actions
 
 
 def _draw_world_affordance_prompts(
@@ -4402,6 +4431,11 @@ def run_pygame_viewer(
                         items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
                         items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
                         items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+        if player is not None:
+            spatial_actions = _spatial_context_actions(sim, player=player)
+            if spatial_actions:
+                items.append(ContextMenuItem(label="Nearby actions...", action="noop"))
+                items.extend(spatial_actions)
         if active_space is not None and str(getattr(active_space, "role", "")) == "local":
             return_context = _get_return_context_for_space(sim, active_space.space_id)
             if return_context is None:
@@ -4750,6 +4784,12 @@ def run_pygame_viewer(
                         elif item.action == "home_turn_in":
                             controller.turn_in_reward_token_intent()
                             status_message = "turn-in intent queued"
+                        elif item.action == "loot_local_proof":
+                            controller.loot_local_proof_intent()
+                            status_message = "loot proof intent queued"
+                        elif item.action == "exit_safe_hub":
+                            controller.exit_safe_hub_intent()
+                            status_message = "exit Greybridge hub intent queued"
                         elif item.action == "explore" and item.payload is not None:
                             action, duration_str = item.payload.split(":", 1)
                             controller.explore_intent(action, int(duration_str))

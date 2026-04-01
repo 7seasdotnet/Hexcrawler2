@@ -5,6 +5,7 @@ import math
 from typing import Any
 
 from hexcrawler.sim.core import EntityState, SimCommand, SimEvent, Simulation
+from hexcrawler.sim.campaign_danger import DEFAULT_DANGER_ENTITY_ID
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.wounds import is_incapacitated_from_wounds, recover_one_light_wound
@@ -774,9 +775,7 @@ class ExplorationExecutionModule(RuleModule):
             sim.state.entities.pop(extra_id, None)
         if existing:
             return
-        next_id = "patrol:core_playable:respawn"
-        if next_id in sim.state.entities:
-            next_id = f"{next_id}:{int(sim.state.tick)}"
+        next_id = DEFAULT_DANGER_ENTITY_ID
         sim.add_entity(
             EntityState(
                 entity_id=next_id,
