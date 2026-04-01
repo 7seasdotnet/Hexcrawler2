@@ -22,6 +22,7 @@ from hexcrawler.sim.encounters import (
     LocalEncounterRequestModule,
 )
 from hexcrawler.sim.exploration import (
+    CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
     LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
@@ -32,7 +33,7 @@ from hexcrawler.sim.exploration import (
     ExplorationExecutionModule,
 )
 from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay
-from hexcrawler.sim.hash import simulation_hash
+from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.movement import square_grid_cell_to_world_xy
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, SiteRecord, SpaceState
 
@@ -771,6 +772,152 @@ def test_local_structure_authoring_create_edit_delete_persists_save_load(tmp_pat
     loaded.advance_ticks(2)
     loaded_structures = loaded.state.world.spaces["safe_hub:greybridge"].structure_primitives
     assert not any(row.get("structure_id") == "authoring_demo_shell" for row in loaded_structures)
+
+
+def test_campaign_site_authoring_create_move_delete_persists_save_load(tmp_path: Path) -> None:
+    sim = _build_sim(seed=45)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = -1.0
+    scout.position_y = 2.0
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_site",
+                "site_id": "authoring_town_site",
+                "site_kind": "town",
+                "label": "Authoring Town",
+                "position": {"x": -1.0, "y": 2.0},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    town = sim.state.world.sites.get("authoring_town_site")
+    assert town is not None
+    assert town.site_type == "town"
+    assert town.location.get("campaign_anchor") == {"x": -1.0, "y": 2.0}
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "move_site",
+                "site_id": "authoring_town_site",
+                "position": {"x": 1.5, "y": -0.5},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    moved = sim.state.world.sites["authoring_town_site"]
+    assert moved.location.get("campaign_anchor") == {"x": 1.5, "y": -0.5}
+
+    save_path = tmp_path / "campaign_site_authoring_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    before_world_hash = world_hash(sim.state.world)
+    _, loaded = load_game_json(str(save_path))
+    assert world_hash(loaded.state.world) == before_world_hash
+    assert loaded.state.world.sites["authoring_town_site"].location.get("campaign_anchor") == {"x": 1.5, "y": -0.5}
+
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "delete_site", "site_id": "authoring_town_site"},
+        )
+    )
+    loaded.advance_ticks(2)
+    assert "authoring_town_site" not in loaded.state.world.sites
+
+
+def test_campaign_patrol_authoring_create_move_delete_persists_save_load(tmp_path: Path) -> None:
+    sim = _build_sim(seed=46)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = -2.0
+    scout.position_y = 1.0
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_patrol",
+                "patrol_id": "patrol:authoring_demo",
+                "template_id": "campaign_danger_patrol",
+                "position": {"x": -2.0, "y": 1.0},
+                "route_anchors": [{"x": -1.0, "y": 1.0}],
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    patrol = sim.state.world.campaign_patrols.get("patrol:authoring_demo")
+    assert patrol is not None
+    assert patrol.spawn_position == {"x": -2.0, "y": 1.0}
+    assert patrol.route_anchors[0] == {"x": -1.0, "y": 1.0}
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "move_patrol_spawn",
+                "patrol_id": "patrol:authoring_demo",
+                "position": {"x": -3.25, "y": 0.5},
+            },
+        )
+    )
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "move_patrol_anchor",
+                "patrol_id": "patrol:authoring_demo",
+                "anchor_index": 0,
+                "position": {"x": -2.75, "y": 0.5},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    updated = sim.state.world.campaign_patrols["patrol:authoring_demo"]
+    assert updated.spawn_position == {"x": -3.25, "y": 0.5}
+    assert updated.route_anchors[0] == {"x": -2.75, "y": 0.5}
+
+    before_hash = simulation_hash(sim)
+    save_path = tmp_path / "campaign_patrol_authoring_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(str(save_path))
+    assert simulation_hash(loaded) == before_hash
+    assert loaded.state.world.campaign_patrols["patrol:authoring_demo"].route_anchors[0] == {"x": -2.75, "y": 0.5}
+
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "delete_patrol", "patrol_id": "patrol:authoring_demo"},
+        )
+    )
+    loaded.advance_ticks(2)
+    assert "patrol:authoring_demo" not in loaded.state.world.campaign_patrols
 
 
 def test_patrol_loop_recontacts_after_leave_return_and_replacement_without_wedge() -> None:

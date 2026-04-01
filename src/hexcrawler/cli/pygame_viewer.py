@@ -42,6 +42,8 @@ from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.greybridge_layout import GREYBRIDGE_SAFE_HUB_SPACE_ID, compile_greybridge_overlay
 from hexcrawler.sim.exploration import (
+    CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+    CAMPAIGN_AUTHOR_OUTCOME_EVENT_TYPE,
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
     LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
@@ -66,7 +68,7 @@ from hexcrawler.sim.movement import (
     world_xy_to_axial,
     world_xy_to_square_grid_cell,
 )
-from hexcrawler.sim.world import LOCAL_SPACE_ROLE, HexCoord, SiteRecord
+from hexcrawler.sim.world import CampaignPatrolRecord, LOCAL_SPACE_ROLE, HexCoord, SiteRecord
 from hexcrawler.sim.wounds import (
     WOUND_INCAPACITATE_SEVERITY,
     is_incapacitated_from_wounds,
@@ -160,6 +162,8 @@ CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
 CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE = "campaign_danger_patrol"
 CORE_PLAYABLE_DEFAULT_PATROL_SPEED = 0.14
 CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION: tuple[float, float] = (-2.60, 1.90)
+CORE_PLAYABLE_DEFAULT_PATROL_ROUTE: tuple[tuple[float, float], ...] = ((-1.55, 2.4), (-3.2, 1.25))
+CORE_PLAYABLE_DEFAULT_PATROL_LABEL = "Old Stair Approach Patrol"
 CAMPAIGN_RENDER_LAYER_ORDER: tuple[str, ...] = (
     "map_base",
     "site_icons",
@@ -413,6 +417,18 @@ class SimulationController:
                 tick=self.sim.state.tick,
                 entity_id=self.entity_id,
                 command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+                params=payload,
+            )
+        )
+
+    def campaign_author_intent(self, operation: str, **params: object) -> None:
+        payload = {"operation": operation}
+        payload.update(params)
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
                 params=payload,
             )
         )
@@ -4210,32 +4226,51 @@ def _configure_simulation_modules(
 def _ensure_core_playable_default_scene(sim: Simulation, *, runtime_profile: RuntimeProfile) -> None:
     if runtime_profile != CORE_PLAYABLE:
         return
+    if CORE_PLAYABLE_DEFAULT_PATROL_ID not in sim.state.world.campaign_patrols:
+        sim.state.world.campaign_patrols[CORE_PLAYABLE_DEFAULT_PATROL_ID] = CampaignPatrolRecord(
+            patrol_id=CORE_PLAYABLE_DEFAULT_PATROL_ID,
+            template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+            space_id="overworld",
+            spawn_position={
+                "x": CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0],
+                "y": CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1],
+            },
+            route_anchors=[{"x": x, "y": y} for x, y in CORE_PLAYABLE_DEFAULT_PATROL_ROUTE],
+            label=CORE_PLAYABLE_DEFAULT_PATROL_LABEL,
+            tags=["core_playable", "patrol"],
+        )
+
+    authored_patrol_ids = sorted(sim.state.world.campaign_patrols)
+    keep_patrol_id = authored_patrol_ids[0] if authored_patrol_ids else CORE_PLAYABLE_DEFAULT_PATROL_ID
+    authored_patrol = sim.state.world.campaign_patrols.get(keep_patrol_id)
+    if authored_patrol is None:
+        return
     patrol_ids = sorted(
         entity.entity_id
         for entity in sim.state.entities.values()
-        if entity.template_id == CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE and entity.entity_id != PLAYER_ID
+        if entity.template_id == authored_patrol.template_id and entity.entity_id != PLAYER_ID
     )
     if not patrol_ids:
         patrol = EntityState(
-            entity_id=CORE_PLAYABLE_DEFAULT_PATROL_ID,
-            position_x=CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0],
-            position_y=CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1],
+            entity_id=keep_patrol_id,
+            position_x=float(authored_patrol.spawn_position["x"]),
+            position_y=float(authored_patrol.spawn_position["y"]),
             speed_per_tick=CORE_PLAYABLE_DEFAULT_PATROL_SPEED,
-            template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+            template_id=authored_patrol.template_id,
             stats={"faction_id": "hostile", "role": "patrol"},
         )
         sim.add_entity(patrol)
         patrol_ids = [patrol.entity_id]
 
-    keep_patrol_id = patrol_ids[0]
+    keep_entity_patrol_id = patrol_ids[0]
     for patrol_id in patrol_ids[1:]:
         sim.state.entities.pop(patrol_id, None)
-    patrol = sim.state.entities.get(keep_patrol_id)
+    patrol = sim.state.entities.get(keep_entity_patrol_id)
     if patrol is not None:
-        patrol.template_id = CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE
-        patrol.space_id = "overworld"
-        patrol.position_x = CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[0]
-        patrol.position_y = CORE_PLAYABLE_DEFAULT_PATROL_WORLD_POSITION[1]
+        patrol.template_id = authored_patrol.template_id
+        patrol.space_id = authored_patrol.space_id
+        patrol.position_x = float(authored_patrol.spawn_position["x"])
+        patrol.position_y = float(authored_patrol.spawn_position["y"])
         patrol.stats = dict(patrol.stats) if isinstance(patrol.stats, dict) else {}
         patrol.stats["faction_id"] = "hostile"
         patrol.stats["role"] = "patrol"
@@ -4700,6 +4735,15 @@ def run_pygame_viewer(
                         tags=["authoring_demo"],
                     )
                     status_message = "authoring: create demo structure queued"
+                elif player is not None and player.space_id == "overworld":
+                    controller.campaign_author_intent(
+                        "create_or_update_site",
+                        site_id="authoring_town_site",
+                        site_kind="town",
+                        label="Authoring Town",
+                        position={"x": float(player.position_x), "y": float(player.position_y)},
+                    )
+                    status_message = "campaign authoring: town create/update queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_o:
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
@@ -4712,6 +4756,15 @@ def run_pygame_viewer(
                         cell={"x": x, "y": y},
                     )
                     status_message = "authoring: move demo opening queued"
+                elif player is not None and player.space_id == "overworld":
+                    controller.campaign_author_intent(
+                        "create_or_update_site",
+                        site_id="authoring_dungeon_site",
+                        site_kind="dungeon_entrance",
+                        label="Authoring Dungeon Entrance",
+                        position={"x": float(player.position_x), "y": float(player.position_y)},
+                    )
+                    status_message = "campaign authoring: dungeon create/update queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_p:
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
@@ -4721,11 +4774,37 @@ def run_pygame_viewer(
                         opening_id="authoring_demo_opening",
                     )
                     status_message = "authoring: remove demo opening queued"
+                elif player is not None and player.space_id == "overworld":
+                    controller.campaign_author_intent(
+                        "create_or_update_patrol",
+                        patrol_id="patrol:authoring_demo",
+                        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+                        label="Authoring Demo Patrol",
+                        position={"x": float(player.position_x), "y": float(player.position_y)},
+                        route_anchors=[{"x": float(player.position_x) + 1.0, "y": float(player.position_y)}],
+                        tags=["authoring_demo"],
+                    )
+                    status_message = "campaign authoring: patrol create/update queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_m:
+                player = sim.state.entities.get(PLAYER_ID)
+                if player is not None and player.space_id == "overworld":
+                    controller.campaign_author_intent(
+                        "move_patrol_anchor",
+                        patrol_id="patrol:authoring_demo",
+                        anchor_index=0,
+                        position={"x": float(player.position_x), "y": float(player.position_y)},
+                    )
+                    status_message = "campaign authoring: patrol anchor move queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_DELETE:
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
                     controller.local_structure_author_intent("delete_structure", structure_id="authoring_demo_shell")
                     status_message = "authoring: delete demo structure queued"
+                elif player is not None and player.space_id == "overworld":
+                    controller.campaign_author_intent("delete_site", site_id="authoring_town_site")
+                    controller.campaign_author_intent("delete_site", site_id="authoring_dungeon_site")
+                    controller.campaign_author_intent("delete_patrol", patrol_id="patrol:authoring_demo")
+                    status_message = "campaign authoring: delete demo town/dungeon/patrol queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_SPACE:
                 player = sim.state.entities.get(PLAYER_ID)
                 selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
