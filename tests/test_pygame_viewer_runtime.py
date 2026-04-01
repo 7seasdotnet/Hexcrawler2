@@ -9,6 +9,8 @@ from hexcrawler.cli.pygame_viewer import (
     LOCAL_INTERPOLATION_SNAP_DISTANCE,
     PLAYER_ID,
     FollowSelectionState,
+    RenderEntitySnapshot,
+    _display_heading_angle_from_motion,
     _apply_follow_selected_camera,
     _build_viewer_simulation,
     compute_interpolation_alpha,
@@ -35,6 +37,18 @@ def test_interpolate_entity_position_snaps_small_deltas_to_current() -> None:
     interpolated = interpolate_entity_position(prev_snapshot, curr_snapshot, "scout", alpha=0.1)
 
     assert interpolated == (curr_snapshot["scout"].x, curr_snapshot["scout"].y)
+
+
+def test_display_heading_fallback_prevents_quantization_on_reentry_reset() -> None:
+    prior_heading = 0.77
+    snapshot = {"scout": RenderEntitySnapshot(x=4.0, y=5.0)}
+    held = _display_heading_angle_from_motion(
+        previous_snapshot=snapshot,
+        current_snapshot=snapshot,
+        entity_id="scout",
+        fallback_angle=prior_heading,
+    )
+    assert held == prior_heading
 
 
 def test_drain_sim_accumulator_handles_invalid_values() -> None:

@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run focused live `python play.py` smoke for Local Spatial Truth direction checks: verify campaign directional wedge reads continuously (not hex-snapped), then validate Greybridge blocked-cell traversal still works while planning structure-overlay follow-up.
+- **Next action:** Run focused live `python play.py` smoke for display-heading decoupling verification in both campaign and Greybridge local spaces (continuous wedge heading, idle hold behavior, and re-entry/reset non-quantized fallback), then proceed with structure-overlay follow-up planning.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -102,6 +102,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_soak_bounds_slice.py tests/test_soak_audit_slice.py`
 - `PYTHONPATH=src python - <<'PY' ... collect_soak_metrics headless/viewer 20000-tick comparison ... PY`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py src/hexcrawler/sim/exploration.py src/hexcrawler/sim/encounters.py tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py`
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_render_interpolation.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
 - `python play.py --headless`
 - `python play.py --headless --runtime-profile experimental_world`
@@ -109,9 +110,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added `docs/LOCAL_SPATIAL_TRUTH.md` to lock heading/facing/render-heading separation, building-substrate direction, zoom anti-lock-in policy, and isometric timing criteria for the playable slice.
-- Added a recurring anti-lock-in entry in `docs/LEGENDARY_PROBLEMS.md` for hex-axial-looking render heading and documented required regression coverage + non-regression rules.
-- Added a tiny viewer-only proof in `pygame_viewer.py`: campaign render heading can derive from continuous motion delta (presentation-only), plus focused test coverage in `tests/test_render_interpolation.py`.
+- Completed a bounded viewer-only display-heading pass in `pygame_viewer.py` so directional wedge rendering now derives from continuous motion deltas in both campaign and local spaces, with zero-delta/missing-snapshot hold fallback to prior display heading instead of discrete-facing snapback.
+- Expanded regression coverage (`tests/test_render_interpolation.py`, `tests/test_pygame_viewer_runtime.py`) for continuous heading derivation, idle/zero-delta hold behavior, and interpolation re-entry/reset fallback continuity.
+- Expanded recurring bug guidance in `docs/LEGENDARY_PROBLEMS.md` for the hex-axial display-heading regression pattern, including required tests and explicit non-regression guardrails.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

@@ -69,22 +69,24 @@
 
 ## 4) Hex-Axial-Looking Facing Arrow Misrepresents Spatial Truth
 - **Problem name:** Render heading appears hex-snapped/axial-coupled.
-- **Symptom:** Direction wedge/arrow appears locked to hex axial directions, implying campaign motion is hex-step based or local presentation is topology-snapped when it should read as continuous/display-smoothed.
-- **Root cause:** Viewer-facing heading visualization derived directly from authoritative discrete facing token (`entity.facing`) with no campaign render-heading separation, so presentation inherits topology direction quantization.
+- **Symptom:** Direction wedge/arrow snaps back to shifted left/right axial-looking directions (especially on stop/start, idle frames, and interpolation reset/re-entry), implying campaign motion is hex-step based or local presentation is topology-snapped when it should read as continuous/display-smoothed.
+- **Root cause:** Viewer-facing heading path fell back to authoritative discrete facing token (`entity.facing`) in common paths (zero-delta movement, missing/just-reset snapshots, local-role rendering), so presentation re-quantized to topology-style directions.
 - **Related architecture invariant/contract:**
   - Continuous campaign plane remains authoritative; hex is derived indexing/presentation substrate.
   - Heading/facing/render-heading are distinct layers (campaign heading vs local tactical facing vs viewer display heading).
   - Viewer/UI remains read-only; projection/presentation must not mutate simulation truth.
 - **Known-good fix path:**
   1. Preserve authoritative tactical facing semantics in simulation/combat unchanged.
-  2. Add viewer-only render-heading layer that can use continuous/interpolated motion heading in campaign role.
-  3. Keep render-heading out of serialized/hash-covered simulation state.
-  4. Continue using authoritative facing where tactical/local semantics require it.
+  2. Use a viewer-only `display_heading` that derives from continuous motion deltas for both campaign and local render paths.
+  3. On low-delta/zero-delta/missing-snapshot frames, hold last valid display heading instead of snapping to discrete facing.
+  4. Keep display heading out of serialized/hash-covered simulation state.
 - **Required regression tests:**
-  - Viewer render-heading helper returns continuous angle from campaign motion deltas.
-  - Viewer render-heading helper is disabled/non-authoritative for local role.
+  - Campaign heading no longer appears hex-snapped in viewer heading helper paths.
+  - Local heading no longer appears hex-snapped in viewer heading helper paths.
+  - Zero-delta/idle frames preserve prior display heading.
+  - Interpolation reset/re-entry uses hold fallback and does not quantize heading.
   - Simulation hash/save-load remains unchanged by display-heading logic.
 - **Do not regress by doing X:**
-  - Do **not** rebind campaign display heading to axial direction tokens as the only source.
-  - Do **not** serialize viewer render-heading into world/simulation state.
+  - Do **not** rebind display heading to axial/discrete facing tokens as default fallback during idle/re-entry paths.
+  - Do **not** serialize viewer display/render heading into world/simulation state.
   - Do **not** patch perceived heading via simulation mutations from UI/render code.
