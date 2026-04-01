@@ -4,6 +4,11 @@ from pathlib import Path
 
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, CombatExecutionModule
+from hexcrawler.sim.campaign_danger import (
+    ACCEPT_ENCOUNTER_OFFER_INTENT,
+    CampaignDangerModule,
+    DEFAULT_DANGER_ENTITY_ID,
+)
 from hexcrawler.sim.core import EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     END_LOCAL_ENCOUNTER_INTENT,
@@ -34,7 +39,7 @@ CAMPAIGN_SPACE_ID = "campaign_plane_beta"
 SAFE_SITE_ID = "home_greybridge"
 
 
-def _build_sim(seed: int = 123) -> Simulation:
+def _build_sim(seed: int = 123, *, with_campaign_danger: bool = False) -> Simulation:
     world = load_world_json("content/examples/basic_map.json")
     world.spaces[CAMPAIGN_SPACE_ID] = SpaceState(
         space_id=CAMPAIGN_SPACE_ID,
@@ -53,6 +58,8 @@ def _build_sim(seed: int = 123) -> Simulation:
     sim.add_entity(EntityState(entity_id="scout", position_x=x, position_y=y, space_id=CAMPAIGN_SPACE_ID))
     sim.register_rule_module(LocalEncounterRequestModule())
     sim.register_rule_module(LocalEncounterInstanceModule())
+    if with_campaign_danger:
+        sim.register_rule_module(CampaignDangerModule())
     sim.register_rule_module(CombatExecutionModule())
     sim.register_rule_module(ExplorationExecutionModule())
     return sim
@@ -487,3 +494,97 @@ def test_greybridge_safe_hub_exit_uses_site_origin_fallback_when_context_missing
     assert outcome["applied"] is True
     assert outcome["reason"] == "exited_safe_hub_fallback_origin"
     assert scout.space_id == CAMPAIGN_SPACE_ID
+
+
+def test_replacement_patrol_reenters_campaign_offer_path_after_turn_in() -> None:
+    sim = _build_sim(seed=27, with_campaign_danger=True)
+    sim.state.entities.pop(DEFAULT_DANGER_ENTITY_ID, None)
+    container_id = sim.state.entities["scout"].inventory_container_id
+    assert container_id is not None
+    sim.state.world.containers[container_id].items["proof_token"] = 1
+
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(10, 3)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
+            params={},
+        )
+    )
+    sim.advance_ticks(2)
+    assert DEFAULT_DANGER_ENTITY_ID in sim.state.entities
+
+    _exit_safe_hub(sim)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    scout.space_id = danger.space_id
+    scout.position_x = danger.position_x
+    scout.position_y = danger.position_y
+    sim.advance_ticks(1)
+    scout.position_x += 2.0
+    scout.position_y += 2.0
+    sim.advance_ticks(1)
+    scout.position_x = danger.position_x
+    scout.position_y = danger.position_y
+    sim.advance_ticks(2)
+
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    pending_offer = state.get("pending_offer_by_player", {}).get("scout")
+    assert isinstance(pending_offer, dict)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": "scout"},
+        )
+    )
+    sim.advance_ticks(3)
+    assert _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)
+    state = sim.get_rules_state(CampaignDangerModule.name)
+    assert state.get("encounter_control_by_player", {}).get("scout", {}).get("state") in {"in_local", "returning", "post_encounter_cooldown"}
+
+
+def test_greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open() -> None:
+    sim = _build_sim(seed=28)
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(7, 3)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 8.5, "y": 4.5},
+        )
+    )
+    sim.advance_ticks(40)
+    # Wall cell remains blocked.
+    assert int(scout.position_x) != 8 or int(scout.position_y) != 4
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 8.5, "y": 3.5},
+        )
+    )
+    sim.advance_ticks(40)
+    assert int(scout.position_x) == 8 and int(scout.position_y) == 3
+
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(2, 5)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 1.5, "y": 5.5},
+        )
+    )
+    sim.advance_ticks(30)
+    assert int(scout.position_x) == 1 and int(scout.position_y) == 5

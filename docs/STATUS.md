@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run focused live `python play.py` smoke for Greybridge loop reliability: campaign->enter Greybridge->traverse bounded rooms/doors/gate->recover/turn-in with explicit ration/wound deltas->exit back to campaign repeatedly while confirming single-patrol loop continuity.
+- **Next action:** Run focused live `python play.py` smoke for replacement-patrol authority reliability: fight->loot->turn-in/recover->replacement patrol contact->Fight/Flee->local re-entry, and verify right-click menu affordances remain primary for loot/turn-in/recover/gate actions.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -109,9 +109,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Fixed Greybridge exit reliability in the authoritative exploration seam by adding deterministic fallback return-to-origin restoration when safe-hub context is missing, with explicit forensic outcome reasons and regression coverage.
-- Spatialized Greybridge as a tiny bounded hub presentation (Watch Hall room, Inn/Infirmary room, gate approach, door/opening hints, and explicit gate marker/prompt) while keeping simulation mutation command/event-only.
-- Added presentation-only facing swing interpolation plus clearer recovery feedback (rations before/after, time advanced, wound before/after, and explicit no-visible-improvement reason), and documented the recurring exit regression in `docs/LEGENDARY_PROBLEMS.md`.
+- Fixed replacement patrol encounter authority by respawning Greybridge replacement patrols under the authoritative campaign-danger entity identity so replacement contacts re-enter normal pending-offer / Fight-Flee flow.
+- Added bounded right-click spatial interaction actions (loot, Watch Hall turn-in, Inn/Infirmary recovery, Greybridge gate exit) as viewer-side intent issuance only, with hotkeys retained as fallback.
+- Added Greybridge-authored building boundedness/collision primitive (walls/blocked cells + explicit door/gate openings) for local pathing truth, plus recurring-regression documentation updates in `docs/LEGENDARY_PROBLEMS.md`.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
