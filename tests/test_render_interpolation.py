@@ -1,6 +1,9 @@
+import math
+
 from hexcrawler.cli.pygame_viewer import (
     RenderEntitySnapshot,
     _facing_angle_radians,
+    _render_heading_angle_from_motion,
     _swing_facing_angle,
     clamp01,
     extract_render_snapshot,
@@ -114,3 +117,34 @@ def test_facing_swing_moves_toward_target_without_snapping() -> None:
     stepped = _swing_facing_angle(current, target, max_step=0.1)
     assert stepped != current
     assert stepped != target
+
+
+def test_render_heading_angle_from_motion_uses_continuous_campaign_delta_only() -> None:
+    world = load_world_json("content/examples/basic_map.json")
+    sim = Simulation(world=world, seed=5)
+    sim.add_entity(EntityState.from_hex(entity_id="runner", hex_coord=HexCoord(0, 0), speed_per_tick=0.2))
+
+    previous = {"runner": RenderEntitySnapshot(x=0.0, y=0.0)}
+    current = {"runner": RenderEntitySnapshot(x=0.3, y=0.2)}
+
+    angle = _render_heading_angle_from_motion(
+        sim=sim,
+        entity_id="runner",
+        previous_snapshot=previous,
+        current_snapshot=current,
+    )
+
+    assert angle is not None
+    assert angle == math.atan2(0.2, 0.3)
+
+    sim.state.entities["runner"].space_id = "local:test"
+    sim.state.world.spaces["local:test"] = type("S", (), {"role": "local"})()
+    assert (
+        _render_heading_angle_from_motion(
+            sim=sim,
+            entity_id="runner",
+            previous_snapshot=previous,
+            current_snapshot=current,
+        )
+        is None
+    )

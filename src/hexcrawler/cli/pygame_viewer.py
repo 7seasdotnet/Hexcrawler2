@@ -875,6 +875,32 @@ def _facing_angle_radians(facing: int) -> float:
     return (int(facing) % 6) * (math.pi / 3.0)
 
 
+def _render_heading_angle_from_motion(
+    *,
+    sim: Simulation,
+    entity_id: str,
+    previous_snapshot: RenderSnapshot,
+    current_snapshot: RenderSnapshot,
+) -> float | None:
+    """Viewer-only render heading derived from motion, never serialized or authoritative."""
+    entity = sim.state.entities.get(entity_id)
+    if entity is None:
+        return None
+    space = sim.state.world.spaces.get(entity.space_id)
+    role = str(getattr(space, "role", ""))
+    if role != "campaign":
+        return None
+    previous = previous_snapshot.get(entity_id)
+    current = current_snapshot.get(entity_id)
+    if previous is None or current is None:
+        return None
+    delta_x = float(current.x) - float(previous.x)
+    delta_y = float(current.y) - float(previous.y)
+    if math.hypot(delta_x, delta_y) <= 1e-9:
+        return None
+    return math.atan2(delta_y, delta_x)
+
+
 def _normalize_angle_signed(angle: float) -> float:
     wrapped = (angle + math.pi) % (2.0 * math.pi)
     return wrapped - math.pi
@@ -4934,6 +4960,14 @@ def run_pygame_viewer(
                 visual_facing_by_entity.pop(stale_id, None)
         for entity_id, entity in sim.state.entities.items():
             target_angle = _facing_angle_radians(entity.facing)
+            viewer_motion_heading = _render_heading_angle_from_motion(
+                sim=sim,
+                entity_id=entity_id,
+                previous_snapshot=previous_snapshot,
+                current_snapshot=current_snapshot,
+            )
+            if viewer_motion_heading is not None:
+                target_angle = viewer_motion_heading
             current_angle = visual_facing_by_entity.get(entity_id, target_angle)
             visual_facing_by_entity[entity_id] = _swing_facing_angle(current_angle, target_angle, max_step=max_facing_step)
 

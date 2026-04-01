@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run focused live `python play.py` smoke for full repeat-loop reliability: Greybridge gatehouse interior<->gate traversal, gate exit round-trips, original patrol leave/return recontact, then replacement patrol recontact after turn-in/recover.
+- **Next action:** Run focused live `python play.py` smoke for Local Spatial Truth direction checks: verify campaign directional wedge reads continuously (not hex-snapped), then validate Greybridge blocked-cell traversal still works while planning structure-overlay follow-up.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -109,9 +109,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Fixed Greybridge gatehouse boundedness by opening interior traversal at `(3,5)` while preserving gate exit opening at `(1,5)`, preventing gatehouse trap states and restoring reliable hub traversal/exit.
-- Fixed campaign danger recontact authority by allowing pending-offer creation whenever overlap + eligibility hold (not edge-only overlap), so original/replacement patrols can re-enter Fight/Flee after leave/return and cooldown expiry.
-- Added targeted regression coverage (gatehouse traversal + repeated loop/recontact + save/load overlap-cooldown retrigger) and refreshed recurring bug documentation in `docs/LEGENDARY_PROBLEMS.md`.
+- Added `docs/LOCAL_SPATIAL_TRUTH.md` to lock heading/facing/render-heading separation, building-substrate direction, zoom anti-lock-in policy, and isometric timing criteria for the playable slice.
+- Added a recurring anti-lock-in entry in `docs/LEGENDARY_PROBLEMS.md` for hex-axial-looking render heading and documented required regression coverage + non-regression rules.
+- Added a tiny viewer-only proof in `pygame_viewer.py`: campaign render heading can derive from continuous motion delta (presentation-only), plus focused test coverage in `tests/test_render_interpolation.py`.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

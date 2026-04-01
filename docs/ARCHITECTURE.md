@@ -60,6 +60,11 @@ This document locks core engine contracts and invariants for the simulation subs
 - **Contract:** Facing/LOS/coverage must not be camera-coupled.
   - If facing exists, it is defined in topology terms via the space/topology-owned discrete direction set.
   - Renderers may visualize facing differently per projection, but simulation semantics and outcomes must remain invariant.
+- **Contract:** Heading/facing/render-heading are distinct layers.
+  - Campaign heading is a continuous-plane directional signal derived from continuous position/time and campaign-role motion.
+  - Local tactical facing is an authoritative simulation/combat state token (discrete by topology rules where applicable).
+  - Render-heading/display heading is viewer-only presentation and may be continuous/interpolated regardless of discrete tactical facing.
+  - Viewer heading presentation must not appear hex-axial-snapped solely because campaign indexing uses hex coordinates.
 - **Contract:** Rendering is strictly read-only.
   - Projection choice must never become a command input requirement.
   - Viewer/editor rendering layers must not mutate simulation state directly.
