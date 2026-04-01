@@ -46,6 +46,7 @@ from hexcrawler.cli.pygame_viewer import (
     _major_site_edge_indicators,
     _major_site_label_offset,
     _major_site_visibility_diagnostic_rows,
+    _nearest_lootable_hostile_for_player,
     _player_feedback_lines,
     _player_facing_hud_lines,
     _queue_local_attack_for_click,
@@ -64,11 +65,12 @@ from hexcrawler.cli.pygame_viewer import (
     _world_marker_placements,
 )
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE
-from hexcrawler.sim.core import EntityState
+from hexcrawler.sim.core import EntityState, SimCommand
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT, CampaignDangerModule
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
     LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE,
+    LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
     LOCAL_ENCOUNTER_REWARD_EVENT_TYPE,
     LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
     EncounterActionExecutionModule,
@@ -78,6 +80,7 @@ from hexcrawler.sim.encounters import (
     SELECT_RUMORS_INTENT,
     SpawnMaterializationModule,
 )
+from hexcrawler.sim.exploration import ENTER_SAFE_HUB_INTENT_COMMAND_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
 from hexcrawler.sim.local_hostiles import HOSTILE_TEMPLATE_ID
@@ -326,6 +329,27 @@ def test_enter_or_e_generic_site_use_opens_town_services_via_generic_path() -> N
 
     assert selected_site_id == "home_greybridge"
     assert open_site_panel is False
+    assert "entering Greybridge hub" in message
+    assert sim.input_log[-1].command_type == "enter_safe_hub_intent"
+
+
+def test_enter_or_e_generic_site_use_accepts_greybridge_from_prompt_range() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    player = sim.state.entities[PLAYER_ID]
+    home_anchor = _site_campaign_anchor_world(sim.state.world.sites["home_greybridge"])
+    assert home_anchor is not None
+    player.position_x = home_anchor[0] + 1.1
+    player.position_y = home_anchor[1]
+
+    message, selected_site_id, _ = _use_campaign_site(
+        sim,
+        controller,
+        player=player,
+        selected_site_id=None,
+    )
+
+    assert selected_site_id == "home_greybridge"
     assert "entering Greybridge hub" in message
     assert sim.input_log[-1].command_type == "enter_safe_hub_intent"
 
@@ -613,7 +637,7 @@ def test_queue_local_attack_for_click_routes_to_authoritative_attack_intent(monk
             position_x=hostile_x,
             position_y=hostile_y,
             space_id=local_space_id,
-            template_id=HOSTILE_TEMPLATE_ID,
+            template_id=LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
         )
     )
 
@@ -1908,11 +1932,66 @@ def test_player_facing_hud_lines_are_compact_and_exclude_world_projection_diagno
 
     assert any(line.startswith("condition=") for line in lines)
     assert any(line.startswith("melee_state=") for line in lines)
+    assert any("OUTSIDE Greybridge on campaign map" in line for line in lines)
     assert any("proof_token=" in line and "rations=" in line for line in lines)
     assert any(line.startswith("time ") for line in lines)
     assert all("player_world=" not in line for line in lines)
     assert all("screen=(" not in line for line in lines)
     assert all("campaign_sites loaded=" not in line for line in lines)
+
+
+def test_hub_markers_include_explicit_watch_hall_and_infirmary_labels() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ENTER_SAFE_HUB_INTENT_COMMAND_TYPE, params={"site_id": "home_greybridge"}))
+    sim.advance_ticks(1)
+
+    placements = _world_marker_placements(sim, center=(640.0, 360.0), zoom_scale=1.0)
+    labels = {row.marker.label for row in placements if row.marker.marker_kind == "interactable"}
+    assert any("Watch Hall" in label for label in labels)
+    assert any("Inn/Infirmary" in label for label in labels)
+
+
+def test_nearest_lootable_hostile_only_returns_incapacitated_unlooted_target() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    local_space_id = "local:test"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 8, "height": 8, "origin": {"x": 0, "y": 0}},
+    )
+    player = sim.state.entities[PLAYER_ID]
+    player.space_id = local_space_id
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(1, 1)
+
+    loot_x, loot_y = square_grid_cell_to_world_xy(2, 1)
+    sim.add_entity(
+        EntityState(
+                entity_id="hostile:lootable",
+            position_x=loot_x,
+            position_y=loot_y,
+            space_id=local_space_id,
+            template_id=LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
+                wounds=[{"severity": 4, "region": "torso"}],
+            stats={},
+        )
+    )
+    spent_x, spent_y = square_grid_cell_to_world_xy(1, 2)
+    sim.add_entity(
+        EntityState(
+            entity_id="hostile:spent",
+            position_x=spent_x,
+            position_y=spent_y,
+            space_id=local_space_id,
+                template_id=LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
+                wounds=[{"severity": 4, "region": "torso"}],
+            stats={"proof_looted": True},
+        )
+    )
+
+    selected = _nearest_lootable_hostile_for_player(sim, entity=player)
+    assert selected is not None
+    assert selected.entity_id == "hostile:lootable"
 
 
 def test_debug_sites_rows_include_major_site_and_patrol_scene_diagnostics() -> None:

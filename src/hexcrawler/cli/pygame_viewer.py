@@ -147,6 +147,9 @@ HOME_MARKER_RING_WIDTH = 3
 LOCAL_INTERPOLATION_SNAP_DISTANCE = 0.08
 RECENT_COMBAT_FEEDBACK_TICK_WINDOW = 20
 RECENT_HIT_FLASH_TICK_WINDOW = 4
+GREYBRIDGE_USE_PROMPT_RANGE = 1.25
+BUILDING_USE_PROMPT_RANGE = 1.8
+LOOT_PROMPT_RANGE = 1.8
 
 CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
@@ -1624,6 +1627,22 @@ def _collect_world_markers(
                 ),
             )
         for interactable in sorted(space.interactables.values(), key=lambda row: row.interactable_id):
+            label = interactable.kind
+            if isinstance(getattr(interactable, "metadata", None), dict):
+                meta_label = interactable.metadata.get("label")
+                if isinstance(meta_label, str) and meta_label.strip():
+                    label = meta_label.strip()
+            marker_color = (170, 170, 255)
+            marker_radius = 5
+            interactable_id = str(getattr(interactable, "interactable_id", ""))
+            if interactable_id == "watch_hall":
+                marker_color = (105, 176, 255)
+                marker_radius = 7
+                label = "Watch Hall (Turn-In)"
+            elif interactable_id == "inn_infirmary":
+                marker_color = (170, 226, 186)
+                marker_radius = 7
+                label = "Inn/Infirmary (Recover)"
             add_marker(
                 _marker_cell_from_location(
                     {"space_id": active_space_id, "topology_type": space.topology_type, "coord": interactable.coord},
@@ -1633,9 +1652,9 @@ def _collect_world_markers(
                     priority=0,
                     marker_id=f"interactable:{interactable.interactable_id}",
                     marker_kind="interactable",
-                    color=(170, 170, 255),
-                    radius=5,
-                    label=_truncate_label(interactable.kind, max_length=12),
+                    color=marker_color,
+                    radius=marker_radius,
+                    label=_truncate_label(label, max_length=26),
                 ),
             )
 
@@ -2131,6 +2150,14 @@ def _draw_frame_layers(
         )
 
     _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
+    _draw_world_affordance_prompts(
+        screen,
+        sim,
+        font,
+        world_center=world_center,
+        world_zoom_scale=world_zoom_scale,
+        world_rect=layout.world_view,
+    )
     _draw_hud(
         screen,
         sim,
@@ -2611,7 +2638,7 @@ def _player_facing_hud_lines(
     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
     calendar = _calendar_presentation(sim)
     lines = [
-        "WASD move | Enter/E use site | F fight offer | X flee offer | L loot proof | Q exit Greybridge hub",
+        "WASD move | Enter/E use site | F fight | X flee | L loot | T turn in | R recover | Q exit hub",
         f"condition={condition} wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
         f"inventory proof_token={proof_tokens} rations={rations}",
         (
@@ -2626,12 +2653,92 @@ def _player_facing_hud_lines(
             f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
         )
     if entity.space_id == "safe_hub:greybridge":
-        lines.append("site=Greybridge hub: Watch Hall (turn-in) and Inn/Infirmary (recover)")
+        lines.append("site=INSIDE Greybridge hub | Watch Hall: turn in [T] | Inn/Infirmary: recover [R] | leave [Q/E]")
     elif _is_home_site(safe_site_id):
-        lines.append("site=Greybridge entrance nearby (Enter/E to step into local hub)")
+        lines.append("site=OUTSIDE Greybridge on campaign map | Enter/E to step into local hub")
     elif at_safe_site:
         lines.append(f"site=safe ({safe_site_id if isinstance(safe_site_id, str) else '-'})")
     return lines
+
+
+def _nearest_lootable_hostile_for_player(sim: Simulation, *, entity: EntityState) -> EntityState | None:
+    best: tuple[float, str, EntityState] | None = None
+    for candidate in sim.state.entities.values():
+        if candidate.space_id != entity.space_id or candidate.entity_id == entity.entity_id:
+            continue
+        if str(candidate.template_id or "") != "encounter_hostile_v1":
+            continue
+        if not is_incapacitated_from_wounds(candidate.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
+            continue
+        stats = candidate.stats if isinstance(candidate.stats, dict) else {}
+        if bool(stats.get("proof_looted", False)):
+            continue
+        distance = math.dist((entity.position_x, entity.position_y), (candidate.position_x, candidate.position_y))
+        if distance > LOOT_PROMPT_RANGE:
+            continue
+        row = (distance, candidate.entity_id, candidate)
+        if best is None or (row[0], row[1]) < (best[0], best[1]):
+            best = row
+    return best[2] if best is not None else None
+
+
+def _draw_world_affordance_prompts(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    *,
+    world_center: tuple[float, float],
+    world_zoom_scale: float,
+    world_rect: pygame.Rect,
+) -> None:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return
+    active_space = sim.state.world.spaces.get(player.space_id)
+    if active_space is None:
+        return
+    old_clip = screen.get_clip()
+    screen.set_clip(world_rect)
+    if str(getattr(active_space, "role", "")) == "campaign":
+        nearest = _nearest_campaign_site_for_player(sim, player=player, max_distance_world=GREYBRIDGE_USE_PROMPT_RANGE)
+        if nearest is not None and nearest.site_id == "home_greybridge":
+            anchor = _site_campaign_anchor_world(nearest)
+            if anchor is not None:
+                px, py = _world_to_pixel(anchor[0], anchor[1], world_center, world_zoom_scale)
+                prompt = "Press Enter/E: Enter Greybridge"
+                label = font.render(prompt, True, (255, 248, 190))
+                screen.blit(label, (int(px) - (label.get_width() // 2), int(py) - 40))
+    elif player.space_id == "safe_hub:greybridge":
+        banner = font.render("INSIDE GREYBRIDGE HUB", True, (214, 236, 255))
+        screen.blit(banner, (world_rect.x + 10, world_rect.y + 32))
+        interactables = getattr(active_space, "interactables", {})
+        if isinstance(interactables, dict):
+            for interactable_id in ("watch_hall", "inn_infirmary"):
+                interactable = interactables.get(interactable_id)
+                if interactable is None or not isinstance(getattr(interactable, "coord", None), dict):
+                    continue
+                world_x = float(interactable.coord.get("x", 0.0)) + 0.5
+                world_y = float(interactable.coord.get("y", 0.0)) + 0.5
+                px, py = _world_to_pixel(world_x, world_y, world_center, world_zoom_scale)
+                title = "WATCH HALL (TURN-IN)" if interactable_id == "watch_hall" else "INN / INFIRMARY (RECOVER)"
+                title_surface = font.render(title, True, (240, 245, 255))
+                screen.blit(title_surface, (int(px) - (title_surface.get_width() // 2), int(py) - 26))
+                distance = math.dist((player.position_x, player.position_y), (world_x, world_y))
+                if distance <= BUILDING_USE_PROMPT_RANGE:
+                    prompt = (
+                        "Press T: Turn in proof token"
+                        if interactable_id == "watch_hall"
+                        else "Press R: Recover (0 rations, +60 ticks, heals one light wound)"
+                    )
+                    prompt_surface = font.render(prompt, True, (255, 246, 188))
+                    screen.blit(prompt_surface, (int(px) - (prompt_surface.get_width() // 2), int(py) - 44))
+    if str(getattr(active_space, "role", "")) == "local":
+        lootable = _nearest_lootable_hostile_for_player(sim, entity=player)
+        if lootable is not None:
+            px, py = _world_to_pixel(lootable.position_x, lootable.position_y, world_center, world_zoom_scale)
+            prompt = font.render("Proof available: Press L to loot", True, (255, 228, 176))
+            screen.blit(prompt, (int(px) - (prompt.get_width() // 2), int(py) - 28))
+    screen.set_clip(old_clip)
 
 
 def _draw_hud(
@@ -3624,7 +3731,7 @@ def _nearest_campaign_site_for_player(
     *,
     player: EntityState,
     selected_site_id: str | None = None,
-    max_distance_world: float = 0.9,
+    max_distance_world: float = GREYBRIDGE_USE_PROMPT_RANGE,
 ) -> SiteRecord | None:
     active_space = sim.state.world.spaces.get(player.space_id)
     if active_space is None or str(getattr(active_space, "role", "")) != "campaign":
@@ -3664,7 +3771,12 @@ def _use_campaign_site(
     player: EntityState,
     selected_site_id: str | None,
 ) -> tuple[str, str | None, bool]:
-    site = _nearest_campaign_site_for_player(sim, player=player, selected_site_id=selected_site_id)
+    site = _nearest_campaign_site_for_player(
+        sim,
+        player=player,
+        selected_site_id=selected_site_id,
+        max_distance_world=GREYBRIDGE_USE_PROMPT_RANGE,
+    )
     if site is None:
         return "no site in range (move closer or select a nearby site marker)", selected_site_id, False
     if site.entrance is not None:
@@ -4376,6 +4488,12 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_l:
                 controller.loot_local_proof_intent()
                 status_message = "loot proof intent queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_t:
+                controller.turn_in_reward_token_intent()
+                status_message = "turn-in intent queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_r:
+                controller.safe_recovery_intent()
+                status_message = "recover intent queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_q:
                 controller.exit_safe_hub_intent()
                 status_message = "exit Greybridge hub intent queued"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -112,6 +113,13 @@ def _normalize_facing_token(value: Any) -> int:
     if value is None:
         return 0
     return _require_int(value, field_name="entity.facing")
+
+
+def _facing_from_motion_vector(x: float, y: float) -> int:
+    if x == 0.0 and y == 0.0:
+        return 0
+    angle = math.atan2(y, x)
+    return int(round(angle / (math.pi / 3.0))) % 6
 
 
 def _normalize_cooldown_until_tick(value: Any) -> int:
@@ -1218,6 +1226,7 @@ class Simulation:
 
         if move_x == 0.0 and move_y == 0.0:
             return
+        entity.facing = _facing_from_motion_vector(move_x, move_y)
 
         step_size = entity.speed_per_tick * movement_multiplier_from_wounds(entity.wounds)
         if step_size <= 0.0:
