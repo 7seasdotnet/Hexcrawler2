@@ -40,7 +40,7 @@ from hexcrawler.sim.campaign_danger import (
 )
 from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.greybridge_layout import GREYBRIDGE_BLOCKED_CELLS, GREYBRIDGE_DOOR_CELLS, GREYBRIDGE_SAFE_HUB_SPACE_ID
+from hexcrawler.sim.greybridge_layout import GREYBRIDGE_SAFE_HUB_SPACE_ID, GREYBRIDGE_WALL_CELLS, compile_greybridge_overlay
 from hexcrawler.sim.exploration import (
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
@@ -2136,20 +2136,38 @@ def _draw_greybridge_hub_bounds(
     if getattr(active_space, "space_id", "") != GREYBRIDGE_SAFE_HUB_SPACE_ID:
         return
     cell_size = HEX_SIZE * zoom_scale
+    compiled_overlay = compile_greybridge_overlay()
+    opening_by_cell: dict[tuple[int, int], dict[str, object]] = {}
+    for row in compiled_overlay["opening_rows"]:
+        if not isinstance(row, dict):
+            continue
+        cell = row.get("cell")
+        if not isinstance(cell, dict):
+            continue
+        try:
+            key = (int(cell["x"]), int(cell["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        opening_by_cell[key] = row
 
     def to_px(x: float, y: float) -> tuple[int, int]:
         return (int(center[0] + x * cell_size), int(center[1] + y * cell_size))
 
-    for cell_x, cell_y in GREYBRIDGE_BLOCKED_CELLS:
+    for cell_x, cell_y in GREYBRIDGE_WALL_CELLS:
         left, top = to_px(float(cell_x), float(cell_y))
         right, bottom = to_px(float(cell_x + 1), float(cell_y + 1))
         rect = pygame.Rect(min(left, right), min(top, bottom), abs(right - left), abs(bottom - top))
-        pygame.draw.rect(screen, (72, 74, 86), rect)
-        pygame.draw.rect(screen, (104, 108, 126), rect, 1)
+        pygame.draw.rect(screen, (62, 66, 80), rect)
+        pygame.draw.rect(screen, (126, 132, 152), rect, 1)
 
-    for door_x, door_y in GREYBRIDGE_DOOR_CELLS:
+    for door_x, door_y in compiled_overlay["opening_cells"]:
+        opening = opening_by_cell.get((int(door_x), int(door_y)), {})
+        kind = str(opening.get("kind", "opening"))
+        fill = (212, 189, 96)
+        if kind == "gate_portal":
+            fill = (176, 220, 124)
         px, py = to_px(float(door_x) + 0.5, float(door_y) + 0.5)
-        pygame.draw.rect(screen, (212, 189, 96), pygame.Rect(px - 6, py - 3, 12, 6))
+        pygame.draw.rect(screen, fill, pygame.Rect(px - 6, py - 3, 12, 6))
 
 
 def _draw_frame_layers(

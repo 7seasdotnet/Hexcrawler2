@@ -90,3 +90,26 @@
   - Do **not** rebind display heading to axial/discrete facing tokens as default fallback during idle/re-entry paths.
   - Do **not** serialize viewer display/render heading into world/simulation state.
   - Do **not** patch perceived heading via simulation mutations from UI/render code.
+
+## 5) Do Not Let Blocked-Cell Greybridge Patches Harden Into Final Local Building Substrate
+- **Problem name:** Greybridge blocked-cell patch hardens into long-term local building truth.
+- **Symptom:** Local building authoring keeps adding/adjusting raw blocked-cell tuples with ad hoc door holes, and future building semantics (walls/openings/rooms/gates) are inferred indirectly rather than authored explicitly.
+- **Root cause:** Playable-loop urgency shipped coarse blocked occupancy first, but no enforced transition to overlay-authored structure truth was made.
+- **Relevant architecture invariant / anti-lock-in rule:**
+  - Local role simulation must remain deterministic and command/event authoritative.
+  - Projection remains presentation-only; collision/pathing truth must not live only in viewer hacks.
+  - Local-space contracts must preserve future topology/projection flexibility and must not encode “blocked cell list == final building model.”
+- **Known-good fix path:**
+  1. Author Greybridge/local buildings as structure-overlay source data (bounds/walls-openings/room labels/gate semantics).
+  2. Deterministically compile overlay source to runtime blocked/passability cells while coarse movement lattice remains in use.
+  3. Use overlay-derived data for both render readability and simulation collision/passability checks.
+  4. Add deterministic tests for compile output, traversability at doors/gates/openings, and save/load/hash stability.
+- **Required regression tests:**
+  - Overlay compilation deterministic on repeated runs.
+  - Gate/door/opening cells traversable while adjacent wall cells remain blocked.
+  - Greybridge enter/exit + Watch Hall turn-in + Inn/Infirmary recovery + patrol recontact loop remain intact.
+  - Save/load/hash stability for overlay-derived collision behavior.
+- **Do not regress by doing X:**
+  - Do **not** add new Greybridge building logic as raw blocked-cell-only truth.
+  - Do **not** render fake wall/opening semantics in viewer that are not backed by authoritative overlay-derived collision truth.
+  - Do **not** broaden this fix into a full editor/town/interior framework in the same bounded pass.

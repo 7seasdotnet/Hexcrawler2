@@ -19,7 +19,7 @@ from hexcrawler.sim.movement import (
     world_xy_to_axial,
     world_xy_to_square_grid_cell,
 )
-from hexcrawler.sim.greybridge_layout import GREYBRIDGE_BLOCKED_CELLS, GREYBRIDGE_SAFE_HUB_SPACE_ID
+from hexcrawler.sim.greybridge_layout import GREYBRIDGE_SAFE_HUB_SPACE_ID, compile_greybridge_overlay
 from hexcrawler.sim.rng import derive_stream_seed
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.world import ContainerState, DEFAULT_OVERWORLD_SPACE_ID, HexCoord, WorldState
@@ -1283,7 +1283,7 @@ class Simulation:
                     except (KeyError, TypeError, ValueError):
                         continue
             if not blocked_keys and space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
-                blocked_keys = set(GREYBRIDGE_BLOCKED_CELLS)
+                blocked_keys = set(compile_greybridge_overlay()["blocked_cells"])
             return (int(cell["x"]), int(cell["y"])) not in blocked_keys
         return False
 
