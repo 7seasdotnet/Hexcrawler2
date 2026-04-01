@@ -59,6 +59,9 @@ from hexcrawler.cli.pygame_viewer import (
     _slot_markers_for_hex,
     _spatial_context_actions,
     _campaign_site_diagnostic_rows,
+    _campaign_authoring_edit_items,
+    _campaign_authoring_placement_items,
+    _campaign_authored_object_at_world,
     _site_campaign_anchor_world,
     _use_campaign_site,
     _supported_viewer_topology,
@@ -87,6 +90,7 @@ from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
 from hexcrawler.sim.local_hostiles import HOSTILE_TEMPLATE_ID
 from hexcrawler.sim.movement import square_grid_cell_to_world_xy
 from hexcrawler.sim.world import (
+    CampaignPatrolRecord,
     EvidenceRecord,
     HexCoord,
     LOCAL_SPACE_ROLE,
@@ -203,6 +207,64 @@ def test_campaign_render_layer_order_is_explicit_and_stable() -> None:
         "overlays_selection",
         "hud_panels_modals",
     )
+
+
+def test_campaign_authoring_empty_space_menu_exposes_right_click_placement_actions() -> None:
+    items = _campaign_authoring_placement_items(2.0, -1.0)
+    labels = [item.label for item in items]
+
+    assert "Place Town Here" in labels
+    assert "Place Dungeon Entrance Here" in labels
+    assert "Place Patrol Here" in labels
+    town_payload = next(item.payload for item in items if item.label == "Place Town Here")
+    assert isinstance(town_payload, dict)
+    assert town_payload["kind"] == "town"
+    assert town_payload["position"] == {"x": 2.0, "y": -1.0}
+
+
+def test_campaign_authoring_existing_object_menu_exposes_move_delete_actions() -> None:
+    target = {"kind": "site", "id": "authoring_town_0_0", "label": "Authored Town"}
+
+    items = _campaign_authoring_edit_items(target)
+    labels = [item.label for item in items]
+
+    assert "Move" in labels
+    assert "Delete" in labels
+    move_item = next(item for item in items if item.action == "campaign_author_move")
+    assert move_item.payload == target
+
+
+def test_campaign_authoring_target_detection_prefers_clicked_authored_site_or_patrol() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    sim.state.world.sites["authoring_town_0_0"] = SiteRecord(
+        site_id="authoring_town_0_0",
+        site_type="town",
+        location={
+            "space_id": "overworld",
+            "topology_type": OVERWORLD_HEX_TOPOLOGY,
+            "coord": {"q": 0, "r": 0},
+            "campaign_anchor": {"x": 0.25, "y": 0.25},
+        },
+        name="Authored Town",
+        tags=["authored", "town"],
+    )
+    sim.state.world.campaign_patrols["patrol:authoring_demo"] = CampaignPatrolRecord(
+        patrol_id="patrol:authoring_demo",
+        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+        space_id="overworld",
+        spawn_position={"x": -1.5, "y": 0.5},
+        route_anchors=[{"x": -1.0, "y": 0.5}],
+        label="Authored Patrol",
+        tags=["authoring"],
+    )
+
+    town = _campaign_authored_object_at_world(sim, world_x=0.2, world_y=0.2)
+    patrol = _campaign_authored_object_at_world(sim, world_x=-1.5, world_y=0.5)
+    nothing = _campaign_authored_object_at_world(sim, world_x=8.0, world_y=8.0)
+
+    assert town is not None and town["kind"] == "site" and town["id"] == "authoring_town_0_0"
+    assert patrol is not None and patrol["kind"] == "patrol" and patrol["id"] == "patrol:authoring_demo"
+    assert nothing is None
 
 
 def test_site_marker_uses_campaign_anchor_position_instead_of_hex_center() -> None:
