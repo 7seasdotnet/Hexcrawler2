@@ -85,6 +85,20 @@ def test_game_save_json_stable_across_save_load_cycles(tmp_path: Path) -> None:
     assert first_path.read_text(encoding="utf-8") == second_path.read_text(encoding="utf-8")
 
 
+def test_motion_updates_authoritative_facing_and_round_trips_through_save_load(tmp_path: Path) -> None:
+    simulation = Simulation(world=load_world_json("content/examples/basic_map.json"), seed=321)
+    simulation.add_entity(EntityState.from_hex(entity_id="runner", hex_coord=HexCoord(0, 0), speed_per_tick=0.2))
+    simulation.append_command(SimCommand(tick=0, entity_id="runner", command_type="set_move_vector", params={"x": 0.0, "y": 1.0}))
+    simulation.advance_ticks(1)
+    facing_after_move = simulation.state.entities["runner"].facing
+    assert facing_after_move != 0
+
+    path = tmp_path / "facing_save.json"
+    save_game_json(path, simulation.state.world, simulation)
+    _, loaded = load_game_json(path)
+    assert loaded.state.entities["runner"].facing == facing_after_move
+
+
 def test_game_loader_fails_when_save_hash_is_tampered(tmp_path: Path) -> None:
     simulation = _build_simulation()
     path = tmp_path / "game_save.json"
