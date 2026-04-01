@@ -875,29 +875,22 @@ def _facing_angle_radians(facing: int) -> float:
     return (int(facing) % 6) * (math.pi / 3.0)
 
 
-def _render_heading_angle_from_motion(
+def _display_heading_angle_from_motion(
     *,
-    sim: Simulation,
-    entity_id: str,
     previous_snapshot: RenderSnapshot,
     current_snapshot: RenderSnapshot,
+    entity_id: str,
+    fallback_angle: float | None = None,
 ) -> float | None:
-    """Viewer-only render heading derived from motion, never serialized or authoritative."""
-    entity = sim.state.entities.get(entity_id)
-    if entity is None:
-        return None
-    space = sim.state.world.spaces.get(entity.space_id)
-    role = str(getattr(space, "role", ""))
-    if role != "campaign":
-        return None
+    """Viewer-only display heading derived from motion, never serialized or authoritative."""
     previous = previous_snapshot.get(entity_id)
     current = current_snapshot.get(entity_id)
     if previous is None or current is None:
-        return None
+        return fallback_angle
     delta_x = float(current.x) - float(previous.x)
     delta_y = float(current.y) - float(previous.y)
     if math.hypot(delta_x, delta_y) <= 1e-9:
-        return None
+        return fallback_angle
     return math.atan2(delta_y, delta_x)
 
 
@@ -4959,16 +4952,16 @@ def run_pygame_viewer(
             if stale_id not in tracked_ids:
                 visual_facing_by_entity.pop(stale_id, None)
         for entity_id, entity in sim.state.entities.items():
-            target_angle = _facing_angle_radians(entity.facing)
-            viewer_motion_heading = _render_heading_angle_from_motion(
-                sim=sim,
-                entity_id=entity_id,
+            authoritative_facing_angle = _facing_angle_radians(entity.facing)
+            prior_display_heading = visual_facing_by_entity.get(entity_id)
+            fallback_display_heading = authoritative_facing_angle if prior_display_heading is None else prior_display_heading
+            target_angle = _display_heading_angle_from_motion(
                 previous_snapshot=previous_snapshot,
                 current_snapshot=current_snapshot,
+                entity_id=entity_id,
+                fallback_angle=fallback_display_heading,
             )
-            if viewer_motion_heading is not None:
-                target_angle = viewer_motion_heading
-            current_angle = visual_facing_by_entity.get(entity_id, target_angle)
+            current_angle = visual_facing_by_entity.get(entity_id, fallback_display_heading)
             visual_facing_by_entity[entity_id] = _swing_facing_angle(current_angle, target_angle, max_step=max_facing_step)
 
         screen.fill((17, 18, 25))

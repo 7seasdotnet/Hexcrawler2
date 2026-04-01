@@ -2,8 +2,8 @@ import math
 
 from hexcrawler.cli.pygame_viewer import (
     RenderEntitySnapshot,
+    _display_heading_angle_from_motion,
     _facing_angle_radians,
-    _render_heading_angle_from_motion,
     _swing_facing_angle,
     clamp01,
     extract_render_snapshot,
@@ -119,32 +119,33 @@ def test_facing_swing_moves_toward_target_without_snapping() -> None:
     assert stepped != target
 
 
-def test_render_heading_angle_from_motion_uses_continuous_campaign_delta_only() -> None:
-    world = load_world_json("content/examples/basic_map.json")
-    sim = Simulation(world=world, seed=5)
-    sim.add_entity(EntityState.from_hex(entity_id="runner", hex_coord=HexCoord(0, 0), speed_per_tick=0.2))
-
+def test_display_heading_angle_from_motion_uses_continuous_delta_and_fallback_hold() -> None:
     previous = {"runner": RenderEntitySnapshot(x=0.0, y=0.0)}
     current = {"runner": RenderEntitySnapshot(x=0.3, y=0.2)}
 
-    angle = _render_heading_angle_from_motion(
-        sim=sim,
-        entity_id="runner",
+    angle = _display_heading_angle_from_motion(
         previous_snapshot=previous,
         current_snapshot=current,
+        entity_id="runner",
     )
 
     assert angle is not None
     assert angle == math.atan2(0.2, 0.3)
-
-    sim.state.entities["runner"].space_id = "local:test"
-    sim.state.world.spaces["local:test"] = type("S", (), {"role": "local"})()
-    assert (
-        _render_heading_angle_from_motion(
-            sim=sim,
-            entity_id="runner",
-            previous_snapshot=previous,
-            current_snapshot=current,
-        )
-        is None
+    held = _display_heading_angle_from_motion(
+        previous_snapshot=current,
+        current_snapshot=current,
+        entity_id="runner",
+        fallback_angle=angle,
     )
+    assert held == angle
+
+
+def test_display_heading_angle_from_motion_uses_fallback_when_snapshots_missing() -> None:
+    fallback = 1.234
+    angle = _display_heading_angle_from_motion(
+        previous_snapshot={},
+        current_snapshot={"runner": RenderEntitySnapshot(x=0.0, y=0.0)},
+        entity_id="runner",
+        fallback_angle=fallback,
+    )
+    assert angle == fallback
