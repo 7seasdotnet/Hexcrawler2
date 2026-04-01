@@ -519,6 +519,7 @@ def test_replacement_patrol_reenters_campaign_offer_path_after_turn_in() -> None
 
     _exit_safe_hub(sim)
     danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    danger.speed_per_tick = 0.0
     scout.space_id = danger.space_id
     scout.position_x = danger.position_x
     scout.position_y = danger.position_y
@@ -588,3 +589,117 @@ def test_greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_rema
     )
     sim.advance_ticks(30)
     assert int(scout.position_x) == 1 and int(scout.position_y) == 5
+
+
+def test_greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable() -> None:
+    sim = _build_sim(seed=29)
+    scout = sim.state.entities["scout"]
+
+    _enter_safe_hub(sim)
+    assert scout.space_id == "safe_hub:greybridge"
+
+    # Gatehouse spawn side -> interior via opening at (3,5).
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(2, 5)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 4.5, "y": 5.5},
+        )
+    )
+    sim.advance_ticks(30)
+    assert int(scout.position_x) >= 3 and int(scout.position_y) == 5
+
+    # Interior -> gatehouse -> campaign exit remains available.
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 1.5, "y": 5.5},
+        )
+    )
+    sim.advance_ticks(30)
+    assert int(scout.position_x) == 1 and int(scout.position_y) == 5
+    _exit_safe_hub(sim)
+    assert scout.space_id == CAMPAIGN_SPACE_ID
+
+
+def test_patrol_loop_recontacts_after_leave_return_and_replacement_without_wedge() -> None:
+    sim = _build_sim(seed=30, with_campaign_danger=True)
+    scout = sim.state.entities["scout"]
+    container_id = scout.inventory_container_id
+    assert container_id is not None
+    sim.state.world.containers[container_id].items["proof_token"] = 1
+
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    danger.speed_per_tick = 0.0
+    scout.space_id = danger.space_id
+    scout.position_x = danger.position_x
+    scout.position_y = danger.position_y
+    sim.advance_ticks(2)
+    pending = sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get("scout")
+    assert isinstance(pending, dict)
+
+    # Accept the first (original patrol) contact and return without kill.
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": "scout"},
+        )
+    )
+    sim.advance_ticks(3)
+    begin = _trace(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE)[-1]
+    exit_coord = begin["params"]["return_exit_coord"]
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(exit_coord["x"], exit_coord["y"])
+    _issue_end_intent(sim)
+    _issue_end_intent(sim)
+    sim.advance_ticks(4)
+
+    # Recontact original patrol after leave/return before kill.
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    danger.speed_per_tick = 0.0
+    scout.space_id = danger.space_id
+    scout.position_x = danger.position_x
+    scout.position_y = danger.position_y
+    sim.advance_ticks(20)
+    pending = sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get("scout")
+    assert isinstance(pending, dict)
+
+    # Enter hub, turn in, and verify replacement patrol also recontacts.
+    _enter_safe_hub(sim)
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(10, 3)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
+            params={},
+        )
+    )
+    sim.advance_ticks(2)
+    _exit_safe_hub(sim)
+    danger = sim.state.entities[DEFAULT_DANGER_ENTITY_ID]
+    danger.speed_per_tick = 0.0
+    scout.space_id = danger.space_id
+    scout.position_x = danger.position_x
+    scout.position_y = danger.position_y
+    sim.advance_ticks(20)
+    pending = sim.get_rules_state(CampaignDangerModule.name).get("pending_offer_by_player", {}).get("scout")
+    assert isinstance(pending, dict)
+
+    # Repeat one more contact to ensure encounter control is not wedged.
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,
+            params={"entity_id": "scout"},
+        )
+    )
+    sim.advance_ticks(3)
+    state = sim.get_rules_state(CampaignDangerModule.name).get("encounter_control_by_player", {}).get("scout", {})
+    assert state.get("state") in {"in_local", "returning", "post_encounter_cooldown", "pending_offer"}

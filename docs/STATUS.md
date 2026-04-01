@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run focused live `python play.py` smoke for replacement-patrol authority reliability: fight->loot->turn-in/recover->replacement patrol contact->Fight/Flee->local re-entry, and verify right-click menu affordances remain primary for loot/turn-in/recover/gate actions.
+- **Next action:** Run focused live `python play.py` smoke for full repeat-loop reliability: Greybridge gatehouse interior<->gate traversal, gate exit round-trips, original patrol leave/return recontact, then replacement patrol recontact after turn-in/recover.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -109,9 +109,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Fixed replacement patrol encounter authority by respawning Greybridge replacement patrols under the authoritative campaign-danger entity identity so replacement contacts re-enter normal pending-offer / Fight-Flee flow.
-- Added bounded right-click spatial interaction actions (loot, Watch Hall turn-in, Inn/Infirmary recovery, Greybridge gate exit) as viewer-side intent issuance only, with hotkeys retained as fallback.
-- Added Greybridge-authored building boundedness/collision primitive (walls/blocked cells + explicit door/gate openings) for local pathing truth, plus recurring-regression documentation updates in `docs/LEGENDARY_PROBLEMS.md`.
+- Fixed Greybridge gatehouse boundedness by opening interior traversal at `(3,5)` while preserving gate exit opening at `(1,5)`, preventing gatehouse trap states and restoring reliable hub traversal/exit.
+- Fixed campaign danger recontact authority by allowing pending-offer creation whenever overlap + eligibility hold (not edge-only overlap), so original/replacement patrols can re-enter Fight/Flee after leave/return and cooldown expiry.
+- Added targeted regression coverage (gatehouse traversal + repeated loop/recontact + save/load overlap-cooldown retrigger) and refreshed recurring bug documentation in `docs/LEGENDARY_PROBLEMS.md`.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

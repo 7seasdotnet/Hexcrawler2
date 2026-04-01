@@ -43,3 +43,26 @@
   - Do **not** spawn replacement patrol under a disconnected ID outside encounter authority.
   - Do **not** bypass pending-offer flow by directly forcing local encounter entry from UI.
   - Do **not** add viewer-side “fake Fight/Flee” state divorced from simulation rules_state.
+
+## 3) Original Patrol Passes Through Player After Leave/Return Before Kill
+- **Problem name:** Original patrol recontact wedge after local leave/return.
+- **Symptom:** Player contacts patrol once, exits local without killing, returns to overlap, and receives no new Fight/Flee offer while patrol remains alive.
+- **Root cause:** Contact offer creation was edge-triggered (`overlap && !prior_overlap`) only. If overlap stayed true across cooldown expiry/return context, encounter eligibility could recover while no new edge occurred, leaving contact permanently wedged until a later separation event.
+- **Related architecture invariant/contract:**
+  - `CampaignDangerModule` is authoritative for campaign contact and pending-offer ownership.
+  - Encounter-control state (`none/pending_offer/in_local/returning/post_encounter_cooldown`) is serialized and deterministic.
+  - Viewer/UI must remain read-only and must not synthesize offer state.
+- **Known-good fix path:**
+  1. Keep offer issuance in `CampaignDangerModule.on_tick_end`.
+  2. Evaluate contact as `overlap && player_can_receive_offer(...)` instead of edge-only gating.
+  3. Preserve explicit eligibility gates (`encounter_control`, active local state, flee-ignore windows).
+  4. Ensure serialized cooldown pruning can naturally re-enable offers while overlap persists.
+- **Required regression tests:**
+  - Original patrol recontact after leave/return-before-kill.
+  - Replacement patrol recontact after turn-in/recover.
+  - Save/load across cooldown + persistent overlap still re-triggers pending offer.
+  - Two-loop smoke without wedged `encounter_control_by_player`.
+- **Do not regress by doing X:**
+  - Do **not** require overlap edge transitions as the only retrigger condition.
+  - Do **not** clear encounter-control via viewer-side mutation.
+  - Do **not** bypass cooldown/flee-ignore semantics with ad-hoc command shortcuts.

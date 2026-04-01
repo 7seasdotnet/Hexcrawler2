@@ -131,10 +131,9 @@ class CampaignDangerModule(RuleModule):
             tick=tick,
         )
 
-        prior_overlap = bool(overlap_by_danger.get(self._danger_entity_id, False))
         overlap = self._is_campaign_overlap(sim=sim, danger=danger, player=player)
 
-        if overlap and not prior_overlap and danger is not None and player is not None:
+        if overlap and danger is not None and player is not None:
             player_id = player.entity_id
             if self._player_can_receive_offer(
                 sim=sim,
@@ -685,8 +684,12 @@ class CampaignDangerModule(RuleModule):
         if not isinstance(local_state, dict):
             return False
         active_by_local_space = local_state.get("active_by_local_space")
-        if isinstance(active_by_local_space, dict) and active_by_local_space:
-            return True
+        if isinstance(active_by_local_space, dict):
+            for row in active_by_local_space.values():
+                if not isinstance(row, dict):
+                    continue
+                if bool(row.get("is_active", True)):
+                    return True
         return_in_progress = local_state.get("return_in_progress_by_local_space")
         if isinstance(return_in_progress, dict) and any(bool(v) for v in return_in_progress.values()):
             return True
