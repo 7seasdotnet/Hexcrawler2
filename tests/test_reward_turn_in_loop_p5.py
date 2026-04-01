@@ -30,6 +30,7 @@ from hexcrawler.sim.exploration import (
     TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE,
     ExplorationExecutionModule,
 )
+from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay
 from hexcrawler.sim.hash import simulation_hash
 from hexcrawler.sim.movement import square_grid_cell_to_world_xy
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, SiteRecord, SpaceState
@@ -589,6 +590,66 @@ def test_greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_rema
     )
     sim.advance_ticks(30)
     assert int(scout.position_x) == 1 and int(scout.position_y) == 5
+
+
+def test_greybridge_overlay_compilation_is_deterministic_and_contains_gate_semantics() -> None:
+    compiled_a = compile_greybridge_overlay()
+    compiled_b = compile_greybridge_overlay()
+
+    assert compiled_a == compiled_b
+    gate_rows = [row for row in compiled_a["opening_rows"] if row.get("kind") == "gate_portal"]
+    assert gate_rows
+    gate_cell = gate_rows[0]["cell"]
+    assert gate_cell == {"x": 1, "y": 5}
+    assert (1, 5) not in compiled_a["blocked_cells"]
+    assert (0, 5) in compiled_a["blocked_cells"]
+
+
+def test_greybridge_overlay_derived_collision_stable_across_save_load(tmp_path: Path) -> None:
+    sim = _build_sim(seed=281)
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(7, 3)
+    sim.advance_ticks(2)
+
+    save_path = tmp_path / "overlay_collision_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(str(save_path))
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded_hash_before = simulation_hash(loaded)
+
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 8.5, "y": 4.5},
+        )
+    )
+    loaded.advance_ticks(40)
+    reloaded_scout = loaded.state.entities["scout"]
+    assert int(reloaded_scout.position_x) != 8 or int(reloaded_scout.position_y) != 4
+
+    _, replay = load_game_json(str(save_path))
+    replay.register_rule_module(LocalEncounterRequestModule())
+    replay.register_rule_module(LocalEncounterInstanceModule())
+    replay.register_rule_module(CombatExecutionModule())
+    replay.register_rule_module(ExplorationExecutionModule())
+    replay_hash_before = simulation_hash(replay)
+    assert loaded_hash_before == replay_hash_before
+    replay.append_command(
+        SimCommand(
+            tick=replay.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 8.5, "y": 4.5},
+        )
+    )
+    replay.advance_ticks(40)
+    assert simulation_hash(loaded) == simulation_hash(replay)
 
 
 def test_greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable() -> None:

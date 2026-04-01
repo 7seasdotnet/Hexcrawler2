@@ -6,6 +6,7 @@ from typing import Any
 
 from hexcrawler.sim.core import EntityState, SimCommand, SimEvent, Simulation
 from hexcrawler.sim.campaign_danger import DEFAULT_DANGER_ENTITY_ID
+from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.wounds import is_incapacitated_from_wounds, recover_one_light_wound
@@ -392,11 +393,18 @@ class ExplorationExecutionModule(RuleModule):
         if safe_hub is None:
             from hexcrawler.sim.world import AnchorRecord, InteractableRecord, SpaceState
 
+            compiled_overlay = compile_greybridge_overlay()
+            blocked_cells = [{"x": int(x), "y": int(y)} for x, y in compiled_overlay["blocked_cells"]]
             safe_hub = SpaceState(
                 space_id=GREYBRIDGE_SAFE_HUB_SPACE_ID,
                 topology_type=SQUARE_GRID_TOPOLOGY,
                 role="local",
-                topology_params={"width": 14, "height": 10, "origin": {"x": 0, "y": 0}},
+                topology_params={
+                    "width": 14,
+                    "height": 10,
+                    "origin": {"x": 0, "y": 0},
+                    "blocked_cells": blocked_cells,
+                },
             )
             safe_hub.anchors = {
                 "entry": AnchorRecord(

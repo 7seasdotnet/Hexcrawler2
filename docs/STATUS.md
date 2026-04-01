@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run focused live `python play.py` smoke for display-heading decoupling verification in both campaign and Greybridge local spaces (continuous wedge heading, idle hold behavior, and re-entry/reset non-quantized fallback), then proceed with structure-overlay follow-up planning.
+- **Next action:** Run one bounded follow-up pass extending Greybridge structure-overlay authoring from bounds+openings into explicit wall-segment/portal records with compile validation, while keeping the playable loop unchanged.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -104,15 +104,16 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py src/hexcrawler/sim/exploration.py src/hexcrawler/sim/encounters.py tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_render_interpolation.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
+- `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "greybridge_overlay or greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open or greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable"`
 - `python play.py --headless`
 - `python play.py --headless --runtime-profile experimental_world`
 - `python play.py --headless --runtime-profile soak_audit`
 - `python play.py`
 
 ## What changed in this commit
-- Completed a bounded viewer-only display-heading pass in `pygame_viewer.py` so directional wedge rendering now derives from continuous motion deltas in both campaign and local spaces, with zero-delta/missing-snapshot hold fallback to prior display heading instead of discrete-facing snapback.
-- Expanded regression coverage (`tests/test_render_interpolation.py`, `tests/test_pygame_viewer_runtime.py`) for continuous heading derivation, idle/zero-delta hold behavior, and interpolation re-entry/reset fallback continuity.
-- Expanded recurring bug guidance in `docs/LEGENDARY_PROBLEMS.md` for the hex-axial display-heading regression pattern, including required tests and explicit non-regression guardrails.
+- Added a bounded Greybridge local structure-overlay proof (`src/hexcrawler/sim/greybridge_layout.py`, `docs/LOCAL_STRUCTURE_OVERLAY.md`) where structure/opening/gate semantics are authored in overlay source data and deterministically compiled into runtime wall/blocked/opening sets.
+- Updated authoritative collision and rendering paths to consume overlay-derived data in Greybridge safe hub (`src/hexcrawler/sim/exploration.py`, `src/hexcrawler/sim/core.py`, `src/hexcrawler/cli/pygame_viewer.py`) while preserving current enter/exit + Watch Hall/Inn loop behavior.
+- Added anti-lock-in regression guidance and tests for deterministic overlay compilation, traversability, and save/load/hash stability (`docs/LEGENDARY_PROBLEMS.md`, `tests/test_reward_turn_in_loop_p5.py`).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
