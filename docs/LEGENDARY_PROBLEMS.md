@@ -104,6 +104,10 @@
   2. Deterministically compile overlay source to runtime blocked/passability cells while coarse movement lattice remains in use.
   3. Use overlay-derived data for both render readability and simulation collision/passability checks.
   4. Add deterministic tests for compile output, traversability at doors/gates/openings, and save/load/hash stability.
+- **2026-04-01 bounded bridge status update:**
+  - Greybridge now persists local `structure_primitives` as authored truth and compiles blocked collision from that source.
+  - A minimal authoritative authoring intent seam (`local_structure_author_intent`) now supports create/edit/delete proof operations in local space.
+  - This remains a bounded Part 1 bridge only; campaign city/patrol/dungeon authoring is still out of scope.
 - **Required regression tests:**
   - Overlay compilation deterministic on repeated runs.
   - Gate/door/opening cells traversable while adjacent wall cells remain blocked.

@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run one bounded follow-up pass extending Greybridge structure-overlay authoring from bounds+openings into explicit wall-segment/portal records with compile validation, while keeping the playable loop unchanged.
+- **Next action:** Run the next bounded authoring-spine pass that lifts this local structure proof toward campaign site placement/patrol placement/dungeon spawn placement tooling on the same authoritative command/event seam.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -78,6 +78,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Reward turn-in intent currently executed through rule-module command/event seam: `turn_in_reward_token_intent` (Greybridge local-hub Watch Hall building context; deterministic context-gated admissibility).
 - Safe-hub traversal intents currently executed through rule-module command/event seam: `enter_safe_hub_intent`, `exit_safe_hub_intent`.
 - Local manual loot intent currently executed through rule-module command/event seam: `loot_local_proof_intent`.
+- Local structure authoring proof intent currently executed through rule-module command/event seam: `local_structure_author_intent` (Greybridge local safe-hub only; create/move-opening/remove/delete bounded operations).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -105,15 +106,16 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_render_interpolation.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "greybridge_overlay or greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open or greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable"`
+- `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "overlay_compilation_is_deterministic_and_contains_gate_semantics or local_structure_authoring_create_edit_delete_persists_save_load or greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open or greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable or greybridge_safe_hub_enter_exit_round_trip"`
 - `python play.py --headless`
 - `python play.py --headless --runtime-profile experimental_world`
 - `python play.py --headless --runtime-profile soak_audit`
 - `python play.py`
 
 ## What changed in this commit
-- Added a bounded Greybridge local structure-overlay proof (`src/hexcrawler/sim/greybridge_layout.py`, `docs/LOCAL_STRUCTURE_OVERLAY.md`) where structure/opening/gate semantics are authored in overlay source data and deterministically compiled into runtime wall/blocked/opening sets.
-- Updated authoritative collision and rendering paths to consume overlay-derived data in Greybridge safe hub (`src/hexcrawler/sim/exploration.py`, `src/hexcrawler/sim/core.py`, `src/hexcrawler/cli/pygame_viewer.py`) while preserving current enter/exit + Watch Hall/Inn loop behavior.
-- Added anti-lock-in regression guidance and tests for deterministic overlay compilation, traversability, and save/load/hash stability (`docs/LEGENDARY_PROBLEMS.md`, `tests/test_reward_turn_in_loop_p5.py`).
+- Formalized a reusable local structure primitive contract (id/room/bounds/openings/tags) and deterministic compile outputs (wall segments + openings + derived blocked cells), with Greybridge data using that primitive (`src/hexcrawler/sim/greybridge_layout.py`).
+- Added a bounded in-game local authoring bridge through authoritative command/event mutation (`local_structure_author_intent`) for create/move-opening/remove/delete + save/load persistence (`src/hexcrawler/sim/exploration.py`, `src/hexcrawler/sim/world.py`, `src/hexcrawler/cli/pygame_viewer.py`).
+- Converted Greybridge local structure rendering/collision to consume authored structure primitives (not chunky blocked-cell fill as visual truth) and added focused regression tests/docs (`tests/test_reward_turn_in_loop_p5.py`, `docs/LOCAL_STRUCTURE_OVERLAY.md`, `docs/LEGENDARY_PROBLEMS.md`).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
