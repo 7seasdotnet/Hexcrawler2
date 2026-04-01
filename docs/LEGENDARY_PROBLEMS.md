@@ -66,3 +66,25 @@
   - Do **not** require overlap edge transitions as the only retrigger condition.
   - Do **not** clear encounter-control via viewer-side mutation.
   - Do **not** bypass cooldown/flee-ignore semantics with ad-hoc command shortcuts.
+
+## 4) Hex-Axial-Looking Facing Arrow Misrepresents Spatial Truth
+- **Problem name:** Render heading appears hex-snapped/axial-coupled.
+- **Symptom:** Direction wedge/arrow appears locked to hex axial directions, implying campaign motion is hex-step based or local presentation is topology-snapped when it should read as continuous/display-smoothed.
+- **Root cause:** Viewer-facing heading visualization derived directly from authoritative discrete facing token (`entity.facing`) with no campaign render-heading separation, so presentation inherits topology direction quantization.
+- **Related architecture invariant/contract:**
+  - Continuous campaign plane remains authoritative; hex is derived indexing/presentation substrate.
+  - Heading/facing/render-heading are distinct layers (campaign heading vs local tactical facing vs viewer display heading).
+  - Viewer/UI remains read-only; projection/presentation must not mutate simulation truth.
+- **Known-good fix path:**
+  1. Preserve authoritative tactical facing semantics in simulation/combat unchanged.
+  2. Add viewer-only render-heading layer that can use continuous/interpolated motion heading in campaign role.
+  3. Keep render-heading out of serialized/hash-covered simulation state.
+  4. Continue using authoritative facing where tactical/local semantics require it.
+- **Required regression tests:**
+  - Viewer render-heading helper returns continuous angle from campaign motion deltas.
+  - Viewer render-heading helper is disabled/non-authoritative for local role.
+  - Simulation hash/save-load remains unchanged by display-heading logic.
+- **Do not regress by doing X:**
+  - Do **not** rebind campaign display heading to axial direction tokens as the only source.
+  - Do **not** serialize viewer render-heading into world/simulation state.
+  - Do **not** patch perceived heading via simulation mutations from UI/render code.
