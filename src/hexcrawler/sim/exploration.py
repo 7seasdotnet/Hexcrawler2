@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import copy
 import math
+import json
 from typing import Any
 
 from hexcrawler.sim.core import EntityState, SimCommand, SimEvent, Simulation
 from hexcrawler.sim.campaign_danger import DEFAULT_DANGER_ENTITY_ID
-from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay
+from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay, normalize_structure_primitives
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.wounds import is_incapacitated_from_wounds, recover_one_light_wound
@@ -38,6 +39,8 @@ GREYBRIDGE_PATROL_RESPAWN_EVENT_TYPE = "greybridge_patrol_respawn"
 GREYBRIDGE_PATROL_SPAWN_X = -2.60
 GREYBRIDGE_PATROL_SPAWN_Y = 1.90
 GREYBRIDGE_SAFE_HUB_GATE_ID = "town_gate_exit"
+LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE = "local_structure_author_intent"
+LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE = "local_structure_author_outcome"
 
 
 class ExplorationExecutionModule(RuleModule):
@@ -61,6 +64,9 @@ class ExplorationExecutionModule(RuleModule):
 
         if command.command_type == LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE:
             self._handle_loot_local_proof_intent(sim, command=command, command_index=command_index)
+            return True
+        if command.command_type == LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE:
+            self._handle_local_structure_author_intent(sim, command=command, command_index=command_index)
             return True
 
         if command.command_type == TURN_IN_REWARD_TOKEN_INTENT_COMMAND_TYPE:
@@ -406,6 +412,7 @@ class ExplorationExecutionModule(RuleModule):
                     "blocked_cells": blocked_cells,
                 },
             )
+            safe_hub.structure_primitives = json.loads(json.dumps(compiled_overlay["structure_rows"]))
             safe_hub.anchors = {
                 "entry": AnchorRecord(
                     anchor_id="entry",
@@ -449,6 +456,8 @@ class ExplorationExecutionModule(RuleModule):
                 ),
             }
             sim.state.world.spaces[GREYBRIDGE_SAFE_HUB_SPACE_ID] = safe_hub
+        else:
+            self._refresh_local_structure_runtime_overlay(sim, safe_hub)
 
         state = sim.get_rules_state(self.name)
         active = state.get("safe_hub_active_by_entity", {})
@@ -469,6 +478,166 @@ class ExplorationExecutionModule(RuleModule):
             sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="entered_safe_hub", details={"site_id": site_id}
         )
 
+    def _refresh_local_structure_runtime_overlay(self, sim: Simulation, space: Any) -> None:
+        params = space.topology_params if isinstance(space.topology_params, dict) else {}
+        structures = space.structure_primitives if isinstance(getattr(space, "structure_primitives", []), list) else []
+        if not structures:
+            structures = list(compile_greybridge_overlay()["structure_rows"])
+        compiled = compile_greybridge_overlay(structures)
+        space.structure_primitives = json.loads(json.dumps(compiled["structure_rows"]))
+        params["blocked_cells"] = [{"x": int(x), "y": int(y)} for x, y in compiled["blocked_cells"]]
+        space.topology_params = params
+
+    def _handle_local_structure_author_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
+        action_uid = f"local_structure_author:{command.tick}:{command_index}"
+        entity = sim.state.entities.get(command.entity_id or "")
+        if entity is None:
+            self._schedule_local_structure_author_outcome(
+                sim, tick=command.tick, entity_id=command.entity_id, action_uid=action_uid, applied=False, reason="unknown_entity"
+            )
+            return
+        if entity.space_id != GREYBRIDGE_SAFE_HUB_SPACE_ID:
+            self._schedule_local_structure_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="greybridge_local_required"
+            )
+            return
+        safe_hub = sim.state.world.spaces.get(GREYBRIDGE_SAFE_HUB_SPACE_ID)
+        if safe_hub is None:
+            self._schedule_local_structure_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="safe_hub_missing"
+            )
+            return
+        params = safe_hub.topology_params if isinstance(safe_hub.topology_params, dict) else {}
+        structures = normalize_structure_primitives(safe_hub.structure_primitives)
+        mutable = [dict(row) for row in structures]
+        operation = str(command.params.get("operation", ""))
+        structure_id = str(command.params.get("structure_id", "")).strip()
+        details: dict[str, object] = {"operation": operation, "structure_id": structure_id}
+
+        if operation == "create_rect":
+            bounds = command.params.get("bounds", {})
+            if not isinstance(bounds, dict):
+                self._schedule_local_structure_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_bounds", details=details
+                )
+                return
+            if not structure_id:
+                self._schedule_local_structure_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="structure_id_required", details=details
+                )
+                return
+            try:
+                bounds_payload = {
+                    "x": int(bounds.get("x", 0)),
+                    "y": int(bounds.get("y", 0)),
+                    "width": int(bounds.get("width", 1)),
+                    "height": int(bounds.get("height", 1)),
+                }
+            except (TypeError, ValueError):
+                self._schedule_local_structure_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_bounds", details=details
+                )
+                return
+            replacement = {
+                "structure_id": structure_id,
+                "label": str(command.params.get("label", structure_id)),
+                "room_id": str(command.params.get("room_id", structure_id)),
+                "bounds": bounds_payload,
+                "openings": tuple(),
+                "tags": tuple(str(tag) for tag in command.params.get("tags", ()) if str(tag).strip()),
+            }
+            mutable = [row for row in mutable if str(row.get("structure_id", "")) != structure_id]
+            mutable.append(replacement)
+        elif operation in {"upsert_opening", "move_opening", "remove_opening", "delete_structure"}:
+            if not structure_id:
+                self._schedule_local_structure_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="structure_id_required", details=details
+                )
+                return
+            target = next((row for row in mutable if str(row.get("structure_id", "")) == structure_id), None)
+            if target is None:
+                self._schedule_local_structure_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="structure_not_found", details=details
+                )
+                return
+            if operation == "delete_structure":
+                mutable = [row for row in mutable if str(row.get("structure_id", "")) != structure_id]
+            else:
+                opening_id = str(command.params.get("opening_id", "")).strip()
+                openings = [dict(row) for row in target.get("openings", ()) if isinstance(row, dict)]
+                if not opening_id:
+                    self._schedule_local_structure_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="opening_id_required", details=details
+                    )
+                    return
+                details["opening_id"] = opening_id
+                if operation == "remove_opening":
+                    target["openings"] = tuple(row for row in openings if str(row.get("opening_id", "")) != opening_id)
+                else:
+                    cell = command.params.get("cell", {})
+                    if not isinstance(cell, dict):
+                        self._schedule_local_structure_author_outcome(
+                            sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_cell", details=details
+                        )
+                        return
+                    try:
+                        cell_payload = {"x": int(cell.get("x", 0)), "y": int(cell.get("y", 0))}
+                    except (TypeError, ValueError):
+                        self._schedule_local_structure_author_outcome(
+                            sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_cell", details=details
+                        )
+                        return
+                    replacement_opening = {
+                        "opening_id": opening_id,
+                        "kind": str(command.params.get("kind", "door")),
+                        "cell": cell_payload,
+                    }
+                    target["openings"] = tuple(
+                        [row for row in openings if str(row.get("opening_id", "")) != opening_id] + [replacement_opening]
+                    )
+        else:
+            self._schedule_local_structure_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="unsupported_operation", details=details
+            )
+            return
+
+        compiled = compile_greybridge_overlay(mutable)
+        safe_hub.structure_primitives = json.loads(json.dumps(compiled["structure_rows"]))
+        params["blocked_cells"] = [{"x": int(x), "y": int(y)} for x, y in compiled["blocked_cells"]]
+        safe_hub.topology_params = params
+        self._schedule_local_structure_author_outcome(
+            sim,
+            tick=command.tick,
+            entity_id=entity.entity_id,
+            action_uid=action_uid,
+            applied=True,
+            reason="applied",
+            details={**details, "structure_count": len(compiled["structure_rows"])},
+        )
+
+    def _schedule_local_structure_author_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        entity_id: str | None,
+        action_uid: str,
+        applied: bool,
+        reason: str,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": int(tick),
+                "entity_id": entity_id,
+                "action_uid": action_uid,
+                "applied": bool(applied),
+                "reason": str(reason),
+                "details": dict(details or {}),
+            },
+        )
     def _handle_exit_safe_hub_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
         action_uid = f"safe_hub_exit:{command.tick}:{command_index}"
         entity = sim.state.entities.get(command.entity_id or "")

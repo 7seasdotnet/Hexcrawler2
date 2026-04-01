@@ -1,13 +1,18 @@
-# LOCAL_STRUCTURE_OVERLAY — Greybridge Bounded Structure-Overlay Proof
+# LOCAL_STRUCTURE_OVERLAY — Greybridge Local Structure Authoring Bridge (Part 1)
 
 ## Scope and role boundary
 - Space role coverage in this pass: **local role only** (Greybridge safe-hub local space).
 - This pass is intentionally bounded to the active **Playable Core Loop Slice**.
 - This pass is **not** a combat redesign, full town/interior system, editor painting pass, nested-grid implementation, or isometric renderer pass.
 
-## A) Current temporary truth
-### What exists now (before this proof)
-Greybridge local hub building collision/readability was represented mostly as a coarse blocked-cell shell plus a hand-maintained set of door/opening cells. This shipped the loop quickly (enter hub, move around, turn-in/recover, exit).
+## A) Current pass scope (what this pass implemented)
+- Space role coverage in this pass: **local role only** (`safe_hub:greybridge`).
+- Added a schema/content-backed local structure primitive saved in local space topology params as:
+  - `structure_id`, `label`, `room_id`
+  - `bounds` (`x`, `y`, `width`, `height`)
+  - `openings[]` (`opening_id`, `kind`, `cell`)
+  - optional `tags[]`
+- Runtime blocked cells remain in use for movement/collision, but they are now **derived compile output** from structure primitives.
 
 ### Why it was acceptable as a playable-loop patch
 - Very low implementation risk and very fast to ship.
@@ -20,36 +25,33 @@ Greybridge local hub building collision/readability was represented mostly as a 
 - Weak path to future paint-based authoring, finer local detail, and projection experiments.
 - Risks hard-locking local authoring to chunky occupancy patches.
 
-## B) Recommended near-term building substrate
-### Recommended direction (chosen)
-Use a **movement lattice + structure overlay** contract:
-1. Keep the existing deterministic square-grid movement lattice for now.
-2. Author local structures in overlay source data containing:
-   - structure bounds,
-   - opening definitions,
-   - opening kind semantics (`door`, `opening`, `gate_portal`),
-   - room/building identifiers.
-3. Deterministically compile overlay data to runtime movement gating (`blocked_cells`) for current movement code.
-4. Render from overlay-derived wall/opening truth, not ad hoc viewer-only blocked-cell doodles.
+## B) Authoring primitive and compile contract
+Canonical authored truth for this bridge pass:
+1. `structure_primitives[]` on the Greybridge local-space topology payload.
+2. Deterministic compile step:
+   - input: normalized structure primitives,
+   - output: `blocked_cells`, `wall_cells`, `wall_segments`, `opening_rows`, `opening_cells`.
+3. Collision query uses derived `blocked_cells` only as runtime substrate.
+4. Local rendering draws structure boundaries from `wall_segments` + `opening_rows` (not from blocked-cell fill blobs).
 
 ### Why this is the right bounded step
 - Preserves current loop behavior/performance.
 - Makes the authored truth semantic and future-safe.
 - Avoids framework bloat while proving the anti-lock-in direction with one Greybridge area.
 
-## C) Authoring path (future editor compatibility)
-Future building painting should target **structure-overlay primitives**, not raw blocked-cell lists.
+## C) Minimal in-game authoring workflow (bridge proof)
+This pass adds a small in-game authoring seam through authoritative command/event mutation:
+- create one rectangular structure (`create_rect`)
+- add/move one opening (`move_opening` / `upsert_opening`)
+- remove one opening (`remove_opening`)
+- delete one structure (`delete_structure`)
+- persist through existing save/load path (hash-covered world topology payload)
 
-Exact primitive to paint/edit later:
-- `structure_id`
-- `room_id` / label
-- `bounds` (coarse for now)
-- `openings[]` where each opening has:
-  - `opening_id`
-  - `kind` (`door`, `opening`, `gate_portal`, later extensible)
-  - `cell`
-
-Current runtime can keep compiling this authored truth into blocked cells until finer collision layers are added.
+Viewer hotkeys for the bounded proof in Greybridge local hub:
+- `B` create/update demo rectangle at player cell.
+- `O` move demo opening to player cell.
+- `P` remove demo opening.
+- `Delete` remove demo structure.
 
 ## D) Zoom / nesting / projection path preservation
 This overlay keeps the path open by separating:
@@ -63,11 +65,10 @@ Because authored truth is no longer “just blocked cells,” later passes can:
 - test isometric projection,
 without rewriting the canonical meaning of buildings and openings.
 
-## E) Recommendation
-### Do now (this proof)
-- Keep loop-stable local movement lattice.
-- Make overlay source data the authored truth for one Greybridge proof area (including gate semantics).
-- Derive collision and rendering from that overlay.
+## E) Greybridge conversion proof in this pass
+- Gatehouse/Watch Hall/Inn shells are represented as structure primitives.
+- At least one meaningful area (Gatehouse) is now visibly rendered from authored wall/opening primitives (segments + portals), while collision remains derived and deterministic.
+- This is a **bounded bridge proof**, not full local-town/interior completion.
 
 ### Do **not** do now
 - No full town/interior system.

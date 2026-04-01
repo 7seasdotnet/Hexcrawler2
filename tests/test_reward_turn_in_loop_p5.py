@@ -24,6 +24,7 @@ from hexcrawler.sim.encounters import (
 from hexcrawler.sim.exploration import (
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
+    LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
     LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
     REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
     SAFE_HUB_OUTCOME_EVENT_TYPE,
@@ -603,6 +604,7 @@ def test_greybridge_overlay_compilation_is_deterministic_and_contains_gate_seman
     assert gate_cell == {"x": 1, "y": 5}
     assert (1, 5) not in compiled_a["blocked_cells"]
     assert (0, 5) in compiled_a["blocked_cells"]
+    assert compiled_a["wall_segments"]
 
 
 def test_greybridge_overlay_derived_collision_stable_across_save_load(tmp_path: Path) -> None:
@@ -685,6 +687,90 @@ def test_greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable() -
     assert int(scout.position_x) == 1 and int(scout.position_y) == 5
     _exit_safe_hub(sim)
     assert scout.space_id == CAMPAIGN_SPACE_ID
+
+
+def test_local_structure_authoring_create_edit_delete_persists_save_load(tmp_path: Path) -> None:
+    sim = _build_sim(seed=31)
+    _enter_safe_hub(sim)
+    scout = sim.state.entities["scout"]
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_rect",
+                "structure_id": "authoring_demo_shell",
+                "label": "Author Demo",
+                "room_id": "authoring_demo",
+                "bounds": {"x": 4, "y": 1, "width": 4, "height": 3},
+                "tags": ["authoring_demo"],
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    safe_hub = sim.state.world.spaces["safe_hub:greybridge"]
+    structures = safe_hub.structure_primitives
+    assert any(row.get("structure_id") == "authoring_demo_shell" for row in structures)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "move_opening",
+                "structure_id": "authoring_demo_shell",
+                "opening_id": "authoring_demo_opening",
+                "kind": "door",
+                "cell": {"x": 4, "y": 2},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    structures = sim.state.world.spaces["safe_hub:greybridge"].structure_primitives
+    opening_rows = [
+        row
+        for row in compile_greybridge_overlay(structures)["opening_rows"]
+        if row.get("structure_id") == "authoring_demo_shell"
+    ]
+    assert {"x": 4, "y": 2} in [row["cell"] for row in opening_rows]
+
+    scout.position_x, scout.position_y = square_grid_cell_to_world_xy(3, 2)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="set_target_position",
+            params={"x": 4.5, "y": 2.5},
+        )
+    )
+    sim.advance_ticks(30)
+    assert int(scout.position_x) == 4 and int(scout.position_y) == 2
+
+    save_path = tmp_path / "local_structure_authoring_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(str(save_path))
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded_space = loaded.state.world.spaces["safe_hub:greybridge"]
+    loaded_structures = loaded_space.structure_primitives
+    assert any(row.get("structure_id") == "authoring_demo_shell" for row in loaded_structures)
+
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "delete_structure", "structure_id": "authoring_demo_shell"},
+        )
+    )
+    loaded.advance_ticks(2)
+    loaded_structures = loaded.state.world.spaces["safe_hub:greybridge"].structure_primitives
+    assert not any(row.get("structure_id") == "authoring_demo_shell" for row in loaded_structures)
 
 
 def test_patrol_loop_recontacts_after_leave_return_and_replacement_without_wedge() -> None:

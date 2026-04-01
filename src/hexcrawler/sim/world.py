@@ -1057,6 +1057,7 @@ class SpaceState:
     doors: dict[str, DoorRecord] = field(default_factory=dict)
     anchors: dict[str, AnchorRecord] = field(default_factory=dict)
     interactables: dict[str, InteractableRecord] = field(default_factory=dict)
+    structure_primitives: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.role = str(self.role)
@@ -1064,6 +1065,12 @@ class SpaceState:
             raise ValueError(f"space.role must be one of {sorted(SPACE_ROLES)}")
         if self.topology_type == SQUARE_GRID_TOPOLOGY:
             self.topology_params = self._normalized_square_topology_params(self.topology_params)
+        if not isinstance(self.structure_primitives, list):
+            raise ValueError("space.structure_primitives must be a list")
+        for row in self.structure_primitives:
+            if not isinstance(row, dict):
+                raise ValueError("space.structure_primitives entries must be objects")
+            _validate_json_value(row, field_name="space.structure_primitives[]")
         self._normalize_space_records()
 
     def _normalize_space_records(self) -> None:
@@ -1175,6 +1182,8 @@ class SpaceState:
             "topology_params": dict(self.topology_params),
             "hexes": hex_rows,
         }
+        if self.structure_primitives:
+            payload["structure_primitives"] = [copy.deepcopy(row) for row in self.structure_primitives]
         if self.doors:
             payload["doors"] = {record_id: self.doors[record_id].to_dict() for record_id in sorted(self.doors)}
         if self.anchors:
@@ -1198,6 +1207,7 @@ class SpaceState:
             topology_type=str(data.get("topology_type", "custom")),
             role=role,
             topology_params=dict(data.get("topology_params", {})),
+            structure_primitives=[dict(row) for row in data.get("structure_primitives", [])] if isinstance(data.get("structure_primitives", []), list) else [],
         )
         for row in data.get("hexes", []):
             coord = HexCoord.from_dict(row["coord"])

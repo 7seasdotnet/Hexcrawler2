@@ -40,12 +40,14 @@ from hexcrawler.sim.campaign_danger import (
 )
 from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.greybridge_layout import GREYBRIDGE_SAFE_HUB_SPACE_ID, GREYBRIDGE_WALL_CELLS, compile_greybridge_overlay
+from hexcrawler.sim.greybridge_layout import GREYBRIDGE_SAFE_HUB_SPACE_ID, compile_greybridge_overlay
 from hexcrawler.sim.exploration import (
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
     LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
     EXPLORATION_OUTCOME_EVENT_TYPE,
+    LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+    LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE,
     RECOVERY_OUTCOME_EVENT_TYPE,
     REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
     REWARD_TOKEN_ITEM_ID,
@@ -400,6 +402,18 @@ class SimulationController:
                     "target": {"kind": target_kind, "id": target_id},
                     "duration_ticks": duration_ticks,
                 },
+            )
+        )
+
+    def local_structure_author_intent(self, operation: str, **params: object) -> None:
+        payload = {"operation": operation}
+        payload.update(params)
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+                params=payload,
             )
         )
 
@@ -2136,7 +2150,8 @@ def _draw_greybridge_hub_bounds(
     if getattr(active_space, "space_id", "") != GREYBRIDGE_SAFE_HUB_SPACE_ID:
         return
     cell_size = HEX_SIZE * zoom_scale
-    compiled_overlay = compile_greybridge_overlay()
+    structure_primitives = getattr(active_space, "structure_primitives", []) if active_space is not None else []
+    compiled_overlay = compile_greybridge_overlay(structure_primitives)
     opening_by_cell: dict[tuple[int, int], dict[str, object]] = {}
     for row in compiled_overlay["opening_rows"]:
         if not isinstance(row, dict):
@@ -2153,12 +2168,16 @@ def _draw_greybridge_hub_bounds(
     def to_px(x: float, y: float) -> tuple[int, int]:
         return (int(center[0] + x * cell_size), int(center[1] + y * cell_size))
 
-    for cell_x, cell_y in GREYBRIDGE_WALL_CELLS:
-        left, top = to_px(float(cell_x), float(cell_y))
-        right, bottom = to_px(float(cell_x + 1), float(cell_y + 1))
-        rect = pygame.Rect(min(left, right), min(top, bottom), abs(right - left), abs(bottom - top))
-        pygame.draw.rect(screen, (62, 66, 80), rect)
-        pygame.draw.rect(screen, (126, 132, 152), rect, 1)
+    for segment in compiled_overlay["wall_segments"]:
+        if not isinstance(segment, dict):
+            continue
+        x0 = float(segment.get("x0", 0))
+        y0 = float(segment.get("y0", 0))
+        x1 = float(segment.get("x1", 0))
+        y1 = float(segment.get("y1", 0))
+        p0 = to_px(x0, y0)
+        p1 = to_px(x1, y1)
+        pygame.draw.line(screen, (152, 164, 186), p0, p1, max(2, int(2 * zoom_scale)))
 
     for door_x, door_y in compiled_overlay["opening_cells"]:
         opening = opening_by_cell.get((int(door_x), int(door_y)), {})
@@ -4668,6 +4687,45 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_q:
                 controller.exit_safe_hub_intent()
                 status_message = "exit Greybridge hub intent queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_b:
+                player = sim.state.entities.get(PLAYER_ID)
+                if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
+                    x, y = int(player.position_x), int(player.position_y)
+                    controller.local_structure_author_intent(
+                        "create_rect",
+                        structure_id="authoring_demo_shell",
+                        label="Author Demo",
+                        room_id="authoring_demo",
+                        bounds={"x": x, "y": y, "width": 4, "height": 3},
+                        tags=["authoring_demo"],
+                    )
+                    status_message = "authoring: create demo structure queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_o:
+                player = sim.state.entities.get(PLAYER_ID)
+                if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
+                    x, y = int(player.position_x), int(player.position_y)
+                    controller.local_structure_author_intent(
+                        "move_opening",
+                        structure_id="authoring_demo_shell",
+                        opening_id="authoring_demo_opening",
+                        kind="door",
+                        cell={"x": x, "y": y},
+                    )
+                    status_message = "authoring: move demo opening queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_p:
+                player = sim.state.entities.get(PLAYER_ID)
+                if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
+                    controller.local_structure_author_intent(
+                        "remove_opening",
+                        structure_id="authoring_demo_shell",
+                        opening_id="authoring_demo_opening",
+                    )
+                    status_message = "authoring: remove demo opening queued"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_DELETE:
+                player = sim.state.entities.get(PLAYER_ID)
+                if player is not None and player.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID:
+                    controller.local_structure_author_intent("delete_structure", structure_id="authoring_demo_shell")
+                    status_message = "authoring: delete demo structure queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_SPACE:
                 player = sim.state.entities.get(PLAYER_ID)
                 selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
