@@ -211,7 +211,7 @@ ENTITY_MARKER_COLORS: dict[str, tuple[int, int, int]] = {
 class ContextMenuItem:
     label: str
     action: str
-    payload: str | None = None
+    payload: object | None = None
 
 
 @dataclass(frozen=True)
@@ -232,6 +232,13 @@ class ContextMenuState:
 class HomePanelState:
     visible: bool = False
     site_id: str | None = None
+
+
+@dataclass
+class CampaignAuthoringMoveState:
+    kind: str
+    object_id: str
+    label: str
 
 
 @dataclass
@@ -2876,6 +2883,95 @@ def _spatial_context_actions(sim: Simulation, *, player: EntityState) -> list[Co
     return actions
 
 
+def _campaign_authored_object_at_world(
+    sim: Simulation,
+    *,
+    world_x: float,
+    world_y: float,
+    max_distance_world: float = 0.60,
+) -> dict[str, str] | None:
+    best: tuple[float, dict[str, str]] | None = None
+    for site in sim.state.world.sites.values():
+        if site.site_type not in {"town", "dungeon_entrance"}:
+            continue
+        anchor = _site_campaign_anchor_world(site)
+        if anchor is None:
+            continue
+        distance = math.dist((world_x, world_y), (anchor[0], anchor[1]))
+        if distance > max_distance_world:
+            continue
+        payload = {
+            "kind": "site",
+            "id": site.site_id,
+            "label": site.name if site.name else site.site_id,
+        }
+        if best is None or (distance, payload["id"]) < (best[0], best[1]["id"]):
+            best = (distance, payload)
+    for patrol in sim.state.world.campaign_patrols.values():
+        spawn = patrol.spawn_position if isinstance(patrol.spawn_position, dict) else {}
+        try:
+            spawn_x = float(spawn["x"])
+            spawn_y = float(spawn["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        distance = math.dist((world_x, world_y), (spawn_x, spawn_y))
+        if distance > max_distance_world:
+            continue
+        payload = {
+            "kind": "patrol",
+            "id": patrol.patrol_id,
+            "label": patrol.label if patrol.label else patrol.patrol_id,
+        }
+        if best is None or (distance, payload["id"]) < (best[0], best[1]["id"]):
+            best = (distance, payload)
+    return best[1] if best is not None else None
+
+
+def _campaign_authoring_placement_items(world_x: float, world_y: float) -> list[ContextMenuItem]:
+    coord = world_xy_to_axial(world_x, world_y)
+    return [
+        ContextMenuItem(label="Campaign Authoring...", action="noop"),
+        ContextMenuItem(
+            label="Place Town Here",
+            action="campaign_author_place",
+            payload={
+                "kind": "town",
+                "site_id": f"authoring_town_{coord.q}_{coord.r}",
+                "label": "Authored Town",
+                "position": {"x": float(world_x), "y": float(world_y)},
+            },
+        ),
+        ContextMenuItem(
+            label="Place Dungeon Entrance Here",
+            action="campaign_author_place",
+            payload={
+                "kind": "dungeon_entrance",
+                "site_id": f"authoring_dungeon_{coord.q}_{coord.r}",
+                "label": "Authored Dungeon Entrance",
+                "position": {"x": float(world_x), "y": float(world_y)},
+            },
+        ),
+        ContextMenuItem(
+            label="Place Patrol Here",
+            action="campaign_author_place",
+            payload={
+                "kind": "patrol",
+                "patrol_id": f"patrol:authoring_{coord.q}_{coord.r}",
+                "label": "Authored Patrol",
+                "position": {"x": float(world_x), "y": float(world_y)},
+            },
+        ),
+    ]
+
+
+def _campaign_authoring_edit_items(target: dict[str, str]) -> list[ContextMenuItem]:
+    return [
+        ContextMenuItem(label=f"Campaign Authoring: {target['label']}", action="noop"),
+        ContextMenuItem(label="Move", action="campaign_author_move", payload=target),
+        ContextMenuItem(label="Delete", action="campaign_author_delete", payload=target),
+    ]
+
+
 def _draw_world_affordance_prompts(
     screen: pygame.Surface,
     sim: Simulation,
@@ -4405,7 +4501,7 @@ def run_pygame_viewer(
         del recent_saves[RECENT_SAVES_LIMIT:]
 
     def load_simulation_from_path(path_value: str) -> bool:
-        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, last_sent_move_vector, selected_site_id
+        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, campaign_move_state, last_sent_move_vector, selected_site_id
         try:
             sim = runtime_controller.load_simulation(path_value)
             previous_snapshot = extract_render_snapshot(sim)
@@ -4414,6 +4510,7 @@ def run_pygame_viewer(
             context_menu = None
             push_recent_save(path_value)
             status_message = f"loaded {path_value}"
+            campaign_move_state = None
             last_sent_move_vector = (0.0, 0.0)
             selected_site_id = None
             return True
@@ -4508,6 +4605,24 @@ def run_pygame_viewer(
                 else:
                     target_hex = world_xy_to_axial(world_x, world_y)
                     if sim.state.world.get_hex_record(target_hex) is not None:
+                        if campaign_move_state is not None:
+                            items.append(
+                                ContextMenuItem(
+                                    label=f"Place moved {campaign_move_state.label} here",
+                                    action="campaign_author_move_commit",
+                                    payload={
+                                        "kind": campaign_move_state.kind,
+                                        "id": campaign_move_state.object_id,
+                                        "position": {"x": float(world_x), "y": float(world_y)},
+                                    },
+                                )
+                            )
+                            items.append(ContextMenuItem(label="Cancel move (Esc)", action="campaign_author_move_cancel"))
+                        authored_target = _campaign_authored_object_at_world(sim, world_x=world_x, world_y=world_y)
+                        if authored_target is not None:
+                            items.extend(_campaign_authoring_edit_items(authored_target))
+                        else:
+                            items.extend(_campaign_authoring_placement_items(world_x, world_y))
                         items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
                         hex_sites = sim.state.world.get_sites_at_location({"space_id": "overworld", "coord": target_hex.to_dict()})
                         if hex_sites:
@@ -4590,6 +4705,7 @@ def run_pygame_viewer(
     push_recent_save(save_path)
     push_recent_save(load_save)
     status_message: str | None = None
+    campaign_move_state: CampaignAuthoringMoveState | None = None
     last_sent_move_vector = (0.0, 0.0)
     selected_site_id: str | None = None
     visual_facing_by_entity: dict[str, float] = {}
@@ -4612,6 +4728,9 @@ def run_pygame_viewer(
                 if home_panel_state.visible:
                     home_panel_state.visible = False
                     status_message = "home panel closed"
+                elif campaign_move_state is not None:
+                    campaign_move_state = None
+                    status_message = "campaign authoring: move canceled"
                 else:
                     running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F2:
@@ -4937,6 +5056,77 @@ def run_pygame_viewer(
                         if item.action == "move_here" and item.payload is not None:
                             x_str, y_str = item.payload.split(",", 1)
                             controller.set_target_world(float(x_str), float(y_str))
+                        elif item.action == "campaign_author_place" and isinstance(item.payload, dict):
+                            kind = str(item.payload.get("kind", ""))
+                            position = item.payload.get("position", {})
+                            if kind == "town":
+                                controller.campaign_author_intent(
+                                    "create_or_update_site",
+                                    site_id=str(item.payload.get("site_id", "")),
+                                    site_kind="town",
+                                    label=str(item.payload.get("label", "Authored Town")),
+                                    position=position,
+                                )
+                                status_message = "campaign authoring: town placement queued"
+                            elif kind == "dungeon_entrance":
+                                controller.campaign_author_intent(
+                                    "create_or_update_site",
+                                    site_id=str(item.payload.get("site_id", "")),
+                                    site_kind="dungeon_entrance",
+                                    label=str(item.payload.get("label", "Authored Dungeon Entrance")),
+                                    position=position,
+                                )
+                                status_message = "campaign authoring: dungeon entrance placement queued"
+                            elif kind == "patrol":
+                                px = float(position.get("x", 0.0)) if isinstance(position, dict) else 0.0
+                                py = float(position.get("y", 0.0)) if isinstance(position, dict) else 0.0
+                                controller.campaign_author_intent(
+                                    "create_or_update_patrol",
+                                    patrol_id=str(item.payload.get("patrol_id", "")),
+                                    template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+                                    label=str(item.payload.get("label", "Authored Patrol")),
+                                    position={"x": px, "y": py},
+                                    route_anchors=[{"x": px + 1.0, "y": py}],
+                                    tags=["authoring"],
+                                )
+                                status_message = "campaign authoring: patrol placement queued"
+                        elif item.action == "campaign_author_move" and isinstance(item.payload, dict):
+                            target_kind = str(item.payload.get("kind", ""))
+                            target_id = str(item.payload.get("id", ""))
+                            target_label = str(item.payload.get("label", target_id))
+                            if target_kind in {"site", "patrol"} and target_id:
+                                campaign_move_state = CampaignAuthoringMoveState(
+                                    kind=target_kind,
+                                    object_id=target_id,
+                                    label=target_label,
+                                )
+                                status_message = f"campaign authoring: move pending for {target_label}; right-click destination and choose place"
+                        elif item.action == "campaign_author_move_commit" and isinstance(item.payload, dict):
+                            target_kind = str(item.payload.get("kind", ""))
+                            target_id = str(item.payload.get("id", ""))
+                            position = item.payload.get("position", {})
+                            if target_kind == "site":
+                                controller.campaign_author_intent("move_site", site_id=target_id, position=position)
+                                status_message = f"campaign authoring: moved site {target_id}"
+                                campaign_move_state = None
+                            elif target_kind == "patrol":
+                                controller.campaign_author_intent("move_patrol_spawn", patrol_id=target_id, position=position)
+                                status_message = f"campaign authoring: moved patrol {target_id}"
+                                campaign_move_state = None
+                        elif item.action == "campaign_author_move_cancel":
+                            campaign_move_state = None
+                            status_message = "campaign authoring: move canceled"
+                        elif item.action == "campaign_author_delete" and isinstance(item.payload, dict):
+                            target_kind = str(item.payload.get("kind", ""))
+                            target_id = str(item.payload.get("id", ""))
+                            if target_kind == "site" and target_id:
+                                controller.campaign_author_intent("delete_site", site_id=target_id)
+                                status_message = f"campaign authoring: delete site queued ({target_id})"
+                            elif target_kind == "patrol" and target_id:
+                                controller.campaign_author_intent("delete_patrol", patrol_id=target_id)
+                                status_message = f"campaign authoring: delete patrol queued ({target_id})"
+                            if campaign_move_state is not None and campaign_move_state.object_id == target_id:
+                                campaign_move_state = None
                         elif item.action == "select" and item.payload is not None:
                             controller.set_selected_entity(item.payload)
                         elif item.action == "clear_selection":
@@ -5119,6 +5309,19 @@ def run_pygame_viewer(
             current_angle = visual_facing_by_entity.get(entity_id, fallback_display_heading)
             visual_facing_by_entity[entity_id] = _swing_facing_angle(current_angle, target_angle, max_step=max_facing_step)
 
+        frame_status_message = status_message
+        if player is not None and player.space_id == "overworld":
+            if campaign_move_state is not None:
+                frame_status_message = (
+                    f"campaign authoring: moving {campaign_move_state.label}; "
+                    "right-click destination then choose place moved object (Esc cancels)"
+                )
+            elif not frame_status_message:
+                frame_status_message = (
+                    "campaign authoring: right-click empty space to place town/dungeon/patrol; "
+                    "right-click site/patrol to move/delete (hotkeys are debug fallback)"
+                )
+
         screen.fill((17, 18, 25))
         inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons = _draw_frame_layers(
             screen=screen,
@@ -5129,7 +5332,7 @@ def run_pygame_viewer(
             marker_font=marker_font,
             font=font,
             debug_font=debug_font,
-            status_message=status_message,
+            status_message=frame_status_message,
             hover_message=hover_message,
             runtime_state=runtime_state,
             follow_state=follow_state,

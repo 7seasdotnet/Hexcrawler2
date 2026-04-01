@@ -920,6 +920,72 @@ def test_campaign_patrol_authoring_create_move_delete_persists_save_load(tmp_pat
     assert "patrol:authoring_demo" not in loaded.state.world.campaign_patrols
 
 
+def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_path: Path) -> None:
+    sim = _build_sim(seed=47)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = 3.0
+    scout.position_y = -1.0
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_site",
+                "site_id": "authoring_dungeon_site",
+                "site_kind": "dungeon_entrance",
+                "label": "Authoring Dungeon Entrance",
+                "position": {"x": 3.0, "y": -1.0},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    dungeon = sim.state.world.sites.get("authoring_dungeon_site")
+    assert dungeon is not None
+    assert dungeon.site_type == "dungeon_entrance"
+    assert dungeon.location.get("campaign_anchor") == {"x": 3.0, "y": -1.0}
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "move_site",
+                "site_id": "authoring_dungeon_site",
+                "position": {"x": 2.25, "y": -2.5},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    moved = sim.state.world.sites["authoring_dungeon_site"]
+    assert moved.location.get("campaign_anchor") == {"x": 2.25, "y": -2.5}
+
+    before_hash = simulation_hash(sim)
+    save_path = tmp_path / "campaign_dungeon_authoring_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(str(save_path))
+    assert simulation_hash(loaded) == before_hash
+    assert loaded.state.world.sites["authoring_dungeon_site"].location.get("campaign_anchor") == {"x": 2.25, "y": -2.5}
+
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "delete_site", "site_id": "authoring_dungeon_site"},
+        )
+    )
+    loaded.advance_ticks(2)
+    assert "authoring_dungeon_site" not in loaded.state.world.sites
+
+
 def test_patrol_loop_recontacts_after_leave_return_and_replacement_without_wedge() -> None:
     sim = _build_sim(seed=30, with_campaign_danger=True)
     scout = sim.state.entities["scout"]

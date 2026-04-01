@@ -28,7 +28,7 @@ Persistent `world.campaign_patrols[patrol_id]` records now hold authored patrol 
 
 Runtime patrol entities are still compiled/instantiated from these primitives for current playable behavior.
 
-## Minimal in-game workflow (bounded proof)
+## Canonical in-game workflow (bounded proof)
 Authoring commands are routed only through authoritative command/event seams using `campaign_author_intent`:
 - create/update town site
 - create/update dungeon entrance site
@@ -39,12 +39,20 @@ Authoring commands are routed only through authoritative command/event seams usi
 - move patrol route anchor
 - delete patrol
 
-Viewer hotkeys provide a minimal proof workflow (non-polished):
-- `B` (campaign): create/update demo town at player anchor
-- `O` (campaign): create/update demo dungeon entrance at player anchor
-- `P` (campaign): create/update demo patrol at player anchor
-- `M` (campaign): move demo patrol anchor 0 to player anchor
-- `Delete` (campaign): delete demo authored town + dungeon + patrol
+Campaign authoring UX is now **right-click/context-menu first** in campaign space:
+- Right-click empty campaign space:
+  - `Place Town Here`
+  - `Place Dungeon Entrance Here`
+  - `Place Patrol Here`
+- Right-click authored campaign object (site/patrol):
+  - `Move`
+  - `Delete`
+- Move is bounded:
+  - choose `Move`,
+  - next right-click destination commits move through authoritative intent,
+  - `Esc` cancels pending move safely.
+
+Hotkeys remain available only as hidden/debug fallback and are **not** canonical UX.
 
 ## Why this is the minimal next step
 - Removes campaign site/patrol iteration bottleneck without attempting full editor architecture.

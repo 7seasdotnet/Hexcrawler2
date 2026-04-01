@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Build the next bounded authoring pass on top of the campaign authoring bridge: dungeon population/spawner authoring (still command/event-authoritative and save/load deterministic).
+- **Next action:** Run a bounded follow-up polish pass for campaign authoring UX (menu readability + manual smoke validation), then proceed to dungeon population/spawner authoring on the same authoritative seam.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -114,9 +114,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added a formal campaign patrol authoring primitive (`world.campaign_patrols`) with deterministic schema validation and canonical save/load/hash coverage, while keeping campaign site authored truth in `world.sites` with explicit campaign anchors (`src/hexcrawler/sim/world.py`).
-- Added a bounded in-game campaign authoring bridge through authoritative command/event mutation (`campaign_author_intent`) for create/move/delete town+dungeon sites and create/move/delete patrol spawn/route anchors (`src/hexcrawler/sim/exploration.py`, `src/hexcrawler/cli/pygame_viewer.py`).
-- Wired core_playable patrol bootstrap/respawn to compile from authored patrol primitives and added focused authoring persistence/regression tests + memo (`src/hexcrawler/cli/play.py`, `content/examples/viewer_map.json`, `tests/test_reward_turn_in_loop_p5.py`, `docs/CAMPAIGN_AUTHORING_BRIDGE.md`).
+- Campaign authoring in campaign space is now right-click/context-menu first (empty-space place town/dungeon/patrol + existing site/patrol move/delete) while still emitting only authoritative `campaign_author_intent` mutations (`src/hexcrawler/cli/pygame_viewer.py`).
+- Added bounded move-mode UX with explicit status prompts and safe `Esc` cancellation; hotkeys remain debug fallback only (not canonical workflow) (`src/hexcrawler/cli/pygame_viewer.py`, `docs/CAMPAIGN_AUTHORING_BRIDGE.md`).
+- Added targeted regression coverage for right-click authoring menu availability plus dungeon create/move/delete save-load/hash stability, and documented the hotkey-hidden-authoring anti-pattern (`tests/test_pygame_viewer_cli.py`, `tests/test_reward_turn_in_loop_p5.py`, `docs/LEGENDARY_PROBLEMS.md`).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

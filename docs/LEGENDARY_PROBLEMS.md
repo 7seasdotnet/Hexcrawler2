@@ -117,3 +117,27 @@
   - Do **not** add new Greybridge building logic as raw blocked-cell-only truth.
   - Do **not** render fake wall/opening semantics in viewer that are not backed by authoritative overlay-derived collision truth.
   - Do **not** broaden this fix into a full editor/town/interior framework in the same bounded pass.
+
+## 6) Authoring Exists but Is Effectively Unusable Behind Hotkeys
+- **Problem name:** Campaign authoring hidden behind hotkeys instead of discoverable right-click spatial actions.
+- **Symptom:** Users cannot discover how to place towns, dungeon entrances, or patrols during normal play; feature appears missing unless they already know debug keys.
+- **Root cause:** Authoritative backend intents existed, but primary interaction path was key-driven demo actions (`B/O/P/M/Delete`) with no contextual right-click placement/edit affordance.
+- **Relevant architecture / UX invariant:**
+  - Viewer remains read-only; it may only emit authoritative command/event intents.
+  - Campaign authoring workflow must be campaign-role spatial/contextual, not memorized hotkey trivia.
+  - Existing deterministic authoring seam (`campaign_author_intent`) should be reused, not bypassed.
+- **Known-good fix path:**
+  1. Make right-click context menu the canonical campaign authoring surface.
+  2. On empty campaign space, expose placement actions (town, dungeon entrance, patrol).
+  3. On existing authored site/patrol, expose edit actions (move, delete).
+  4. Keep move bounded and obvious: pick Move, choose destination with next right-click, Esc cancels.
+  5. Keep hotkeys as debug-only fallback and avoid advertising them as primary UX.
+- **Required regression tests:**
+  - Right-click empty campaign space exposes place-town/place-dungeon/place-patrol actions.
+  - Right-click existing authored site/patrol exposes move/delete actions.
+  - Town/dungeon/patrol create-move-delete persists save/load and preserves hash stability.
+  - Core `core_playable` launch loop still runs after authoring UX changes.
+- **Do not regress by doing X:**
+  - Do **not** reintroduce hotkeys as the only or advertised authoring path.
+  - Do **not** mutate simulation state directly from viewer widgets.
+  - Do **not** rebuild authoring backend seams when existing intents already satisfy mutation needs.
