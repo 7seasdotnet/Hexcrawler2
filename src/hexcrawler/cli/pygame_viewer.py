@@ -2242,6 +2242,7 @@ def _draw_frame_layers(
     debug_panel_cache: DebugPanelRenderCache,
     home_panel_state: HomePanelState,
     context_menu: ContextMenuState | None,
+    campaign_path_edit_state: CampaignAuthoringPathEditState | None,
     previous_snapshot: RenderSnapshot,
     current_snapshot: RenderSnapshot,
     current_space_id: str,
@@ -2252,6 +2253,19 @@ def _draw_frame_layers(
     # 1) map_base, 2) site_icons, 3) site_labels, 4) actors/moving groups,
     # 5) overlays/selection, 6) HUD/panels/modals.
     _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale)
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is not None:
+        active_space = sim.state.world.spaces.get(player.space_id)
+        if active_space is not None and str(getattr(active_space, "role", "")) == CAMPAIGN_SPACE_ROLE:
+            _draw_campaign_patrol_routes(
+                screen,
+                sim,
+                world_center=world_center,
+                world_zoom_scale=world_zoom_scale,
+                world_rect=viewport_rect,
+                font=marker_font,
+                campaign_path_edit_state=campaign_path_edit_state,
+            )
     pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
 
     for entity_id in sorted(sim.state.entities):
@@ -3015,6 +3029,66 @@ def _campaign_patrol_path_needed_count(sim: Simulation) -> int:
         if len(patrol.route_anchors) < 1:
             needed += 1
     return needed
+
+
+def _campaign_patrol_route_points(patrol: CampaignPatrolRecord) -> list[tuple[float, float]]:
+    spawn = patrol.spawn_position if isinstance(patrol.spawn_position, dict) else {}
+    try:
+        spawn_x = float(spawn["x"])
+        spawn_y = float(spawn["y"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    points: list[tuple[float, float]] = [(spawn_x, spawn_y)]
+    for anchor in patrol.route_anchors:
+        if not isinstance(anchor, dict):
+            continue
+        try:
+            points.append((float(anchor["x"]), float(anchor["y"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return points
+
+
+def _draw_campaign_patrol_routes(
+    screen: pygame.Surface,
+    sim: Simulation,
+    *,
+    world_center: tuple[float, float],
+    world_zoom_scale: float,
+    world_rect: pygame.Rect,
+    font: pygame.font.Font,
+    campaign_path_edit_state: CampaignAuthoringPathEditState | None,
+) -> None:
+    old_clip = screen.get_clip()
+    screen.set_clip(world_rect)
+    for patrol_id in sorted(sim.state.world.campaign_patrols):
+        patrol = sim.state.world.campaign_patrols[patrol_id]
+        route_points = _campaign_patrol_route_points(patrol)
+        if not route_points:
+            continue
+        highlighted = campaign_path_edit_state is not None and campaign_path_edit_state.patrol_id == patrol_id
+        spawn_px, spawn_py = _world_to_pixel(route_points[0][0], route_points[0][1], world_center, world_zoom_scale)
+        spawn_color = (196, 252, 214) if highlighted else (156, 202, 180)
+        pygame.draw.circle(screen, spawn_color, (int(spawn_px), int(spawn_py)), 6, 2)
+        spawn_label = font.render("0", True, spawn_color)
+        screen.blit(spawn_label, (int(spawn_px) + 7, int(spawn_py) - 9))
+        if len(route_points) <= 1:
+            continue
+        line_color = (106, 220, 170) if highlighted else (86, 162, 132)
+        pixel_points = [_world_to_pixel(x, y, world_center, world_zoom_scale) for x, y in route_points]
+        pixel_points.append(pixel_points[0])
+        pygame.draw.lines(screen, line_color, False, [(int(x), int(y)) for x, y in pixel_points], 2)
+        close_from = pixel_points[-2]
+        close_to = pixel_points[-1]
+        close_mid = ((close_from[0] + close_to[0]) * 0.5, (close_from[1] + close_to[1]) * 0.5)
+        loop_label = font.render("↺", True, line_color)
+        screen.blit(loop_label, (int(close_mid[0]) + 4, int(close_mid[1]) - 10))
+        for index, point in enumerate(route_points[1:], start=1):
+            px, py = _world_to_pixel(point[0], point[1], world_center, world_zoom_scale)
+            pygame.draw.circle(screen, line_color, (int(px), int(py)), 4)
+            index_label = font.render(str(index), True, line_color)
+            screen.blit(index_label, (int(px) + 6, int(py) - 8))
+    screen.set_clip(old_clip)
 
 
 def _draw_world_affordance_prompts(
@@ -5253,7 +5327,7 @@ def run_pygame_viewer(
                                 campaign_path_edit_state = CampaignAuthoringPathEditState(patrol_id=patrol_id, label=patrol_label)
                                 status_message = (
                                     f"campaign authoring: patrol placement queued ({patrol_label}); "
-                                    "path needed—right-click to add anchor(s), right-click anchor to move/delete, Esc to finish"
+                                    "Add at least 1 route anchor to start loop. Right-click to add anchor(s), right-click anchor to move/delete, Esc to finish"
                                 )
                         elif item.action == "campaign_author_move" and isinstance(item.payload, dict):
                             target_kind = str(item.payload.get("kind", ""))
@@ -5541,7 +5615,10 @@ def run_pygame_viewer(
                 path_needed_suffix = ""
                 if path_needed_count > 0:
                     noun = "patrol" if path_needed_count == 1 else "patrols"
-                    path_needed_suffix = f" | {path_needed_count} {noun} path needed (add at least 1 route anchor)"
+                    path_needed_suffix = (
+                        f" | {path_needed_count} {noun} path needed "
+                        "(Add at least 1 route anchor to start loop.)"
+                    )
                 frame_status_message = (
                     "campaign authoring: right-click empty space to place town/dungeon/patrol; "
                     "right-click site/patrol to move/delete (hotkeys are debug fallback)"
@@ -5572,6 +5649,7 @@ def run_pygame_viewer(
             debug_panel_cache=debug_panel_cache,
             home_panel_state=home_panel_state,
             context_menu=context_menu,
+            campaign_path_edit_state=campaign_path_edit_state,
             previous_snapshot=previous_snapshot,
             current_snapshot=current_snapshot,
             current_space_id=current_space_id,

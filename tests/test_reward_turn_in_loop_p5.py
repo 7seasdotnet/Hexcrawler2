@@ -980,6 +980,153 @@ def test_campaign_patrol_route_following_moves_and_persists_save_load_hash(tmp_p
     assert isinstance(loaded_patrol.position_x, float)
 
 
+def test_campaign_patrol_zero_added_anchors_stays_idle_with_no_target() -> None:
+    sim = _build_sim(seed=181)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = -2.0
+    scout.position_y = 0.0
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_patrol",
+                "patrol_id": "patrol:idle_zero_anchor",
+                "template_id": "campaign_danger_patrol",
+                "position": {"x": -2.0, "y": 0.0},
+                "route_anchors": [],
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    patrol = sim.state.entities["patrol:idle_zero_anchor"]
+    start = (patrol.position_x, patrol.position_y)
+    assert patrol.target_position is None
+    sim.advance_ticks(25)
+    patrol = sim.state.entities["patrol:idle_zero_anchor"]
+    assert patrol.target_position is None
+    assert (patrol.position_x, patrol.position_y) == pytest.approx(start)
+
+
+def test_campaign_patrol_one_anchor_loops_between_spawn_and_anchor() -> None:
+    sim = _build_sim(seed=182)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_patrol",
+                "patrol_id": "patrol:loop_one_anchor",
+                "template_id": "campaign_danger_patrol",
+                "position": {"x": -1.0, "y": 0.5},
+                "route_anchors": [{"x": -0.5, "y": 0.5}],
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    patrol = sim.state.entities["patrol:loop_one_anchor"]
+    patrol.position_x = -0.5
+    patrol.position_y = 0.5
+    sim.advance_ticks(1)
+    route_index_by_id = sim.get_rules_state("exploration").get("patrol_route_index_by_id", {})
+    assert isinstance(route_index_by_id, dict)
+    assert route_index_by_id.get("patrol:loop_one_anchor") == 0
+    patrol.position_x = -1.0
+    patrol.position_y = 0.5
+    sim.advance_ticks(1)
+    route_index_by_id = sim.get_rules_state("exploration").get("patrol_route_index_by_id", {})
+    assert isinstance(route_index_by_id, dict)
+    assert route_index_by_id.get("patrol:loop_one_anchor") == 1
+
+
+def test_campaign_patrol_multi_anchor_route_wraps_back_to_spawn() -> None:
+    sim = _build_sim(seed=183)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_patrol",
+                "patrol_id": "patrol:loop_multi_anchor",
+                "template_id": "campaign_danger_patrol",
+                "position": {"x": -2.0, "y": 0.0},
+                "route_anchors": [{"x": -1.0, "y": 0.0}, {"x": -1.0, "y": 1.0}],
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    patrol = sim.state.entities["patrol:loop_multi_anchor"]
+    # force "reached anchor #1" -> next should be anchor #2 (index=2)
+    patrol.position_x = -1.0
+    patrol.position_y = 0.0
+    sim.advance_ticks(1)
+    route_index_by_id = sim.get_rules_state("exploration").get("patrol_route_index_by_id", {})
+    assert isinstance(route_index_by_id, dict)
+    assert route_index_by_id.get("patrol:loop_multi_anchor") == 2
+    # force "reached anchor #2" -> next should wrap to spawn (index=0)
+    patrol.position_x = -1.0
+    patrol.position_y = 1.0
+    sim.advance_ticks(1)
+    route_index_by_id = sim.get_rules_state("exploration").get("patrol_route_index_by_id", {})
+    assert isinstance(route_index_by_id, dict)
+    assert route_index_by_id.get("patrol:loop_multi_anchor") == 0
+    # force "reached spawn" -> next should proceed to anchor #1 (index=1)
+    patrol.position_x = -2.0
+    patrol.position_y = 0.0
+    sim.advance_ticks(1)
+    route_index_by_id = sim.get_rules_state("exploration").get("patrol_route_index_by_id", {})
+    assert isinstance(route_index_by_id, dict)
+    assert route_index_by_id.get("patrol:loop_multi_anchor") == 1
+
+
+def test_campaign_patrol_route_progression_save_load_matches_uninterrupted_hash(tmp_path: Path) -> None:
+    def _make_route_sim(seed: int) -> Simulation:
+        route_sim = _build_sim(seed=seed)
+        scout = route_sim.state.entities["scout"]
+        scout.space_id = "overworld"
+        route_sim.append_command(
+            SimCommand(
+                tick=route_sim.state.tick,
+                entity_id="scout",
+                command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+                params={
+                    "operation": "create_or_update_patrol",
+                    "patrol_id": "patrol:save_load_loop_progression",
+                    "template_id": "campaign_danger_patrol",
+                    "position": {"x": -2.0, "y": 0.0},
+                    "route_anchors": [{"x": -1.0, "y": 0.0}, {"x": -1.0, "y": 1.0}],
+                },
+            )
+        )
+        route_sim.advance_ticks(2)
+        return route_sim
+
+    uninterrupted = _make_route_sim(seed=184)
+    uninterrupted.advance_ticks(40)
+    uninterrupted_hash = simulation_hash(uninterrupted)
+
+    with_save = _make_route_sim(seed=184)
+    with_save.advance_ticks(17)
+    save_path = tmp_path / "campaign_patrol_loop_progression_save.json"
+    save_game_json(save_path, with_save.state.world, with_save)
+    _, loaded = load_game_json(str(save_path))
+    assert simulation_hash(loaded) == simulation_hash(with_save)
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded.advance_ticks(23)
+    assert simulation_hash(loaded) == uninterrupted_hash
+
+
 def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_path: Path) -> None:
     sim = _build_sim(seed=47)
     scout = sim.state.entities["scout"]
