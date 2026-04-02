@@ -63,6 +63,7 @@ from hexcrawler.cli.pygame_viewer import (
     _campaign_authoring_placement_items,
     _campaign_authored_object_at_world,
     _campaign_patrol_anchor_at_world,
+    _campaign_patrol_route_points,
     _campaign_patrol_path_needed_count,
     _site_campaign_anchor_world,
     _use_campaign_site,
@@ -311,6 +312,19 @@ def test_campaign_patrol_path_needed_count_detects_missing_route_anchor() -> Non
     )
 
     assert _campaign_patrol_path_needed_count(sim) == baseline + 1
+
+
+def test_campaign_patrol_route_points_include_spawn_as_anchor_zero_then_authored_order() -> None:
+    patrol = CampaignPatrolRecord(
+        patrol_id="patrol:route_points",
+        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+        space_id="overworld",
+        spawn_position={"x": -2.0, "y": 1.0},
+        route_anchors=[{"x": -1.5, "y": 1.0}, {"x": -1.0, "y": 0.5}],
+        label="Route Points Patrol",
+        tags=["authoring"],
+    )
+    assert _campaign_patrol_route_points(patrol) == [(-2.0, 1.0), (-1.5, 1.0), (-1.0, 0.5)]
 
 
 def test_run_pygame_viewer_right_click_campaign_map_does_not_raise_name_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -79,12 +79,28 @@ Hotkeys remain available only as hidden/debug fallback and are **not** canonical
 - Exit path edit with `Esc` or context `Finish path edit`.
 
 ### Patrol movement semantics (campaign role, continuous plane)
-- Patrol movement consumes authored `world.campaign_patrols[patrol_id].route_anchors` as authoritative route data.
+- Patrol movement consumes authored `world.campaign_patrols[patrol_id]` route truth with canonical loop semantics:
+  - implicit anchor `0` is `spawn_position`,
+  - authored `route_anchors[]` are appended after spawn in authored order,
+  - route is cyclic and always wraps back to implicit anchor `0`.
 - Runtime patrol entity truth is synchronized from the same authored patrol record (no dead split record).
 - Movement remains continuous on the campaign plane (not hex-step cadence).
-- **Path requirement is explicit:** patrol requires at least one route anchor to move.
-  - `route_anchors == []` => patrol idles and UI surfaces a `path needed` message.
-  - one or more anchors => patrol loops through anchors continuously.
+- **Path requirement is explicit:** patrol requires at least one authored route anchor to start looping.
+  - `route_anchors == []` => patrol idles and UI says: `Add at least 1 route anchor to start loop.`
+  - `route_anchors == [A]` => patrol loops `spawn <-> A`.
+  - `route_anchors == [A, B, ...]` => patrol loops `spawn -> A -> B -> ... -> spawn`.
+
+### Patrol route editing/visibility workflow (campaign role)
+- Right-click empty campaign space -> `Place Patrol Here` queues create and auto-enters patrol path edit mode.
+- While editing:
+  - right-click empty campaign space -> `Add route anchor here`,
+  - right-click existing route anchor -> `Move route anchor #N here` / `Delete route anchor #N`,
+  - `Esc` or `Finish path edit` exits path edit mode.
+- Route visualization in campaign view is explicit during play/authoring:
+  - spawn marker shown as anchor `0`,
+  - authored anchors shown as ordered markers (`1..N`),
+  - polyline is drawn through route order,
+  - loop closure back to spawn is visibly marked.
 
 ## Why this is the minimal next step
 - Removes campaign site/patrol iteration bottleneck without attempting full editor architecture.

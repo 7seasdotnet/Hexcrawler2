@@ -192,3 +192,30 @@
   - Do **not** reintroduce path editing as hidden hotkey-only behavior.
   - Do **not** maintain a dead authored patrol route record that runtime movement ignores.
   - Do **not** define patrol movement cadence as hex stepping.
+
+## 9) Patrol Route Exists but Loop Semantics Are Ambiguous (Does Not Clearly Wrap to Start)
+- **Problem name:** Placed patrol path exists but loop semantics are ambiguous / patrol fails to loop clearly.
+- **Symptom:** Patrol can be placed and anchors can be authored, but live movement appears non-intuitive (for example appears to stop at end, or user cannot tell whether spawn is part of the route/loop).
+- **Root cause:** Canonical semantics were not explicit in both runtime and UX:
+  - route-follow targeted authored anchors only, while spawn participation in route cycle remained implicit/unclear;
+  - campaign rendering did not provide clear route ordering/closure visibility (spawn, anchor order, explicit loop closure cue).
+- **Relevant architecture / UX invariant:**
+  - Campaign movement remains continuous-plane authoritative; hex remains derived indexing.
+  - Viewer stays read-only and emits authoring intents only (`campaign_author_intent`).
+  - Patrol route truth is serialized in `world.campaign_patrols` and progression state is serialized/hash-covered in rules state.
+  - Right-click/context-menu remains canonical player-facing spatial authoring UX.
+- **Known-good fix path:**
+  1. Canonicalize route semantics: implicit anchor `0 = spawn_position`, authored anchors append after spawn, route wraps cyclically to anchor `0`.
+  2. Keep zero-authored-anchor behavior explicit: patrol idles with status text `Add at least 1 route anchor to start loop.`
+  3. Render patrol route visibly in campaign view: route line/polyline, ordered anchor markers, and explicit closure cue.
+  4. Preserve deterministic route progression via serialized rules state and verify save/load continuation/hash stability.
+- **Required regression tests:**
+  - Zero-anchor patrol remains idle and target stays `None`.
+  - One-anchor patrol loops between spawn and that anchor (both targets observed).
+  - Multi-anchor patrol loops across anchors and back to spawn (spawn + anchors observed in route targets).
+  - Route point compilation/order includes spawn first, then authored anchors in order.
+  - Save/load mid-route progression matches uninterrupted hash outcome.
+- **Do not regress by doing X:**
+  - Do **not** treat authored anchors as the only loop set while hiding spawn route participation.
+  - Do **not** leave patrol loop semantics undocumented/implicit in UX copy.
+  - Do **not** move patrol routes via viewer-only mutation or non-serialized module memory.
