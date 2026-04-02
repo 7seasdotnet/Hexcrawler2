@@ -68,7 +68,7 @@ from hexcrawler.sim.movement import (
     world_xy_to_axial,
     world_xy_to_square_grid_cell,
 )
-from hexcrawler.sim.world import CampaignPatrolRecord, LOCAL_SPACE_ROLE, HexCoord, SiteRecord
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, CampaignPatrolRecord, LOCAL_SPACE_ROLE, HexCoord, SiteRecord
 from hexcrawler.sim.wounds import (
     WOUND_INCAPACITATE_SEVERITY,
     is_incapacitated_from_wounds,

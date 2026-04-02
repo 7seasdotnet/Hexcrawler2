@@ -90,6 +90,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k right_click_campaign_map_does_not_raise_name_error`
 - `PYTHONPATH=src pytest -q tests/test_play_launcher.py tests/test_pygame_viewer_cli.py -k "core_playable_default_scene_is_sparse_and_contains_single_patrol or play_launcher_default_core_playable_rebuilds_when_scene_is_missing or play_launcher_startup_truth_log_includes_scene_and_paths or viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites"`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_pygame_viewer_cli.py -k "reward_turn_in_loop_p5 or enter_or_e_generic_site_use_opens_town_services_via_generic_path or player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution"`
 - `PYTHONPATH=src python - <<'PY' ... core_playable visible-loop smoke (home visibility + local attack intent + hostile incapacitation + reward turn-in + calendar tie-to-tick) ... PY`
@@ -114,9 +115,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Unified campaign right-click authoring target resolution across marker and non-marker clicks, added patrol `Edit Path` bounded flow (anchor add/delete + Esc finish), and kept all mutation through authoritative `campaign_author_intent` commands only (`src/hexcrawler/cli/pygame_viewer.py`).
-- Fixed patrol placement parity by ensuring `create_or_update_patrol` also materializes/updates the runtime patrol entity for newly authored patrol IDs, and added deterministic `delete_patrol_anchor` support (`src/hexcrawler/sim/exploration.py`).
-- Added regression tests for right-click patrol placement materialization plus uniform move/delete semantics across seeded and newly authored objects, and updated canonical UX docs/anti-regression guidance (`tests/test_pygame_viewer_cli.py`, `tests/test_reward_turn_in_loop_p5.py`, `AGENTS.md`, `docs/CAMPAIGN_AUTHORING_BRIDGE.md`, `docs/LEGENDARY_PROBLEMS.md`).
+- Fixed a campaign-map right-click runtime crash by importing and using the canonical `CAMPAIGN_SPACE_ROLE` constant in viewer context-menu role gates (`src/hexcrawler/cli/pygame_viewer.py`).
+- Added a regression test that runs `run_pygame_viewer` with a synthetic campaign-map right-click event and asserts no `NameError` crash path (`tests/test_pygame_viewer_cli.py`).
+- Refreshed verification commands to include the new targeted viewer regression invocation (`docs/STATUS.md`).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
