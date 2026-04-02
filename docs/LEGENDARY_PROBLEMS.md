@@ -141,3 +141,27 @@
   - Do **not** reintroduce hotkeys as the only or advertised authoring path.
   - Do **not** mutate simulation state directly from viewer widgets.
   - Do **not** rebuild authoring backend seams when existing intents already satisfy mutation needs.
+
+## 7) Hotkey-Authored and Right-Click-Authored Campaign Objects Behave Differently
+- **Problem name:** Split campaign object behavior by creation path.
+- **Symptom:** Some seeded/hotkey-created objects can be moved/deleted, while right-click-created objects fail hit detection, fail delete, or fail to materialize as usable patrols.
+- **Root cause:** Authoring semantics diverged across object identity/registration paths (authored record vs runtime entity presence), and context-menu targeting depended on inconsistent marker/hit branches.
+- **Relevant architecture / UX invariant:**
+  - Campaign authoring must be right-click/context-menu first for player-facing spatial workflows.
+  - Viewer remains read-only and emits authoritative `campaign_author_intent` mutations only.
+  - Seeded defaults and newly authored objects must share one object identity/selection/edit/delete path.
+- **Known-good fix path:**
+  1. Keep one authoritative mutation seam (`campaign_author_intent`) for create/move/delete/path operations.
+  2. Ensure right-click target resolution checks authored campaign truth (sites + patrol primitives) regardless of marker branch.
+  3. On patrol create/update, keep authored patrol record and runtime patrol entity synchronized so new patrols are visible/selectable/editable/deletable.
+  4. Keep delete semantics uniform in authoring mode (no protected seeded defaults).
+  5. Keep patrol path editing bounded (anchor add/delete) and serialized via authoritative intents.
+- **Required regression tests:**
+  - Right-click Place Patrol Here creates patrol primitive and runtime patrol entity.
+  - Move/delete works for seeded default town/dungeon/patrol and right-click-created town/dungeon/patrol.
+  - Save/load/hash stability for patrol anchor operations (add/delete/move via intents).
+  - `core_playable` headless launch remains healthy with default scene present.
+- **Do not regress by doing X:**
+  - Do **not** keep one behavior path for seeded/hotkey objects and another for right-click-created objects.
+  - Do **not** rely on in-memory-only UI state for patrol path correctness.
+  - Do **not** special-case seeded defaults as undeletable in authoring mode.

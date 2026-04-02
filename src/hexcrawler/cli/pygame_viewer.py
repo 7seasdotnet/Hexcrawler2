@@ -242,6 +242,12 @@ class CampaignAuthoringMoveState:
 
 
 @dataclass
+class CampaignAuthoringPathEditState:
+    patrol_id: str
+    label: str
+
+
+@dataclass
 class EncounterPanelScrollState:
     offsets: dict[str, int] = field(default_factory=lambda: {section: 0 for section in PANEL_SECTION_ORDER})
 
@@ -2965,11 +2971,42 @@ def _campaign_authoring_placement_items(world_x: float, world_y: float) -> list[
 
 
 def _campaign_authoring_edit_items(target: dict[str, str]) -> list[ContextMenuItem]:
-    return [
+    items = [
         ContextMenuItem(label=f"Campaign Authoring: {target['label']}", action="noop"),
         ContextMenuItem(label="Move", action="campaign_author_move", payload=target),
         ContextMenuItem(label="Delete", action="campaign_author_delete", payload=target),
     ]
+    if target.get("kind") == "patrol":
+        items.append(ContextMenuItem(label="Edit Path", action="campaign_author_edit_path", payload=target))
+    return items
+
+
+def _campaign_patrol_anchor_at_world(
+    sim: Simulation,
+    *,
+    patrol_id: str,
+    world_x: float,
+    world_y: float,
+    max_distance_world: float = 0.55,
+) -> int | None:
+    patrol = sim.state.world.campaign_patrols.get(patrol_id)
+    if patrol is None:
+        return None
+    best: tuple[float, int] | None = None
+    for index, anchor in enumerate(patrol.route_anchors):
+        if not isinstance(anchor, dict):
+            continue
+        try:
+            anchor_x = float(anchor["x"])
+            anchor_y = float(anchor["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        distance = math.dist((world_x, world_y), (anchor_x, anchor_y))
+        if distance > max_distance_world:
+            continue
+        if best is None or (distance, index) < best:
+            best = (distance, index)
+    return best[1] if best is not None else None
 
 
 def _draw_world_affordance_prompts(
@@ -4501,7 +4538,7 @@ def run_pygame_viewer(
         del recent_saves[RECENT_SAVES_LIMIT:]
 
     def load_simulation_from_path(path_value: str) -> bool:
-        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, campaign_move_state, last_sent_move_vector, selected_site_id
+        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, campaign_move_state, campaign_path_edit_state, last_sent_move_vector, selected_site_id
         try:
             sim = runtime_controller.load_simulation(path_value)
             previous_snapshot = extract_render_snapshot(sim)
@@ -4511,6 +4548,7 @@ def run_pygame_viewer(
             push_recent_save(path_value)
             status_message = f"loaded {path_value}"
             campaign_move_state = None
+            campaign_path_edit_state = None
             last_sent_move_vector = (0.0, 0.0)
             selected_site_id = None
             return True
@@ -4534,7 +4572,10 @@ def run_pygame_viewer(
         player = sim.state.entities.get(PLAYER_ID)
         active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
         topology_diagnostic = _viewer_topology_diagnostic(active_space)
+        clicked_world: tuple[float, float] | None = None
         if viewport_rect.collidepoint(event_pos):
+            world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center, world_zoom_scale)
+            clicked_world = (world_x, world_y)
             markers = _find_world_marker_candidates_at_pixel(sim, event_pos, world_center, world_zoom_scale)
             if markers:
                 for marker in markers:
@@ -4588,8 +4629,47 @@ def run_pygame_viewer(
                 items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
                 items.append(ContextMenuItem(label="- Rest (120 ticks)", action="explore", payload="rest:120"))
                 items.append(ContextMenuItem(label="Clear selection", action="clear_selection"))
+                if active_space is not None and str(getattr(active_space, "role", "")) == CAMPAIGN_SPACE_ROLE:
+                    if campaign_move_state is not None:
+                        items.append(
+                            ContextMenuItem(
+                                label=f"Place moved {campaign_move_state.label} here",
+                                action="campaign_author_move_commit",
+                                payload={
+                                    "kind": campaign_move_state.kind,
+                                    "id": campaign_move_state.object_id,
+                                    "position": {"x": float(world_x), "y": float(world_y)},
+                                },
+                            )
+                        )
+                        items.append(ContextMenuItem(label="Cancel move (Esc)", action="campaign_author_move_cancel"))
+                    authored_target = _campaign_authored_object_at_world(sim, world_x=world_x, world_y=world_y)
+                    if authored_target is not None:
+                        items.extend(_campaign_authoring_edit_items(authored_target))
+                    if campaign_path_edit_state is not None:
+                        anchor_index = _campaign_patrol_anchor_at_world(
+                            sim,
+                            patrol_id=campaign_path_edit_state.patrol_id,
+                            world_x=world_x,
+                            world_y=world_y,
+                        )
+                        if anchor_index is not None:
+                            items.append(
+                                ContextMenuItem(
+                                    label=f"Delete route anchor #{anchor_index}",
+                                    action="campaign_author_path_delete_anchor",
+                                    payload={"patrol_id": campaign_path_edit_state.patrol_id, "anchor_index": anchor_index},
+                                )
+                            )
+                        items.append(
+                            ContextMenuItem(
+                                label="Add route anchor here",
+                                action="campaign_author_path_add_anchor",
+                                payload={"patrol_id": campaign_path_edit_state.patrol_id, "position": {"x": float(world_x), "y": float(world_y)}},
+                            )
+                        )
+                        items.append(ContextMenuItem(label="Finish path edit (Esc)", action="campaign_author_path_finish"))
             else:
-                world_x, world_y = _pixel_to_world(event_pos[0], event_pos[1], world_center, world_zoom_scale)
                 if topology_diagnostic is not None:
                     items.append(ContextMenuItem(label=topology_diagnostic, action="noop"))
                 elif active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
@@ -4623,6 +4703,29 @@ def run_pygame_viewer(
                             items.extend(_campaign_authoring_edit_items(authored_target))
                         else:
                             items.extend(_campaign_authoring_placement_items(world_x, world_y))
+                        if campaign_path_edit_state is not None:
+                            anchor_index = _campaign_patrol_anchor_at_world(
+                                sim,
+                                patrol_id=campaign_path_edit_state.patrol_id,
+                                world_x=world_x,
+                                world_y=world_y,
+                            )
+                            if anchor_index is not None:
+                                items.append(
+                                    ContextMenuItem(
+                                        label=f"Delete route anchor #{anchor_index}",
+                                        action="campaign_author_path_delete_anchor",
+                                        payload={"patrol_id": campaign_path_edit_state.patrol_id, "anchor_index": anchor_index},
+                                    )
+                                )
+                            items.append(
+                                ContextMenuItem(
+                                    label="Add route anchor here",
+                                    action="campaign_author_path_add_anchor",
+                                    payload={"patrol_id": campaign_path_edit_state.patrol_id, "position": {"x": float(world_x), "y": float(world_y)}},
+                                )
+                            )
+                            items.append(ContextMenuItem(label="Finish path edit (Esc)", action="campaign_author_path_finish"))
                         items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{world_x},{world_y}"))
                         hex_sites = sim.state.world.get_sites_at_location({"space_id": "overworld", "coord": target_hex.to_dict()})
                         if hex_sites:
@@ -4664,6 +4767,27 @@ def run_pygame_viewer(
                         action="return_to_origin",
                     )
                 )
+        if clicked_world is not None and active_space is not None and str(getattr(active_space, "role", "")) == CAMPAIGN_SPACE_ROLE:
+            if campaign_move_state is not None and not any(item.action == "campaign_author_move_commit" for item in items):
+                items.append(
+                    ContextMenuItem(
+                        label=f"Place moved {campaign_move_state.label} here",
+                        action="campaign_author_move_commit",
+                        payload={
+                            "kind": campaign_move_state.kind,
+                            "id": campaign_move_state.object_id,
+                            "position": {"x": float(clicked_world[0]), "y": float(clicked_world[1])},
+                        },
+                    )
+                )
+                items.append(ContextMenuItem(label="Cancel move (Esc)", action="campaign_author_move_cancel"))
+            authored_target = _campaign_authored_object_at_world(sim, world_x=clicked_world[0], world_y=clicked_world[1])
+            if authored_target is not None and not any(item.action == "campaign_author_delete" for item in items):
+                items.extend(_campaign_authoring_edit_items(authored_target))
+            if authored_target is None and not any(item.action == "campaign_author_place" for item in items):
+                target_hex = world_xy_to_axial(clicked_world[0], clicked_world[1])
+                if sim.state.world.get_hex_record(target_hex) is not None:
+                    items.extend(_campaign_authoring_placement_items(clicked_world[0], clicked_world[1]))
         items.extend(build_recent_save_items())
         if not items:
             return None
@@ -4706,6 +4830,7 @@ def run_pygame_viewer(
     push_recent_save(load_save)
     status_message: str | None = None
     campaign_move_state: CampaignAuthoringMoveState | None = None
+    campaign_path_edit_state: CampaignAuthoringPathEditState | None = None
     last_sent_move_vector = (0.0, 0.0)
     selected_site_id: str | None = None
     visual_facing_by_entity: dict[str, float] = {}
@@ -4731,6 +4856,10 @@ def run_pygame_viewer(
                 elif campaign_move_state is not None:
                     campaign_move_state = None
                     status_message = "campaign authoring: move canceled"
+                elif campaign_path_edit_state is not None:
+                    patrol_label = campaign_path_edit_state.label
+                    campaign_path_edit_state = None
+                    status_message = f"campaign authoring: patrol path edit finished ({patrol_label})"
                 else:
                     running = False
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F2:
@@ -5101,6 +5230,16 @@ def run_pygame_viewer(
                                     label=target_label,
                                 )
                                 status_message = f"campaign authoring: move pending for {target_label}; right-click destination and choose place"
+                        elif item.action == "campaign_author_edit_path" and isinstance(item.payload, dict):
+                            target_kind = str(item.payload.get("kind", ""))
+                            target_id = str(item.payload.get("id", ""))
+                            target_label = str(item.payload.get("label", target_id))
+                            if target_kind == "patrol" and target_id:
+                                campaign_path_edit_state = CampaignAuthoringPathEditState(patrol_id=target_id, label=target_label)
+                                status_message = (
+                                    f"campaign authoring: path edit for {target_label}; "
+                                    "right-click to add anchor, right-click anchor to delete, Esc to finish"
+                                )
                         elif item.action == "campaign_author_move_commit" and isinstance(item.payload, dict):
                             target_kind = str(item.payload.get("kind", ""))
                             target_id = str(item.payload.get("id", ""))
@@ -5127,6 +5266,35 @@ def run_pygame_viewer(
                                 status_message = f"campaign authoring: delete patrol queued ({target_id})"
                             if campaign_move_state is not None and campaign_move_state.object_id == target_id:
                                 campaign_move_state = None
+                            if campaign_path_edit_state is not None and campaign_path_edit_state.patrol_id == target_id and target_kind == "patrol":
+                                campaign_path_edit_state = None
+                        elif item.action == "campaign_author_path_add_anchor" and isinstance(item.payload, dict):
+                            patrol_id = str(item.payload.get("patrol_id", "")).strip()
+                            position = item.payload.get("position", {})
+                            patrol = sim.state.world.campaign_patrols.get(patrol_id)
+                            if patrol is not None:
+                                anchor_index = len(patrol.route_anchors)
+                                controller.campaign_author_intent(
+                                    "move_patrol_anchor",
+                                    patrol_id=patrol_id,
+                                    anchor_index=anchor_index,
+                                    position=position,
+                                )
+                                status_message = f"campaign authoring: patrol anchor added ({patrol_id} #{anchor_index})"
+                        elif item.action == "campaign_author_path_delete_anchor" and isinstance(item.payload, dict):
+                            patrol_id = str(item.payload.get("patrol_id", "")).strip()
+                            anchor_index = item.payload.get("anchor_index")
+                            controller.campaign_author_intent(
+                                "delete_patrol_anchor",
+                                patrol_id=patrol_id,
+                                anchor_index=anchor_index,
+                            )
+                            status_message = f"campaign authoring: patrol anchor delete queued ({patrol_id} #{anchor_index})"
+                        elif item.action == "campaign_author_path_finish":
+                            if campaign_path_edit_state is not None:
+                                patrol_label = campaign_path_edit_state.label
+                                campaign_path_edit_state = None
+                                status_message = f"campaign authoring: patrol path edit finished ({patrol_label})"
                         elif item.action == "select" and item.payload is not None:
                             controller.set_selected_entity(item.payload)
                         elif item.action == "clear_selection":
@@ -5315,6 +5483,11 @@ def run_pygame_viewer(
                 frame_status_message = (
                     f"campaign authoring: moving {campaign_move_state.label}; "
                     "right-click destination then choose place moved object (Esc cancels)"
+                )
+            elif campaign_path_edit_state is not None:
+                frame_status_message = (
+                    f"campaign authoring: editing path for {campaign_path_edit_state.label}; "
+                    "right-click to add anchor, right-click existing anchor to delete (Esc finishes)"
                 )
             elif not frame_status_message:
                 frame_status_message = (
