@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run a bounded follow-up polish pass for campaign authoring UX (menu readability + manual smoke validation), then proceed to dungeon population/spawner authoring on the same authoritative seam.
+- **Next action:** Run manual right-click campaign-authoring smoke validation in the playable scene, then start bounded dungeon population/spawner authoring on the same authoritative seam.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -79,7 +79,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Safe-hub traversal intents currently executed through rule-module command/event seam: `enter_safe_hub_intent`, `exit_safe_hub_intent`.
 - Local manual loot intent currently executed through rule-module command/event seam: `loot_local_proof_intent`.
 - Local structure authoring proof intent currently executed through rule-module command/event seam: `local_structure_author_intent` (Greybridge local safe-hub only; create/move-opening/remove/delete bounded operations).
-- Campaign authoring bridge intent currently executed through rule-module command/event seam: `campaign_author_intent` (campaign overworld only; create/move/delete town+dungeon sites and create/move/delete patrol primitives/anchors).
+- Campaign authoring bridge intent currently executed through rule-module command/event seam: `campaign_author_intent` (campaign overworld only; create/move/delete town+dungeon sites and create/move/delete patrol primitives/anchors, including patrol anchor delete).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -114,9 +114,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Campaign authoring in campaign space is now right-click/context-menu first (empty-space place town/dungeon/patrol + existing site/patrol move/delete) while still emitting only authoritative `campaign_author_intent` mutations (`src/hexcrawler/cli/pygame_viewer.py`).
-- Added bounded move-mode UX with explicit status prompts and safe `Esc` cancellation; hotkeys remain debug fallback only (not canonical workflow) (`src/hexcrawler/cli/pygame_viewer.py`, `docs/CAMPAIGN_AUTHORING_BRIDGE.md`).
-- Added targeted regression coverage for right-click authoring menu availability plus dungeon create/move/delete save-load/hash stability, and documented the hotkey-hidden-authoring anti-pattern (`tests/test_pygame_viewer_cli.py`, `tests/test_reward_turn_in_loop_p5.py`, `docs/LEGENDARY_PROBLEMS.md`).
+- Unified campaign right-click authoring target resolution across marker and non-marker clicks, added patrol `Edit Path` bounded flow (anchor add/delete + Esc finish), and kept all mutation through authoritative `campaign_author_intent` commands only (`src/hexcrawler/cli/pygame_viewer.py`).
+- Fixed patrol placement parity by ensuring `create_or_update_patrol` also materializes/updates the runtime patrol entity for newly authored patrol IDs, and added deterministic `delete_patrol_anchor` support (`src/hexcrawler/sim/exploration.py`).
+- Added regression tests for right-click patrol placement materialization plus uniform move/delete semantics across seeded and newly authored objects, and updated canonical UX docs/anti-regression guidance (`tests/test_pygame_viewer_cli.py`, `tests/test_reward_turn_in_loop_p5.py`, `AGENTS.md`, `docs/CAMPAIGN_AUTHORING_BRIDGE.md`, `docs/LEGENDARY_PROBLEMS.md`).
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

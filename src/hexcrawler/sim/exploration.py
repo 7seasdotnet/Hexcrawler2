@@ -745,7 +745,7 @@ class ExplorationExecutionModule(RuleModule):
             )
             return
 
-        if operation in {"create_or_update_patrol", "move_patrol_spawn", "move_patrol_anchor", "delete_patrol"}:
+        if operation in {"create_or_update_patrol", "move_patrol_spawn", "move_patrol_anchor", "delete_patrol", "delete_patrol_anchor"}:
             patrol_id = str(command.params.get("patrol_id", "")).strip()
             details["patrol_id"] = patrol_id
             if not patrol_id:
@@ -802,6 +802,31 @@ class ExplorationExecutionModule(RuleModule):
                     sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
                 )
                 return
+            if operation == "delete_patrol_anchor":
+                if current_patrol is None:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="patrol_not_found", details=details
+                    )
+                    return
+                anchor_index = command.params.get("anchor_index")
+                if isinstance(anchor_index, bool) or not isinstance(anchor_index, int) or anchor_index < 0:
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="anchor_index_required", details=details
+                    )
+                    return
+                anchors = list(current_patrol.route_anchors)
+                if anchor_index >= len(anchors):
+                    self._schedule_campaign_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="anchor_index_out_of_range", details=details
+                    )
+                    return
+                del anchors[anchor_index]
+                current_patrol.route_anchors = anchors
+                sim.state.world.campaign_patrols[patrol_id] = current_patrol
+                self._schedule_campaign_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+                )
+                return
             position = command.params.get("position", {})
             if not isinstance(position, dict):
                 self._schedule_campaign_author_outcome(
@@ -837,10 +862,24 @@ class ExplorationExecutionModule(RuleModule):
                     return
                 current_patrol.spawn_position = {"x": world_x, "y": world_y}
                 sim.state.world.campaign_patrols[patrol_id] = current_patrol
-            if patrol_id in sim.state.entities:
-                patrol_entity = sim.state.entities[patrol_id]
+            patrol_entity = sim.state.entities.get(patrol_id)
+            if patrol_entity is None:
+                patrol_record = sim.state.world.campaign_patrols.get(patrol_id)
+                template_id = patrol_record.template_id if patrol_record is not None else str(command.params.get("template_id", GREYBRIDGE_PATROL_TEMPLATE_ID))
+                patrol_entity = EntityState(
+                    entity_id=patrol_id,
+                    position_x=world_x,
+                    position_y=world_y,
+                    template_id=template_id,
+                    stats={"faction_id": "hostile", "role": "patrol"},
+                    facing=0,
+                    space_id="overworld",
+                )
+                sim.add_entity(patrol_entity)
+            else:
                 patrol_entity.position_x = world_x
                 patrol_entity.position_y = world_y
+                patrol_entity.space_id = "overworld"
             self._schedule_campaign_author_outcome(
                 sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
             )

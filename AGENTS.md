@@ -167,6 +167,10 @@ When asked to implement:
 - Systems that cannot be inspected deterministically must not be merged.
 
 ## UPDATED AND NEW INSTRUCTIONS
+- Canonical player-facing spatial authoring/spatial interaction UX is right-click/context-menu first.
+  - Unless a different primary interaction is explicitly justified in docs, do not ship hotkey-only spatial workflows.
+  - Hotkeys may exist only as fallback/debug paths and must not diverge in semantics from right-click flows.
+
 - After every change that affects functionality, tests, run commands, file locations, or phase progress: update docs/STATUS.md in the same commit.
 
 The update must include:

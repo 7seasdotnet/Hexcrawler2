@@ -896,6 +896,7 @@ def test_campaign_patrol_authoring_create_move_delete_persists_save_load(tmp_pat
     updated = sim.state.world.campaign_patrols["patrol:authoring_demo"]
     assert updated.spawn_position == {"x": -3.25, "y": 0.5}
     assert updated.route_anchors[0] == {"x": -2.75, "y": 0.5}
+    assert "patrol:authoring_demo" in sim.state.entities
 
     before_hash = simulation_hash(sim)
     save_path = tmp_path / "campaign_patrol_authoring_save.json"
@@ -908,6 +909,20 @@ def test_campaign_patrol_authoring_create_move_delete_persists_save_load(tmp_pat
     loaded.register_rule_module(LocalEncounterInstanceModule())
     loaded.register_rule_module(CombatExecutionModule())
     loaded.register_rule_module(ExplorationExecutionModule())
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "delete_patrol_anchor",
+                "patrol_id": "patrol:authoring_demo",
+                "anchor_index": 0,
+            },
+        )
+    )
+    loaded.advance_ticks(2)
+    assert loaded.state.world.campaign_patrols["patrol:authoring_demo"].route_anchors == []
     loaded.append_command(
         SimCommand(
             tick=loaded.state.tick,

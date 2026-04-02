@@ -47,12 +47,27 @@ Campaign authoring UX is now **right-click/context-menu first** in campaign spac
 - Right-click authored campaign object (site/patrol):
   - `Move`
   - `Delete`
+  - `Edit Path` (patrol only; bounded anchor add/delete)
 - Move is bounded:
   - choose `Move`,
   - next right-click destination commits move through authoritative intent,
   - `Esc` cancels pending move safely.
 
 Hotkeys remain available only as hidden/debug fallback and are **not** canonical UX.
+
+## Canonical control hierarchy + uniform semantics rule (campaign role)
+- Right-click/context-menu placement/edit/delete is the canonical player-facing campaign spatial authoring UX.
+- Hotkeys are fallback/debug only unless explicitly documented as primary for a specific workflow.
+- Authored campaign objects must behave uniformly regardless of creation path:
+  - seeded defaults,
+  - hotkey/demo-created objects,
+  - right-click/context-menu-created objects.
+- Seeded defaults are not special-cased from move/delete semantics in authoring mode.
+- Patrol path editing is bounded in this pass:
+  - right-click patrol -> `Edit Path`,
+  - right-click campaign space -> `Add route anchor here`,
+  - right-click existing anchor -> `Delete route anchor #N`,
+  - `Esc` finishes path editing.
 
 ## Why this is the minimal next step
 - Removes campaign site/patrol iteration bottleneck without attempting full editor architecture.

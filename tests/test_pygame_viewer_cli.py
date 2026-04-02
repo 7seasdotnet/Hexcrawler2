@@ -267,6 +267,108 @@ def test_campaign_authoring_target_detection_prefers_clicked_authored_site_or_pa
     assert nothing is None
 
 
+def test_campaign_right_click_patrol_placement_creates_authored_patrol_and_runtime_entity() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE, seed=13)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    controller.campaign_author_intent(
+        "create_or_update_patrol",
+        patrol_id="patrol:authoring_right_click",
+        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+        label="Authored Patrol",
+        position={"x": 1.25, "y": -0.75},
+        route_anchors=[{"x": 2.0, "y": -0.75}],
+        tags=["authoring"],
+    )
+    sim.advance_ticks(2)
+
+    patrol = sim.state.world.campaign_patrols.get("patrol:authoring_right_click")
+    assert patrol is not None
+    assert patrol.spawn_position == {"x": 1.25, "y": -0.75}
+    assert "patrol:authoring_right_click" in sim.state.entities
+    assert sim.state.entities["patrol:authoring_right_click"].position_x == pytest.approx(1.25)
+    assert sim.state.entities["patrol:authoring_right_click"].position_y == pytest.approx(-0.75)
+
+
+def test_campaign_authoring_move_delete_are_uniform_for_seeded_and_new_objects() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE, seed=17)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+    baseline_hash = simulation_hash(sim)
+    seeded_dungeon_site_id = next(
+        site_id for site_id, site in sorted(sim.state.world.sites.items()) if site.site_type == "dungeon_entrance"
+    )
+    assert "home_greybridge" in sim.state.world.sites
+    assert seeded_dungeon_site_id in sim.state.world.sites
+    assert CORE_PLAYABLE_DEFAULT_PATROL_ID in sim.state.world.campaign_patrols
+
+    controller.campaign_author_intent(
+        "create_or_update_site",
+        site_id="authoring_town_right_click",
+        site_kind="town",
+        label="Authored Town",
+        position={"x": 0.5, "y": 2.5},
+    )
+    controller.campaign_author_intent(
+        "create_or_update_site",
+        site_id="authoring_dungeon_right_click",
+        site_kind="dungeon_entrance",
+        label="Authored Dungeon Entrance",
+        position={"x": 2.0, "y": 1.5},
+    )
+    controller.campaign_author_intent(
+        "create_or_update_patrol",
+        patrol_id="patrol:authoring_right_click_unified",
+        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+        label="Authored Patrol",
+        position={"x": -1.5, "y": 1.5},
+        route_anchors=[{"x": -0.5, "y": 1.5}],
+        tags=["authoring"],
+    )
+    sim.advance_ticks(2)
+    assert "authoring_town_right_click" in sim.state.world.sites
+    assert "authoring_dungeon_right_click" in sim.state.world.sites
+    assert "patrol:authoring_right_click_unified" in sim.state.world.campaign_patrols
+
+    controller.campaign_author_intent("move_site", site_id="home_greybridge", position={"x": 4.0, "y": -4.0})
+    controller.campaign_author_intent("move_site", site_id=seeded_dungeon_site_id, position={"x": 5.0, "y": -5.0})
+    controller.campaign_author_intent(
+        "move_patrol_spawn",
+        patrol_id=CORE_PLAYABLE_DEFAULT_PATROL_ID,
+        position={"x": -4.0, "y": 0.0},
+    )
+    controller.campaign_author_intent("move_site", site_id="authoring_town_right_click", position={"x": 0.0, "y": 3.0})
+    controller.campaign_author_intent("move_site", site_id="authoring_dungeon_right_click", position={"x": 3.5, "y": 2.0})
+    controller.campaign_author_intent(
+        "move_patrol_spawn",
+        patrol_id="patrol:authoring_right_click_unified",
+        position={"x": -3.0, "y": 2.25},
+    )
+    sim.advance_ticks(2)
+
+    assert sim.state.world.sites["home_greybridge"].location.get("campaign_anchor") == {"x": 4.0, "y": -4.0}
+    assert sim.state.world.sites[seeded_dungeon_site_id].location.get("campaign_anchor") == {"x": 5.0, "y": -5.0}
+    assert sim.state.world.campaign_patrols[CORE_PLAYABLE_DEFAULT_PATROL_ID].spawn_position == {"x": -4.0, "y": 0.0}
+    assert sim.state.world.sites["authoring_town_right_click"].location.get("campaign_anchor") == {"x": 0.0, "y": 3.0}
+    assert sim.state.world.sites["authoring_dungeon_right_click"].location.get("campaign_anchor") == {"x": 3.5, "y": 2.0}
+    assert sim.state.world.campaign_patrols["patrol:authoring_right_click_unified"].spawn_position == {"x": -3.0, "y": 2.25}
+
+    controller.campaign_author_intent("delete_site", site_id="home_greybridge")
+    controller.campaign_author_intent("delete_site", site_id=seeded_dungeon_site_id)
+    controller.campaign_author_intent("delete_patrol", patrol_id=CORE_PLAYABLE_DEFAULT_PATROL_ID)
+    controller.campaign_author_intent("delete_site", site_id="authoring_town_right_click")
+    controller.campaign_author_intent("delete_site", site_id="authoring_dungeon_right_click")
+    controller.campaign_author_intent("delete_patrol", patrol_id="patrol:authoring_right_click_unified")
+    sim.advance_ticks(2)
+
+    assert "home_greybridge" not in sim.state.world.sites
+    assert seeded_dungeon_site_id not in sim.state.world.sites
+    assert CORE_PLAYABLE_DEFAULT_PATROL_ID not in sim.state.world.campaign_patrols
+    assert "authoring_town_right_click" not in sim.state.world.sites
+    assert "authoring_dungeon_right_click" not in sim.state.world.sites
+    assert "patrol:authoring_right_click_unified" not in sim.state.world.campaign_patrols
+    assert simulation_hash(sim) != baseline_hash
+
+
 def test_site_marker_uses_campaign_anchor_position_instead_of_hex_center() -> None:
     sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
     world_center = (640.0, 360.0)
