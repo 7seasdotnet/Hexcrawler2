@@ -267,6 +267,34 @@ def test_campaign_authoring_target_detection_prefers_clicked_authored_site_or_pa
     assert nothing is None
 
 
+def test_run_pygame_viewer_right_click_campaign_map_does_not_raise_name_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pygame
+
+    events = [
+        pygame.event.Event(pygame.MOUSEBUTTONDOWN, {"button": 3, "pos": (100, 100)}),
+        pygame.event.Event(pygame.QUIT, {}),
+    ]
+
+    def _event_get() -> list[pygame.event.Event]:
+        nonlocal events
+        if events:
+            queued = events
+            events = []
+            return queued
+        return []
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setattr(pygame.event, "get", _event_get)
+
+    exit_code = viewer_module.run_pygame_viewer(
+        map_path="content/examples/viewer_map.json",
+        runtime_profile=CORE_PLAYABLE,
+        headless=False,
+    )
+
+    assert exit_code == 0
+
+
 def test_campaign_right_click_patrol_placement_creates_authored_patrol_and_runtime_entity() -> None:
     sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE, seed=13)
     controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
