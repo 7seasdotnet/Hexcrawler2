@@ -62,6 +62,8 @@ from hexcrawler.cli.pygame_viewer import (
     _campaign_authoring_edit_items,
     _campaign_authoring_placement_items,
     _campaign_authored_object_at_world,
+    _campaign_patrol_anchor_at_world,
+    _campaign_patrol_path_needed_count,
     _site_campaign_anchor_world,
     _use_campaign_site,
     _supported_viewer_topology,
@@ -234,6 +236,13 @@ def test_campaign_authoring_existing_object_menu_exposes_move_delete_actions() -
     assert move_item.payload == target
 
 
+def test_campaign_authoring_patrol_edit_menu_exposes_edit_path_entry() -> None:
+    items = _campaign_authoring_edit_items({"kind": "patrol", "id": "patrol:alpha", "label": "Alpha Patrol"})
+    labels = [item.label for item in items]
+
+    assert "Edit Path" in labels
+
+
 def test_campaign_authoring_target_detection_prefers_clicked_authored_site_or_patrol() -> None:
     sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
     sim.state.world.sites["authoring_town_0_0"] = SiteRecord(
@@ -265,6 +274,43 @@ def test_campaign_authoring_target_detection_prefers_clicked_authored_site_or_pa
     assert town is not None and town["kind"] == "site" and town["id"] == "authoring_town_0_0"
     assert patrol is not None and patrol["kind"] == "patrol" and patrol["id"] == "patrol:authoring_demo"
     assert nothing is None
+
+
+def test_campaign_patrol_anchor_hit_detection_enables_move_or_delete_actions() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    sim.state.world.campaign_patrols["patrol:anchor_hit"] = CampaignPatrolRecord(
+        patrol_id="patrol:anchor_hit",
+        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+        space_id="overworld",
+        spawn_position={"x": 2.0, "y": 2.0},
+        route_anchors=[{"x": 3.0, "y": 2.0}],
+        label="Anchor Hit Patrol",
+        tags=["authoring"],
+    )
+
+    anchor_index = _campaign_patrol_anchor_at_world(
+        sim,
+        patrol_id="patrol:anchor_hit",
+        world_x=3.02,
+        world_y=2.01,
+    )
+    assert anchor_index == 0
+
+
+def test_campaign_patrol_path_needed_count_detects_missing_route_anchor() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", runtime_profile=CORE_PLAYABLE)
+    baseline = _campaign_patrol_path_needed_count(sim)
+    sim.state.world.campaign_patrols["patrol:path_needed"] = CampaignPatrolRecord(
+        patrol_id="patrol:path_needed",
+        template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
+        space_id="overworld",
+        spawn_position={"x": -5.0, "y": -5.0},
+        route_anchors=[],
+        label="Path Needed Patrol",
+        tags=["authoring"],
+    )
+
+    assert _campaign_patrol_path_needed_count(sim) == baseline + 1
 
 
 def test_run_pygame_viewer_right_click_campaign_map_does_not_raise_name_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -314,7 +360,7 @@ def test_campaign_right_click_patrol_placement_creates_authored_patrol_and_runti
     assert patrol is not None
     assert patrol.spawn_position == {"x": 1.25, "y": -0.75}
     assert "patrol:authoring_right_click" in sim.state.entities
-    assert sim.state.entities["patrol:authoring_right_click"].position_x == pytest.approx(1.25)
+    assert sim.state.entities["patrol:authoring_right_click"].position_x > 1.25
     assert sim.state.entities["patrol:authoring_right_click"].position_y == pytest.approx(-0.75)
 
 

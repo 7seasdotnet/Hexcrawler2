@@ -66,8 +66,25 @@ Hotkeys remain available only as hidden/debug fallback and are **not** canonical
 - Patrol path editing is bounded in this pass:
   - right-click patrol -> `Edit Path`,
   - right-click campaign space -> `Add route anchor here`,
-  - right-click existing anchor -> `Delete route anchor #N`,
+  - right-click existing anchor -> `Move route anchor #N here` or `Delete route anchor #N`,
   - `Esc` finishes path editing.
+
+### Patrol placement/path workflow clarification (campaign role)
+- After `Place Patrol Here`, viewer now automatically enters **patrol path edit mode** for the placed patrol.
+- Spawn position is the patrol origin.
+- Route anchors are authored via right-click context actions:
+  - add anchor at clicked world position,
+  - move clicked anchor to clicked world position,
+  - delete clicked anchor.
+- Exit path edit with `Esc` or context `Finish path edit`.
+
+### Patrol movement semantics (campaign role, continuous plane)
+- Patrol movement consumes authored `world.campaign_patrols[patrol_id].route_anchors` as authoritative route data.
+- Runtime patrol entity truth is synchronized from the same authored patrol record (no dead split record).
+- Movement remains continuous on the campaign plane (not hex-step cadence).
+- **Path requirement is explicit:** patrol requires at least one route anchor to move.
+  - `route_anchors == []` => patrol idles and UI surfaces a `path needed` message.
+  - one or more anchors => patrol loops through anchors continuously.
 
 ## Why this is the minimal next step
 - Removes campaign site/patrol iteration bottleneck without attempting full editor architecture.

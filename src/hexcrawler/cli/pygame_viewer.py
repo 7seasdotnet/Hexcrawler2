@@ -3009,6 +3009,14 @@ def _campaign_patrol_anchor_at_world(
     return best[1] if best is not None else None
 
 
+def _campaign_patrol_path_needed_count(sim: Simulation) -> int:
+    needed = 0
+    for patrol in sim.state.world.campaign_patrols.values():
+        if len(patrol.route_anchors) < 1:
+            needed += 1
+    return needed
+
+
 def _draw_world_affordance_prompts(
     screen: pygame.Surface,
     sim: Simulation,
@@ -4656,6 +4664,17 @@ def run_pygame_viewer(
                         if anchor_index is not None:
                             items.append(
                                 ContextMenuItem(
+                                    label=f"Move route anchor #{anchor_index} here",
+                                    action="campaign_author_path_move_anchor",
+                                    payload={
+                                        "patrol_id": campaign_path_edit_state.patrol_id,
+                                        "anchor_index": anchor_index,
+                                        "position": {"x": float(world_x), "y": float(world_y)},
+                                    },
+                                )
+                            )
+                            items.append(
+                                ContextMenuItem(
                                     label=f"Delete route anchor #{anchor_index}",
                                     action="campaign_author_path_delete_anchor",
                                     payload={"patrol_id": campaign_path_edit_state.patrol_id, "anchor_index": anchor_index},
@@ -4711,6 +4730,17 @@ def run_pygame_viewer(
                                 world_y=world_y,
                             )
                             if anchor_index is not None:
+                                items.append(
+                                    ContextMenuItem(
+                                        label=f"Move route anchor #{anchor_index} here",
+                                        action="campaign_author_path_move_anchor",
+                                        payload={
+                                            "patrol_id": campaign_path_edit_state.patrol_id,
+                                            "anchor_index": anchor_index,
+                                            "position": {"x": float(world_x), "y": float(world_y)},
+                                        },
+                                    )
+                                )
                                 items.append(
                                     ContextMenuItem(
                                         label=f"Delete route anchor #{anchor_index}",
@@ -5209,16 +5239,22 @@ def run_pygame_viewer(
                             elif kind == "patrol":
                                 px = float(position.get("x", 0.0)) if isinstance(position, dict) else 0.0
                                 py = float(position.get("y", 0.0)) if isinstance(position, dict) else 0.0
+                                patrol_id = str(item.payload.get("patrol_id", ""))
+                                patrol_label = str(item.payload.get("label", "Authored Patrol"))
                                 controller.campaign_author_intent(
                                     "create_or_update_patrol",
-                                    patrol_id=str(item.payload.get("patrol_id", "")),
+                                    patrol_id=patrol_id,
                                     template_id=CORE_PLAYABLE_DEFAULT_PATROL_TEMPLATE,
-                                    label=str(item.payload.get("label", "Authored Patrol")),
+                                    label=patrol_label,
                                     position={"x": px, "y": py},
-                                    route_anchors=[{"x": px + 1.0, "y": py}],
+                                    route_anchors=[],
                                     tags=["authoring"],
                                 )
-                                status_message = "campaign authoring: patrol placement queued"
+                                campaign_path_edit_state = CampaignAuthoringPathEditState(patrol_id=patrol_id, label=patrol_label)
+                                status_message = (
+                                    f"campaign authoring: patrol placement queued ({patrol_label}); "
+                                    "path needed—right-click to add anchor(s), right-click anchor to move/delete, Esc to finish"
+                                )
                         elif item.action == "campaign_author_move" and isinstance(item.payload, dict):
                             target_kind = str(item.payload.get("kind", ""))
                             target_id = str(item.payload.get("id", ""))
@@ -5238,8 +5274,19 @@ def run_pygame_viewer(
                                 campaign_path_edit_state = CampaignAuthoringPathEditState(patrol_id=target_id, label=target_label)
                                 status_message = (
                                     f"campaign authoring: path edit for {target_label}; "
-                                    "right-click to add anchor, right-click anchor to delete, Esc to finish"
+                                    "right-click to add anchor, right-click anchor to move/delete, Esc to finish"
                                 )
+                        elif item.action == "campaign_author_path_move_anchor" and isinstance(item.payload, dict):
+                            patrol_id = str(item.payload.get("patrol_id", "")).strip()
+                            anchor_index = item.payload.get("anchor_index")
+                            position = item.payload.get("position", {})
+                            controller.campaign_author_intent(
+                                "move_patrol_anchor",
+                                patrol_id=patrol_id,
+                                anchor_index=anchor_index,
+                                position=position,
+                            )
+                            status_message = f"campaign authoring: patrol anchor move queued ({patrol_id} #{anchor_index})"
                         elif item.action == "campaign_author_move_commit" and isinstance(item.payload, dict):
                             target_kind = str(item.payload.get("kind", ""))
                             target_id = str(item.payload.get("id", ""))
@@ -5487,12 +5534,18 @@ def run_pygame_viewer(
             elif campaign_path_edit_state is not None:
                 frame_status_message = (
                     f"campaign authoring: editing path for {campaign_path_edit_state.label}; "
-                    "right-click to add anchor, right-click existing anchor to delete (Esc finishes)"
+                    "right-click to add anchor, right-click existing anchor to move/delete (Esc finishes)"
                 )
             elif not frame_status_message:
+                path_needed_count = _campaign_patrol_path_needed_count(sim)
+                path_needed_suffix = ""
+                if path_needed_count > 0:
+                    noun = "patrol" if path_needed_count == 1 else "patrols"
+                    path_needed_suffix = f" | {path_needed_count} {noun} path needed (add at least 1 route anchor)"
                 frame_status_message = (
                     "campaign authoring: right-click empty space to place town/dungeon/patrol; "
                     "right-click site/patrol to move/delete (hotkeys are debug fallback)"
+                    f"{path_needed_suffix}"
                 )
 
         screen.fill((17, 18, 25))
