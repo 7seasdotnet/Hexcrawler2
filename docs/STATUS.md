@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual right-click campaign-authoring smoke validation in the playable scene, then start bounded dungeon population/spawner authoring on the same authoritative seam.
+- **Next action:** Run manual right-click patrol authoring smoke (place -> auto path edit -> add/move/delete anchors -> visible movement -> save/load), then proceed to bounded dungeon population/spawner authoring.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -91,6 +91,8 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 ## Current Verification Commands (known working)
 - `PYTHONPATH=src pytest -q`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k right_click_campaign_map_does_not_raise_name_error`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "campaign_authoring_patrol_edit_menu_exposes_edit_path_entry or campaign_patrol_anchor_hit_detection_enables_move_or_delete_actions or campaign_patrol_path_needed_count_detects_missing_route_anchor"`
+- `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "campaign_patrol_authoring_create_move_delete_persists_save_load or campaign_patrol_route_following_moves_and_persists_save_load_hash"`
 - `PYTHONPATH=src pytest -q tests/test_play_launcher.py tests/test_pygame_viewer_cli.py -k "core_playable_default_scene_is_sparse_and_contains_single_patrol or play_launcher_default_core_playable_rebuilds_when_scene_is_missing or play_launcher_startup_truth_log_includes_scene_and_paths or viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites"`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_pygame_viewer_cli.py -k "reward_turn_in_loop_p5 or enter_or_e_generic_site_use_opens_town_services_via_generic_path or player_feedback_lines_show_proof_gain_turn_in_and_attack_resolution"`
 - `PYTHONPATH=src python - <<'PY' ... core_playable visible-loop smoke (home visibility + local attack intent + hostile incapacitation + reward turn-in + calendar tie-to-tick) ... PY`
@@ -115,9 +117,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Fixed a campaign-map right-click runtime crash by importing and using the canonical `CAMPAIGN_SPACE_ROLE` constant in viewer context-menu role gates (`src/hexcrawler/cli/pygame_viewer.py`).
-- Added a regression test that runs `run_pygame_viewer` with a synthetic campaign-map right-click event and asserts no `NameError` crash path (`tests/test_pygame_viewer_cli.py`).
-- Refreshed verification commands to include the new targeted viewer regression invocation (`docs/STATUS.md`).
+- Patrol placement now auto-enters right-click patrol path edit mode, path-edit messaging is explicit, and anchor context menu supports add/move/delete (campaign role only).
+- Patrol runtime movement now consumes authored patrol route anchors via deterministic simulation sync so authored patrols visibly move on the continuous campaign plane; empty routes remain explicit `path needed` idle state.
+- Added patrol authoring/movement/save-load regression coverage and refreshed verification commands for the bounded patrol correction pass.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

@@ -56,6 +56,12 @@ class ExplorationExecutionModule(RuleModule):
     _STATE_RECOVERY_COMPLETED_ACTION_UIDS = "recovery_completed_action_uids"
     _STATE_SCHEDULED_ACTION_UIDS = "scheduled_action_uids"
     _STATE_COMPLETED_ACTION_UIDS = "completed_action_uids"
+    _STATE_PATROL_ROUTE_INDEX_BY_ID = "patrol_route_index_by_id"
+    _PATROL_ROUTE_REACHED_EPSILON = 0.02
+    _PATROL_DEFAULT_SPEED_PER_TICK = 0.11
+
+    def on_tick_start(self, sim: Simulation, tick: int) -> None:
+        self._sync_campaign_patrol_runtime(sim)
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
         if command.command_type == ENTER_SAFE_HUB_INTENT_COMMAND_TYPE:
@@ -762,6 +768,7 @@ class ExplorationExecutionModule(RuleModule):
                     return
                 sim.state.world.campaign_patrols.pop(patrol_id, None)
                 sim.state.entities.pop(patrol_id, None)
+                self._set_patrol_route_index(sim, patrol_id=patrol_id, route_index=None)
                 self._schedule_campaign_author_outcome(
                     sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
                 )
@@ -798,6 +805,7 @@ class ExplorationExecutionModule(RuleModule):
                 anchors[anchor_index] = {"x": world_x, "y": world_y}
                 current_patrol.route_anchors = anchors
                 sim.state.world.campaign_patrols[patrol_id] = current_patrol
+                self._set_patrol_route_index(sim, patrol_id=patrol_id, route_index=0)
                 self._schedule_campaign_author_outcome(
                     sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
                 )
@@ -823,6 +831,7 @@ class ExplorationExecutionModule(RuleModule):
                 del anchors[anchor_index]
                 current_patrol.route_anchors = anchors
                 sim.state.world.campaign_patrols[patrol_id] = current_patrol
+                self._set_patrol_route_index(sim, patrol_id=patrol_id, route_index=0)
                 self._schedule_campaign_author_outcome(
                     sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
                 )
@@ -854,6 +863,7 @@ class ExplorationExecutionModule(RuleModule):
                     label=str(command.params.get("label", patrol_id)),
                     tags=[str(tag) for tag in command.params.get("tags", [])] if isinstance(command.params.get("tags", []), list) else [],
                 )
+                self._set_patrol_route_index(sim, patrol_id=patrol_id, route_index=0)
             else:
                 if current_patrol is None:
                     self._schedule_campaign_author_outcome(
@@ -862,6 +872,7 @@ class ExplorationExecutionModule(RuleModule):
                     return
                 current_patrol.spawn_position = {"x": world_x, "y": world_y}
                 sim.state.world.campaign_patrols[patrol_id] = current_patrol
+                self._set_patrol_route_index(sim, patrol_id=patrol_id, route_index=0)
             patrol_entity = sim.state.entities.get(patrol_id)
             if patrol_entity is None:
                 patrol_record = sim.state.world.campaign_patrols.get(patrol_id)
@@ -880,6 +891,7 @@ class ExplorationExecutionModule(RuleModule):
                 patrol_entity.position_x = world_x
                 patrol_entity.position_y = world_y
                 patrol_entity.space_id = "overworld"
+                patrol_entity.target_position = None
             self._schedule_campaign_author_outcome(
                 sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
             )
@@ -912,6 +924,91 @@ class ExplorationExecutionModule(RuleModule):
                 "details": dict(details or {}),
             },
         )
+
+    def _sync_campaign_patrol_runtime(self, sim: Simulation) -> None:
+        route_index_by_id = self._patrol_route_index_by_id(sim)
+        for patrol_id in sorted(sim.state.world.campaign_patrols):
+            if patrol_id == DEFAULT_DANGER_ENTITY_ID:
+                continue
+            patrol = sim.state.world.campaign_patrols[patrol_id]
+            entity = sim.state.entities.get(patrol_id)
+            if entity is None:
+                entity = EntityState(
+                    entity_id=patrol_id,
+                    position_x=float(patrol.spawn_position["x"]),
+                    position_y=float(patrol.spawn_position["y"]),
+                    speed_per_tick=self._PATROL_DEFAULT_SPEED_PER_TICK,
+                    template_id=patrol.template_id,
+                    stats={"faction_id": "hostile", "role": "patrol"},
+                    space_id=patrol.space_id,
+                )
+                sim.add_entity(entity)
+            entity.template_id = patrol.template_id
+            entity.space_id = patrol.space_id
+            entity.stats = dict(entity.stats) if isinstance(entity.stats, dict) else {}
+            entity.stats["faction_id"] = "hostile"
+            entity.stats["role"] = "patrol"
+            if entity.speed_per_tick <= 0:
+                entity.speed_per_tick = self._PATROL_DEFAULT_SPEED_PER_TICK
+            anchor_points = [anchor for anchor in patrol.route_anchors if isinstance(anchor, dict)]
+            if not anchor_points:
+                entity.target_position = None
+                route_index_by_id.pop(patrol_id, None)
+                continue
+            anchor_count = len(anchor_points)
+            current_index = route_index_by_id.get(patrol_id, 0)
+            if current_index >= anchor_count:
+                current_index = 0
+            target_anchor = anchor_points[current_index]
+            target_x = float(target_anchor["x"])
+            target_y = float(target_anchor["y"])
+            entity.target_position = (target_x, target_y)
+            if self._distance_sq(entity.position_x, entity.position_y, target_x, target_y) <= (self._PATROL_ROUTE_REACHED_EPSILON ** 2):
+                current_index = (current_index + 1) % anchor_count
+                next_anchor = anchor_points[current_index]
+                entity.target_position = (float(next_anchor["x"]), float(next_anchor["y"]))
+            route_index_by_id[patrol_id] = current_index
+        stale_ids = [patrol_id for patrol_id in route_index_by_id if patrol_id not in sim.state.world.campaign_patrols]
+        for patrol_id in stale_ids:
+            route_index_by_id.pop(patrol_id, None)
+        self._set_patrol_route_index_map(sim, route_index_by_id)
+
+    def _patrol_route_index_by_id(self, sim: Simulation) -> dict[str, int]:
+        state = sim.get_rules_state(self.name)
+        raw = state.get(self._STATE_PATROL_ROUTE_INDEX_BY_ID, {})
+        if not isinstance(raw, dict):
+            return {}
+        normalized: dict[str, int] = {}
+        for patrol_id, value in raw.items():
+            if not isinstance(patrol_id, str) or not patrol_id:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                continue
+            normalized[patrol_id] = value
+        return normalized
+
+    def _set_patrol_route_index(self, sim: Simulation, *, patrol_id: str, route_index: int | None) -> None:
+        route_index_by_id = self._patrol_route_index_by_id(sim)
+        if route_index is None:
+            route_index_by_id.pop(patrol_id, None)
+        else:
+            route_index_by_id[patrol_id] = max(0, int(route_index))
+        self._set_patrol_route_index_map(sim, route_index_by_id)
+
+    def _set_patrol_route_index_map(self, sim: Simulation, route_index_by_id: dict[str, int]) -> None:
+        state = dict(sim.get_rules_state(self.name))
+        state[self._STATE_PATROL_ROUTE_INDEX_BY_ID] = {
+            patrol_id: int(route_index_by_id[patrol_id])
+            for patrol_id in sorted(route_index_by_id)
+            if int(route_index_by_id[patrol_id]) >= 0
+        }
+        sim.set_rules_state(self.name, state)
+
+    @staticmethod
+    def _distance_sq(ax: float, ay: float, bx: float, by: float) -> float:
+        dx = ax - bx
+        dy = ay - by
+        return (dx * dx) + (dy * dy)
     def _handle_exit_safe_hub_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
         action_uid = f"safe_hub_exit:{command.tick}:{command_index}"
         entity = sim.state.entities.get(command.entity_id or "")

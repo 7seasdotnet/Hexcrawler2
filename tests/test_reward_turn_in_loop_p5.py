@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, CombatExecutionModule
 from hexcrawler.sim.campaign_danger import (
@@ -933,6 +935,49 @@ def test_campaign_patrol_authoring_create_move_delete_persists_save_load(tmp_pat
     )
     loaded.advance_ticks(2)
     assert "patrol:authoring_demo" not in loaded.state.world.campaign_patrols
+
+
+def test_campaign_patrol_route_following_moves_and_persists_save_load_hash(tmp_path: Path) -> None:
+    sim = _build_sim(seed=104)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = -1.0
+    scout.position_y = 0.5
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_patrol",
+                "patrol_id": "patrol:route_follow",
+                "template_id": "campaign_danger_patrol",
+                "position": {"x": -1.0, "y": 0.5},
+                "route_anchors": [{"x": -0.5, "y": 0.5}, {"x": -1.5, "y": 0.5}],
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    patrol = sim.state.entities["patrol:route_follow"]
+    start = (patrol.position_x, patrol.position_y)
+    sim.advance_ticks(8)
+    moved = (patrol.position_x, patrol.position_y)
+    assert moved != pytest.approx(start)
+
+    moving_hash_before = simulation_hash(sim)
+    save_path = tmp_path / "campaign_patrol_route_follow_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(str(save_path))
+    assert simulation_hash(loaded) == moving_hash_before
+
+    loaded.register_rule_module(LocalEncounterRequestModule())
+    loaded.register_rule_module(LocalEncounterInstanceModule())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.register_rule_module(ExplorationExecutionModule())
+    loaded_patrol = loaded.state.entities["patrol:route_follow"]
+    assert loaded.state.world.campaign_patrols["patrol:route_follow"].route_anchors == [{"x": -0.5, "y": 0.5}, {"x": -1.5, "y": 0.5}]
+    assert isinstance(loaded_patrol.position_x, float)
 
 
 def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_path: Path) -> None:

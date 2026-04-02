@@ -165,3 +165,30 @@
   - Do **not** keep one behavior path for seeded/hotkey objects and another for right-click-created objects.
   - Do **not** rely on in-memory-only UI state for patrol path correctness.
   - Do **not** special-case seeded defaults as undeletable in authoring mode.
+
+## 8) Patrol Can Be Placed but Does Not Move / Path Editor Exists but Is Undiscoverable
+- **Problem name:** Patrol authoring appears present but is not usable in live play.
+- **Symptom:** User can place patrol records but patrol does not visibly move, and path editing is hard to discover unless debug controls are remembered.
+- **Root cause:** Two gaps combined:
+  1. runtime patrol movement did not consume authored patrol route anchors as authoritative route truth;
+  2. path workflow required extra discovery steps (no automatic entry, no explicit “path needed” feedback, anchor move action missing from right-click flow).
+- **Relevant architecture / UX invariant:**
+  - Campaign authoring must be right-click/context-menu first.
+  - Authoring mutation remains `campaign_author_intent` only (viewer read-only for mutation).
+  - Campaign movement semantics are continuous-plane, not hex-step cadence.
+  - Authored patrol primitive and live patrol entity must remain one truth path.
+- **Known-good fix path:**
+  1. Keep patrol route truth in serialized `world.campaign_patrols[patrol_id].route_anchors`.
+  2. Add deterministic runtime patrol route-follow sync in simulation module (`ExplorationExecutionModule`) so live patrol entity follows authored anchors.
+  3. Auto-enter path edit mode after `Place Patrol Here`.
+  4. In path edit mode, right-click anchor exposes both move and delete; right-click space adds anchor.
+  5. If `route_anchors` is empty, patrol idles and UI explicitly reports `path needed`.
+- **Required regression tests:**
+  - Right-click patrol placement creates authored patrol/runtime patrol and enters obvious path workflow (`Edit Path` available and placement path-mode messaging present).
+  - Path editing supports add/move/delete anchor operations through right-click actions.
+  - Patrol movement follows authored route anchors continuously on campaign plane.
+  - Save/load keeps patrol route and movement determinism stable (hash-stable at load point).
+- **Do not regress by doing X:**
+  - Do **not** reintroduce path editing as hidden hotkey-only behavior.
+  - Do **not** maintain a dead authored patrol route record that runtime movement ignores.
+  - Do **not** define patrol movement cadence as hex stepping.
