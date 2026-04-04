@@ -115,3 +115,46 @@ Hotkeys remain available only as hidden/debug fallback and are **not** canonical
 - nested-grid/zoom implementation
 - isometric renderer changes
 - combat architecture redesign
+
+## Authored Site Activation Bridge (Part 2B)
+
+### Scope and role boundary
+- Space role coverage in this pass: **both**
+  - campaign role: authored site placement/move/delete + entry affordance
+  - local role: tiny linked proof spaces for authored town/dungeon sites
+- This pass is still bounded: no population authoring, no full town/dungeon generation.
+
+### Canonical authored linkage model
+- Campaign authored town/dungeon sites now carry explicit `entrance` linkage:
+  - `site_id`
+  - `site_kind` (`town` or `dungeon_entrance`)
+  - `entrance.target_space_id` (deterministic linked local space id)
+  - `entrance.spawn` (entry anchor in linked local space)
+- Linked local space ids are deterministic: `local_site:{site_id}`.
+
+### Creation timing choice
+- **Chosen:** eager creation on site placement (`create_or_update_site`).
+- Why: deterministic inspectability/persistence, no first-entry special case, simpler delete semantics, stable save/load/hash behavior.
+
+### Enter workflow (right-click canonical, Enter/E fallback)
+- Right-click empty campaign space:
+  - `Place Town Here`
+  - `Place Dungeon Entrance Here`
+- Right-click authored town/dungeon:
+  - `Enter`
+  - `Move`
+  - `Delete`
+- Enter uses existing authoritative `enter_site` command path; viewer remains command-only.
+
+### Minimal linked local proof spaces
+- New authored `town` site: tiny local safe proof hub with one starter structure shell/opening.
+- New authored `dungeon_entrance` site: tiny local entry chamber proof shell/opening.
+- Both linked spaces enable existing `local_structure_author_intent` workflow for proof authoring continuation.
+
+### Delete semantics (explicit and deterministic)
+- **Cascading delete is canonical in this pass.**
+- Deleting authored campaign site also deletes its linked authored local space (`local_site:{site_id}`), except protected non-authored fixed spaces (for example Greybridge safe hub).
+
+### Why this pass comes before population authoring
+- It closes the dead-marker bottleneck first: authored sites are now real enterable content anchors.
+- Next pass can focus on local spawner/population authoring inside linked spaces without revisiting site-link plumbing.

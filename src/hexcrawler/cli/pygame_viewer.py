@@ -2987,9 +2987,15 @@ def _campaign_authoring_placement_items(world_x: float, world_y: float) -> list[
 def _campaign_authoring_edit_items(target: dict[str, str]) -> list[ContextMenuItem]:
     items = [
         ContextMenuItem(label=f"Campaign Authoring: {target['label']}", action="noop"),
-        ContextMenuItem(label="Move", action="campaign_author_move", payload=target),
-        ContextMenuItem(label="Delete", action="campaign_author_delete", payload=target),
     ]
+    if target.get("kind") == "site":
+        items.append(ContextMenuItem(label="Enter", action="enter_site", payload=target.get("id")))
+    items.extend(
+        [
+            ContextMenuItem(label="Move", action="campaign_author_move", payload=target),
+            ContextMenuItem(label="Delete", action="campaign_author_delete", payload=target),
+        ]
+    )
     if target.get("kind") == "patrol":
         items.append(ContextMenuItem(label="Edit Path", action="campaign_author_edit_path", payload=target))
     return items
