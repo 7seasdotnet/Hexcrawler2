@@ -219,3 +219,28 @@
   - Do **not** treat authored anchors as the only loop set while hiding spawn route participation.
   - Do **not** leave patrol loop semantics undocumented/implicit in UX copy.
   - Do **not** move patrol routes via viewer-only mutation or non-serialized module memory.
+
+## 10) Authored Campaign Site Exists but Is a Dead Marker (Not Enterable / Not Linked)
+- **Problem name:** Authored site dead-marker bridge gap.
+- **Symptom:** Right-click placed towns/dungeon entrances appear on campaign map but cannot reliably enter a linked local space for continued authoring.
+- **Root cause:** `create_or_update_site` authored campaign markers without deterministic authored site -> local space linkage (`entrance.target_space_id`) and without explicit local-space lifecycle semantics on delete.
+- **Relevant architecture / UX invariant:**
+  - Right-click/context-menu is canonical campaign spatial interaction hierarchy.
+  - Campaign/local role separation must stay explicit; transitions must use authoritative command seams.
+  - Persistent linkage state must be serialized/hash-covered and deterministic.
+- **Known-good fix path:**
+  1. On authored town/dungeon placement, eagerly create deterministic linked local space (`local_site:{site_id}`).
+  2. Persist explicit site entrance link (`target_space_id`, `spawn`) on the campaign site record.
+  3. Expose right-click site actions as `Enter / Move / Delete`.
+  4. Enable existing `local_structure_author_intent` workflow inside linked local proof spaces.
+  5. Use deterministic cascading delete: deleting authored campaign site also deletes its linked authored local space.
+- **Required regression tests:**
+  - Authored town create -> linked local space exists -> `enter_site` transitions successfully.
+  - Authored dungeon create -> linked local space exists -> `enter_site` transitions successfully.
+  - Move site preserves link; delete site cascades linked local space delete.
+  - Local structure authoring works inside linked local proof space.
+  - Save/load/hash stability for site/local linkage.
+- **Do not regress by doing X:**
+  - Do **not** leave authored town/dungeon sites without explicit entrance linkage.
+  - Do **not** add viewer-side direct mutation for entry/delete lifecycle.
+  - Do **not** mark this as “full town/dungeon authoring”; this is only the activation bridge.

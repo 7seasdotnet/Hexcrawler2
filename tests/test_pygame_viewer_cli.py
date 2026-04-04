@@ -225,14 +225,17 @@ def test_campaign_authoring_empty_space_menu_exposes_right_click_placement_actio
     assert town_payload["position"] == {"x": 2.0, "y": -1.0}
 
 
-def test_campaign_authoring_existing_object_menu_exposes_move_delete_actions() -> None:
+def test_campaign_authoring_existing_object_menu_exposes_enter_move_delete_actions() -> None:
     target = {"kind": "site", "id": "authoring_town_0_0", "label": "Authored Town"}
 
     items = _campaign_authoring_edit_items(target)
     labels = [item.label for item in items]
 
+    assert "Enter" in labels
     assert "Move" in labels
     assert "Delete" in labels
+    enter_item = next(item for item in items if item.action == "enter_site")
+    assert enter_item.payload == "authoring_town_0_0"
     move_item = next(item for item in items if item.action == "campaign_author_move")
     assert move_item.payload == target
 

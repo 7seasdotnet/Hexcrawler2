@@ -7,7 +7,11 @@ from typing import Any
 
 from hexcrawler.sim.core import EntityState, SimCommand, SimEvent, Simulation
 from hexcrawler.sim.campaign_danger import DEFAULT_DANGER_ENTITY_ID
-from hexcrawler.sim.greybridge_layout import compile_greybridge_overlay, normalize_structure_primitives
+from hexcrawler.sim.greybridge_layout import (
+    compile_greybridge_overlay,
+    compile_structure_primitives,
+    normalize_structure_primitives,
+)
 from hexcrawler.sim.location import LocationRef, OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.movement import world_xy_to_axial
 from hexcrawler.sim.rules import RuleModule
@@ -41,6 +45,7 @@ GREYBRIDGE_PATROL_RESPAWN_EVENT_TYPE = "greybridge_patrol_respawn"
 GREYBRIDGE_PATROL_SPAWN_X = -2.60
 GREYBRIDGE_PATROL_SPAWN_Y = 1.90
 GREYBRIDGE_SAFE_HUB_GATE_ID = "town_gate_exit"
+AUTHORED_SITE_LOCAL_SPACE_PREFIX = "local_site:"
 LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE = "local_structure_author_intent"
 LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE = "local_structure_author_outcome"
 CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE = "campaign_author_intent"
@@ -59,6 +64,74 @@ class ExplorationExecutionModule(RuleModule):
     _STATE_PATROL_ROUTE_INDEX_BY_ID = "patrol_route_index_by_id"
     _PATROL_ROUTE_REACHED_EPSILON = 0.02
     _PATROL_DEFAULT_SPEED_PER_TICK = 0.11
+
+    @staticmethod
+    def _authored_site_local_space_id(site_id: str) -> str:
+        cleaned = "".join(ch if (ch.isalnum() or ch in {"_", "-", ":"}) else "_" for ch in site_id)
+        return f"{AUTHORED_SITE_LOCAL_SPACE_PREFIX}{cleaned}"
+
+    def _create_or_update_authored_site_local_space(
+        self,
+        sim: Simulation,
+        *,
+        site_id: str,
+        site_kind: str,
+    ) -> tuple[str, dict[str, int]]:
+        from hexcrawler.sim.world import SpaceState
+
+        local_space_id = self._authored_site_local_space_id(site_id)
+        default_spawn = {"x": 2, "y": 4}
+        local_space = sim.state.world.spaces.get(local_space_id)
+        if local_space is None:
+            if site_kind == "town":
+                width, height = 12, 9
+                structure_rows = [
+                    {
+                        "structure_id": "town_proof_shell",
+                        "label": "Town Proof Hub",
+                        "room_id": "town_hub",
+                        "bounds": {"x": 3, "y": 2, "width": 6, "height": 5},
+                        "openings": (
+                            {"opening_id": "town_gate", "kind": "gate_portal", "cell": {"x": 3, "y": 4}},
+                        ),
+                        "tags": ("authoring_proof", "town"),
+                    }
+                ]
+            else:
+                width, height = 10, 8
+                structure_rows = [
+                    {
+                        "structure_id": "dungeon_proof_chamber",
+                        "label": "Dungeon Proof Chamber",
+                        "room_id": "entry_chamber",
+                        "bounds": {"x": 3, "y": 2, "width": 5, "height": 4},
+                        "openings": (
+                            {"opening_id": "dungeon_entry", "kind": "opening", "cell": {"x": 3, "y": 4}},
+                        ),
+                        "tags": ("authoring_proof", "dungeon"),
+                    }
+                ]
+            compiled = compile_structure_primitives(structure_rows)
+            local_space = SpaceState(
+                space_id=local_space_id,
+                topology_type=SQUARE_GRID_TOPOLOGY,
+                role="local",
+                topology_params={
+                    "width": width,
+                    "height": height,
+                    "origin": {"x": 0, "y": 0},
+                    "blocked_cells": [{"x": int(x), "y": int(y)} for x, y in compiled["blocked_cells"]],
+                },
+            )
+            local_space.structure_primitives = json.loads(json.dumps(compiled["structure_rows"]))
+            sim.state.world.spaces[local_space_id] = local_space
+        else:
+            params = local_space.topology_params if isinstance(local_space.topology_params, dict) else {}
+            if "blocked_cells" not in params:
+                params["blocked_cells"] = []
+            local_space.topology_params = params
+        spawn_coord = default_spawn
+        return local_space_id, {"x": int(spawn_coord.get("x", 0)), "y": int(spawn_coord.get("y", 0))}
 
     def on_tick_start(self, sim: Simulation, tick: int) -> None:
         self._sync_campaign_patrol_runtime(sim)
@@ -509,19 +582,29 @@ class ExplorationExecutionModule(RuleModule):
                 sim, tick=command.tick, entity_id=command.entity_id, action_uid=action_uid, applied=False, reason="unknown_entity"
             )
             return
-        if entity.space_id != GREYBRIDGE_SAFE_HUB_SPACE_ID:
+        active_space = sim.state.world.spaces.get(entity.space_id)
+        if active_space is None:
             self._schedule_local_structure_author_outcome(
-                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="greybridge_local_required"
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="local_space_missing"
             )
             return
-        safe_hub = sim.state.world.spaces.get(GREYBRIDGE_SAFE_HUB_SPACE_ID)
-        if safe_hub is None:
+        active_role = str(getattr(active_space, "role", ""))
+        if active_role != "local":
             self._schedule_local_structure_author_outcome(
-                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="safe_hub_missing"
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="local_space_required"
             )
             return
-        params = safe_hub.topology_params if isinstance(safe_hub.topology_params, dict) else {}
-        structures = normalize_structure_primitives(safe_hub.structure_primitives)
+        local_author_enabled = bool(
+            entity.space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID
+            or entity.space_id.startswith(AUTHORED_SITE_LOCAL_SPACE_PREFIX)
+        )
+        if not local_author_enabled:
+            self._schedule_local_structure_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="local_structure_authoring_not_enabled"
+            )
+            return
+        params = active_space.topology_params if isinstance(active_space.topology_params, dict) else {}
+        structures = normalize_structure_primitives(active_space.structure_primitives)
         mutable = [dict(row) for row in structures]
         operation = str(command.params.get("operation", ""))
         structure_id = str(command.params.get("structure_id", "")).strip()
@@ -614,10 +697,10 @@ class ExplorationExecutionModule(RuleModule):
             )
             return
 
-        compiled = compile_greybridge_overlay(mutable)
-        safe_hub.structure_primitives = json.loads(json.dumps(compiled["structure_rows"]))
+        compiled = compile_structure_primitives(mutable)
+        active_space.structure_primitives = json.loads(json.dumps(compiled["structure_rows"]))
         params["blocked_cells"] = [{"x": int(x), "y": int(y)} for x, y in compiled["blocked_cells"]]
-        safe_hub.topology_params = params
+        active_space.topology_params = params
         self._schedule_local_structure_author_outcome(
             sim,
             tick=command.tick,
@@ -677,11 +760,20 @@ class ExplorationExecutionModule(RuleModule):
                 )
                 return
             if operation == "delete_site":
-                if site_id not in sim.state.world.sites:
+                current_site = sim.state.world.sites.get(site_id)
+                if current_site is None:
                     self._schedule_campaign_author_outcome(
                         sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="site_not_found", details=details
                     )
                     return
+                linked_space_id = (
+                    str(current_site.entrance.get("target_space_id", ""))
+                    if isinstance(current_site.entrance, dict)
+                    else ""
+                )
+                if linked_space_id and linked_space_id in sim.state.world.spaces and linked_space_id != GREYBRIDGE_SAFE_HUB_SPACE_ID:
+                    sim.state.world.spaces.pop(linked_space_id, None)
+                details["linked_space_delete"] = linked_space_id if linked_space_id else None
                 sim.state.world.sites.pop(site_id, None)
                 self._schedule_campaign_author_outcome(
                     sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
@@ -717,10 +809,18 @@ class ExplorationExecutionModule(RuleModule):
                     tags.extend(["safe", "home"])
                 if current is not None:
                     tags = sorted(set(list(current.tags) + tags))
+                entrance = current.entrance if current is not None else None
+                if site_kind in {"town", "dungeon_entrance"}:
+                    linked_space_id, spawn = self._create_or_update_authored_site_local_space(sim, site_id=site_id, site_kind=site_kind)
+                    entrance = {"target_space_id": linked_space_id, "spawn": spawn}
+                    details["linked_space_id"] = linked_space_id
+                elif site_kind == "safe_home" and current is not None:
+                    entrance = current.entrance
                 site_kwargs: dict[str, Any] = {}
                 if current is not None:
-                    site_kwargs["entrance"] = current.entrance
                     site_kwargs["site_state"] = current.site_state
+                if entrance is not None:
+                    site_kwargs["entrance"] = entrance
                 sim.state.world.sites[site_id] = SiteRecord(
                     site_id=site_id,
                     site_type=site_type,

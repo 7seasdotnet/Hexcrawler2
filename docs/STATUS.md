@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual patrol-loop usability smoke (right-click place patrol -> add anchors -> verify visible cyclic loop including spawn anchor 0 -> save/load), then proceed to bounded dungeon population/spawner authoring.
+- **Next action:** Run manual authored-site activation smoke (right-click place town/dungeon -> Enter linked local proof space -> author local structure -> delete cascade -> save/load), then proceed to bounded local population/spawner authoring inside linked spaces.
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -93,6 +93,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k right_click_campaign_map_does_not_raise_name_error`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "campaign_authoring_patrol_edit_menu_exposes_edit_path_entry or campaign_patrol_anchor_hit_detection_enables_move_or_delete_actions or campaign_patrol_path_needed_count_detects_missing_route_anchor"`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "campaign_patrol_authoring_create_move_delete_persists_save_load or campaign_patrol_route_following_moves_and_persists_save_load_hash"`
+- `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "campaign_site_authoring_create_move_delete_persists_save_load or campaign_dungeon_authoring_create_move_delete_persists_save_load or local_structure_authoring_works_inside_authored_site_linked_local_space"`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "zero_added_anchors_stays_idle_with_no_target or one_anchor_loops_between_spawn_and_anchor or multi_anchor_route_wraps_back_to_spawn or route_progression_save_load_matches_uninterrupted_hash"`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "campaign_patrol_route_points_include_spawn_as_anchor_zero_then_authored_order or campaign_patrol_path_needed_count_detects_missing_route_anchor"`
 - `PYTHONPATH=src pytest -q tests/test_play_launcher.py tests/test_pygame_viewer_cli.py -k "core_playable_default_scene_is_sparse_and_contains_single_patrol or play_launcher_default_core_playable_rebuilds_when_scene_is_missing or play_launcher_startup_truth_log_includes_scene_and_paths or viewer_runtime_controller_new_simulation_preserves_core_playable_patrol_and_sites"`
@@ -119,9 +120,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Patrol loop semantics are now explicit and canonical in simulation: implicit route anchor `0` is patrol spawn, authored anchors append after spawn, and route progression wraps cyclically back to spawn.
-- Campaign route readability now includes visible patrol route overlays (spawn marker, anchor indices/order, polyline, and explicit loop closure marker), plus explicit no-path guidance: `Add at least 1 route anchor to start loop.`
-- Added bounded regression coverage for zero/one/multi-anchor loop semantics, route-order helper behavior, and save/load/hash-stable route progression; refreshed verification commands accordingly.
+- Authored campaign town/dungeon site placement now eagerly creates explicit deterministic linked local proof spaces (`local_site:{site_id}`), with serialized `SiteRecord.entrance` linkage used by `enter_site`.
+- Right-click authored site menu now exposes `Enter / Move / Delete` (campaign canonical context flow), and linked local spaces accept existing `local_structure_author_intent` workflow for proof authoring.
+- Site delete semantics are now explicit cascading delete for linked authored local spaces; added regression tests + updated bridge/problem docs for dead-marker prevention.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

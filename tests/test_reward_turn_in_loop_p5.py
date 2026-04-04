@@ -11,7 +11,7 @@ from hexcrawler.sim.campaign_danger import (
     CampaignDangerModule,
     DEFAULT_DANGER_ENTITY_ID,
 )
-from hexcrawler.sim.core import EntityState, SimCommand, Simulation
+from hexcrawler.sim.core import EntityState, SITE_ENTER_OUTCOME_EVENT_TYPE, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     END_LOCAL_ENCOUNTER_INTENT,
     ENCOUNTER_RESOLVE_REQUEST_EVENT_TYPE,
@@ -802,6 +802,27 @@ def test_campaign_site_authoring_create_move_delete_persists_save_load(tmp_path:
     assert town is not None
     assert town.site_type == "town"
     assert town.location.get("campaign_anchor") == {"x": -1.0, "y": 2.0}
+    assert isinstance(town.entrance, dict)
+    linked_space_id = str(town.entrance.get("target_space_id", ""))
+    assert linked_space_id == "local_site:authoring_town_site"
+    assert linked_space_id in sim.state.world.spaces
+    assert sim.state.world.spaces[linked_space_id].role == "local"
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="enter_site",
+            params={"site_id": "authoring_town_site"},
+        )
+    )
+    sim.advance_ticks(1)
+    site_enter = _trace(sim, SITE_ENTER_OUTCOME_EVENT_TYPE)[-1]
+    assert site_enter["params"]["outcome"] == "applied"
+    assert sim.state.entities["scout"].space_id == linked_space_id
+    sim.state.entities["scout"].space_id = "overworld"
+    sim.state.entities["scout"].position_x = -1.0
+    sim.state.entities["scout"].position_y = 2.0
 
     sim.append_command(
         SimCommand(
@@ -818,6 +839,7 @@ def test_campaign_site_authoring_create_move_delete_persists_save_load(tmp_path:
     sim.advance_ticks(2)
     moved = sim.state.world.sites["authoring_town_site"]
     assert moved.location.get("campaign_anchor") == {"x": 1.5, "y": -0.5}
+    assert moved.entrance == {"target_space_id": linked_space_id, "spawn": {"x": 2, "y": 4}}
 
     save_path = tmp_path / "campaign_site_authoring_save.json"
     save_game_json(save_path, sim.state.world, sim)
@@ -825,6 +847,8 @@ def test_campaign_site_authoring_create_move_delete_persists_save_load(tmp_path:
     _, loaded = load_game_json(str(save_path))
     assert world_hash(loaded.state.world) == before_world_hash
     assert loaded.state.world.sites["authoring_town_site"].location.get("campaign_anchor") == {"x": 1.5, "y": -0.5}
+    assert loaded.state.world.sites["authoring_town_site"].entrance == {"target_space_id": linked_space_id, "spawn": {"x": 2, "y": 4}}
+    assert linked_space_id in loaded.state.world.spaces
 
     loaded.register_rule_module(LocalEncounterRequestModule())
     loaded.register_rule_module(LocalEncounterInstanceModule())
@@ -840,6 +864,7 @@ def test_campaign_site_authoring_create_move_delete_persists_save_load(tmp_path:
     )
     loaded.advance_ticks(2)
     assert "authoring_town_site" not in loaded.state.world.sites
+    assert linked_space_id not in loaded.state.world.spaces
 
 
 def test_campaign_patrol_authoring_create_move_delete_persists_save_load(tmp_path: Path) -> None:
@@ -1153,6 +1178,27 @@ def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_pa
     assert dungeon is not None
     assert dungeon.site_type == "dungeon_entrance"
     assert dungeon.location.get("campaign_anchor") == {"x": 3.0, "y": -1.0}
+    assert isinstance(dungeon.entrance, dict)
+    linked_space_id = str(dungeon.entrance.get("target_space_id", ""))
+    assert linked_space_id == "local_site:authoring_dungeon_site"
+    assert linked_space_id in sim.state.world.spaces
+    assert sim.state.world.spaces[linked_space_id].role == "local"
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="enter_site",
+            params={"site_id": "authoring_dungeon_site"},
+        )
+    )
+    sim.advance_ticks(1)
+    site_enter = _trace(sim, SITE_ENTER_OUTCOME_EVENT_TYPE)[-1]
+    assert site_enter["params"]["outcome"] == "applied"
+    assert sim.state.entities["scout"].space_id == linked_space_id
+    sim.state.entities["scout"].space_id = "overworld"
+    sim.state.entities["scout"].position_x = 3.0
+    sim.state.entities["scout"].position_y = -1.0
 
     sim.append_command(
         SimCommand(
@@ -1169,6 +1215,7 @@ def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_pa
     sim.advance_ticks(2)
     moved = sim.state.world.sites["authoring_dungeon_site"]
     assert moved.location.get("campaign_anchor") == {"x": 2.25, "y": -2.5}
+    assert moved.entrance == {"target_space_id": linked_space_id, "spawn": {"x": 2, "y": 4}}
 
     before_hash = simulation_hash(sim)
     save_path = tmp_path / "campaign_dungeon_authoring_save.json"
@@ -1176,6 +1223,8 @@ def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_pa
     _, loaded = load_game_json(str(save_path))
     assert simulation_hash(loaded) == before_hash
     assert loaded.state.world.sites["authoring_dungeon_site"].location.get("campaign_anchor") == {"x": 2.25, "y": -2.5}
+    assert loaded.state.world.sites["authoring_dungeon_site"].entrance == {"target_space_id": linked_space_id, "spawn": {"x": 2, "y": 4}}
+    assert linked_space_id in loaded.state.world.spaces
 
     loaded.register_rule_module(LocalEncounterRequestModule())
     loaded.register_rule_module(LocalEncounterInstanceModule())
@@ -1191,6 +1240,57 @@ def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_pa
     )
     loaded.advance_ticks(2)
     assert "authoring_dungeon_site" not in loaded.state.world.sites
+    assert linked_space_id not in loaded.state.world.spaces
+
+
+def test_local_structure_authoring_works_inside_authored_site_linked_local_space() -> None:
+    sim = _build_sim(seed=58)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = -2.0
+    scout.position_y = 1.0
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_site",
+                "site_id": "authoring_town_structures",
+                "site_kind": "town",
+                "label": "Town Structures",
+                "position": {"x": -2.0, "y": 1.0},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type="enter_site",
+            params={"site_id": "authoring_town_structures"},
+        )
+    )
+    sim.advance_ticks(1)
+    linked_space_id = "local_site:authoring_town_structures"
+    assert sim.state.entities["scout"].space_id == linked_space_id
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_rect",
+                "structure_id": "linked_author_shell",
+                "label": "Linked Author Shell",
+                "bounds": {"x": 1, "y": 1, "width": 3, "height": 3},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    linked_space = sim.state.world.spaces[linked_space_id]
+    assert any(row.get("structure_id") == "linked_author_shell" for row in linked_space.structure_primitives)
 
 
 def test_patrol_loop_recontacts_after_leave_return_and_replacement_without_wedge() -> None:
