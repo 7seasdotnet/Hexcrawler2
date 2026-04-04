@@ -898,6 +898,18 @@ class Simulation:
 
         target_space = self.state.world.spaces[target_space_id]
         spawn = entrance.get("spawn") if isinstance(entrance.get("spawn"), dict) else None
+        if target_space.topology_type == "square_grid":
+            transition_points = getattr(target_space, "local_transition_points", [])
+            if isinstance(transition_points, list):
+                for row in sorted((point for point in transition_points if isinstance(point, dict)), key=lambda point: str(point.get("point_id", ""))):
+                    if str(row.get("point_kind", "")) != "entry_anchor":
+                        continue
+                    if not bool(row.get("enabled", True)):
+                        continue
+                    coord = row.get("coord")
+                    if isinstance(coord, dict):
+                        spawn = dict(coord)
+                        break
         target_coord = spawn if spawn is not None else target_space.default_spawn_coord()
 
         transition_command = SimCommand(

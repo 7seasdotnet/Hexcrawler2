@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual authored-site activation smoke (right-click place town/dungeon -> Enter linked local proof space -> author local structure -> delete cascade -> save/load), then proceed to bounded local population/spawner authoring inside linked spaces.
+- **Next action:** Run manual right-click local dungeon smoke (place dungeon entrance -> enter linked local space -> place/move/delete hostile + entry/exit markers -> extract via authored point -> save/load re-entry verification).
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -80,6 +80,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Local manual loot intent currently executed through rule-module command/event seam: `loot_local_proof_intent`.
 - Local structure authoring proof intent currently executed through rule-module command/event seam: `local_structure_author_intent` (Greybridge local safe-hub only; create/move-opening/remove/delete bounded operations).
 - Campaign authoring bridge intent currently executed through rule-module command/event seam: `campaign_author_intent` (campaign overworld only; create/move/delete town+dungeon sites and create/move/delete patrol primitives/anchors, including patrol anchor delete).
+- Local dungeon authoring bridge intent currently executed through rule-module command/event seam: `local_dungeon_author_intent` (authored linked local-site spaces only; hostile spawner + transition point place/move/delete/use operations).
 - Unknown/unsupported intents must continue to be ignored deterministically with recorded outcomes.
 
 ## What Exists (folders / entry points)
@@ -110,6 +111,7 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_soak_bounds_slice.py tests/test_soak_audit_slice.py`
 - `PYTHONPATH=src python - <<'PY' ... collect_soak_metrics headless/viewer 20000-tick comparison ... PY`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py src/hexcrawler/sim/exploration.py src/hexcrawler/sim/encounters.py tests/test_reward_turn_in_loop_p5.py tests/test_runtime_profiles.py tests/test_exploration_execution_module.py`
+- `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "local_dungeon_authoring_spawner_and_points_create_move_delete_persist_save_load or local_dungeon_authored_spawner_materialization_and_return_to_origin or campaign_dungeon_authoring_create_move_delete_persists_save_load"`
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_render_interpolation.py tests/test_pygame_viewer_runtime.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "greybridge_overlay or greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open or greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable"`
@@ -120,9 +122,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Authored campaign town/dungeon site placement now eagerly creates explicit deterministic linked local proof spaces (`local_site:{site_id}`), with serialized `SiteRecord.entrance` linkage used by `enter_site`.
-- Right-click authored site menu now exposes `Enter / Move / Delete` (campaign canonical context flow), and linked local spaces accept existing `local_structure_author_intent` workflow for proof authoring.
-- Site delete semantics are now explicit cascading delete for linked authored local spaces; added regression tests + updated bridge/problem docs for dead-marker prevention.
+- Added bounded authored dungeon local bridge primitives: persistent `local_hostile_spawners[]` and `local_transition_points[]` (entry/extraction/return) in local space state, including save/load/hash coverage and deterministic default dungeon entry+return markers.
+- Added authoritative `local_dungeon_author_intent` operations and viewer right-click local workflows for place/move/delete/use of hostile spawners and transition points, while preserving viewer read-only mutation rules.
+- Added regression coverage + bridge docs for authored dungeon end-to-end testability (author -> enter -> place hostile/points -> extraction return -> save/load persistence) without expanding into full dungeon systems.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.

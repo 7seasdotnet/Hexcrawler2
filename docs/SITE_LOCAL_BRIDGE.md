@@ -26,3 +26,10 @@ Make authored campaign towns and dungeon entrances first-class enterable sites i
 - Adds only tiny proof spaces (town proof hub / dungeon proof chamber).
 - Does not implement population authoring, procedural generation, or full editor framework.
 - Unblocks the next bounded pass: local spawner/population authoring inside linked spaces.
+
+## Local Population + Extraction Authoring Bridge (follow-up)
+- Space role coverage in this follow-up: **local role** (authored dungeon-linked local spaces).
+- Added explicit authored local hostile spawner primitive and authored local transition-point primitive (entry/extraction/return markers).
+- Right-click local authoring now supports place/move/delete for these primitives through authoritative local dungeon author intents.
+- Return-to-origin in this bounded pass is explicit: authored extraction returns to the linked campaign dungeon entrance anchor.
+- This remains bounded proof scope, not a full dungeon traversal/system framework.

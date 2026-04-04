@@ -48,8 +48,19 @@ GREYBRIDGE_SAFE_HUB_GATE_ID = "town_gate_exit"
 AUTHORED_SITE_LOCAL_SPACE_PREFIX = "local_site:"
 LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE = "local_structure_author_intent"
 LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE = "local_structure_author_outcome"
+LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE = "local_dungeon_author_intent"
+LOCAL_DUNGEON_AUTHOR_OUTCOME_EVENT_TYPE = "local_dungeon_author_outcome"
 CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE = "campaign_author_intent"
 CAMPAIGN_AUTHOR_OUTCOME_EVENT_TYPE = "campaign_author_outcome"
+LOCAL_HOSTILE_DEFAULT_TEMPLATE_ID = "encounter_hostile_v1"
+LOCAL_DUNGEON_POINT_KIND_ENTRY = "entry_anchor"
+LOCAL_DUNGEON_POINT_KIND_EXTRACTION = "extraction_exit"
+LOCAL_DUNGEON_POINT_KIND_RETURN = "return_to_origin_exit"
+LOCAL_DUNGEON_POINT_KINDS = {
+    LOCAL_DUNGEON_POINT_KIND_ENTRY,
+    LOCAL_DUNGEON_POINT_KIND_EXTRACTION,
+    LOCAL_DUNGEON_POINT_KIND_RETURN,
+}
 
 
 class ExplorationExecutionModule(RuleModule):
@@ -124,17 +135,81 @@ class ExplorationExecutionModule(RuleModule):
                 },
             )
             local_space.structure_primitives = json.loads(json.dumps(compiled["structure_rows"]))
+            if site_kind == "dungeon_entrance":
+                local_space.local_transition_points = self._default_dungeon_transition_points()
             sim.state.world.spaces[local_space_id] = local_space
         else:
             params = local_space.topology_params if isinstance(local_space.topology_params, dict) else {}
             if "blocked_cells" not in params:
                 params["blocked_cells"] = []
             local_space.topology_params = params
+            if site_kind == "dungeon_entrance":
+                self._ensure_default_dungeon_transition_points(local_space)
+        if site_kind == "dungeon_entrance":
+            default_spawn = self._entry_anchor_coord_for_space(local_space)
         spawn_coord = default_spawn
         return local_space_id, {"x": int(spawn_coord.get("x", 0)), "y": int(spawn_coord.get("y", 0))}
 
+    @staticmethod
+    def _default_dungeon_transition_points() -> list[dict[str, object]]:
+        return [
+            {
+                "point_id": "entry_anchor_default",
+                "coord": {"x": 2, "y": 4},
+                "point_kind": LOCAL_DUNGEON_POINT_KIND_ENTRY,
+                "enabled": True,
+                "label": "Dungeon Entry",
+                "tags": ["authoring_default"],
+            },
+            {
+                "point_id": "return_to_origin_default",
+                "coord": {"x": 2, "y": 6},
+                "point_kind": LOCAL_DUNGEON_POINT_KIND_RETURN,
+                "enabled": True,
+                "label": "Return to Origin",
+                "tags": ["authoring_default"],
+            },
+        ]
+
+    def _ensure_default_dungeon_transition_points(self, space: Any) -> None:
+        existing = [
+            dict(row)
+            for row in getattr(space, "local_transition_points", [])
+            if isinstance(row, dict)
+        ]
+        has_entry = any(str(row.get("point_kind", "")) == LOCAL_DUNGEON_POINT_KIND_ENTRY for row in existing)
+        has_return = any(str(row.get("point_kind", "")) == LOCAL_DUNGEON_POINT_KIND_RETURN for row in existing)
+        if has_entry and has_return:
+            space.local_transition_points = existing
+            return
+        for row in self._default_dungeon_transition_points():
+            if row["point_kind"] == LOCAL_DUNGEON_POINT_KIND_ENTRY and has_entry:
+                continue
+            if row["point_kind"] == LOCAL_DUNGEON_POINT_KIND_RETURN and has_return:
+                continue
+            existing.append(dict(row))
+        space.local_transition_points = existing
+
+    @staticmethod
+    def _entry_anchor_coord_for_space(space: Any) -> dict[str, int]:
+        for row in sorted(getattr(space, "local_transition_points", []), key=lambda item: str(item.get("point_id", ""))):
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("point_kind", "")) != LOCAL_DUNGEON_POINT_KIND_ENTRY:
+                continue
+            if not bool(row.get("enabled", True)):
+                continue
+            coord = row.get("coord")
+            if isinstance(coord, dict):
+                try:
+                    return {"x": int(coord.get("x", 0)), "y": int(coord.get("y", 0))}
+                except (TypeError, ValueError):
+                    continue
+        return {"x": 2, "y": 4}
+
     def on_tick_start(self, sim: Simulation, tick: int) -> None:
         self._sync_campaign_patrol_runtime(sim)
+        self._sync_authored_local_hostile_population(sim)
 
     def on_command(self, sim: Simulation, command: SimCommand, command_index: int) -> bool:
         if command.command_type == ENTER_SAFE_HUB_INTENT_COMMAND_TYPE:
@@ -150,6 +225,9 @@ class ExplorationExecutionModule(RuleModule):
             return True
         if command.command_type == LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE:
             self._handle_local_structure_author_intent(sim, command=command, command_index=command_index)
+            return True
+        if command.command_type == LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE:
+            self._handle_local_dungeon_author_intent(sim, command=command, command_index=command_index)
             return True
         if command.command_type == CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE:
             self._handle_campaign_author_intent(sim, command=command, command_index=command_index)
@@ -725,6 +803,263 @@ class ExplorationExecutionModule(RuleModule):
         sim.schedule_event_at(
             tick=tick + 1,
             event_type=LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE,
+            params={
+                "tick": int(tick),
+                "entity_id": entity_id,
+                "action_uid": action_uid,
+                "applied": bool(applied),
+                "reason": str(reason),
+                "details": dict(details or {}),
+            },
+        )
+
+    def _sync_authored_local_hostile_population(self, sim: Simulation) -> None:
+        for entity_id in sorted(sim.state.entities):
+            entity = sim.state.entities[entity_id]
+            if not entity.space_id.startswith(AUTHORED_SITE_LOCAL_SPACE_PREFIX):
+                continue
+            local_space = sim.state.world.spaces.get(entity.space_id)
+            if local_space is None:
+                continue
+            authored_spawners = [
+                dict(row) for row in getattr(local_space, "local_hostile_spawners", []) if isinstance(row, dict)
+            ]
+            for spawner in sorted(authored_spawners, key=lambda row: str(row.get("spawner_id", ""))):
+                spawner_id = str(spawner.get("spawner_id", "")).strip()
+                if not spawner_id or not bool(spawner.get("enabled", True)):
+                    continue
+                coord = spawner.get("coord")
+                if not isinstance(coord, dict):
+                    continue
+                try:
+                    coord_x = int(coord.get("x", 0))
+                    coord_y = int(coord.get("y", 0))
+                    count = max(1, int(spawner.get("count", 1)))
+                except (TypeError, ValueError):
+                    continue
+                template_id = str(spawner.get("template_id", LOCAL_HOSTILE_DEFAULT_TEMPLATE_ID)).strip() or LOCAL_HOSTILE_DEFAULT_TEMPLATE_ID
+                existing = [
+                    candidate
+                    for candidate in sim.state.entities.values()
+                    if candidate.space_id == local_space.space_id
+                    and str(candidate.template_id or "") == template_id
+                    and isinstance(candidate.stats, dict)
+                    and str(candidate.stats.get("authored_spawner_id", "")) == spawner_id
+                ]
+                for index in range(len(existing), count):
+                    spawn_x = float(coord_x) + 0.5 + (0.1 * float(index))
+                    spawn_y = float(coord_y) + 0.5
+                    spawned_id = f"authored:{local_space.space_id}:{spawner_id}:{index}"
+                    if spawned_id in sim.state.entities:
+                        continue
+                    sim.add_entity(
+                        EntityState(
+                            entity_id=spawned_id,
+                            position_x=spawn_x,
+                            position_y=spawn_y,
+                            space_id=local_space.space_id,
+                            template_id=template_id,
+                            stats={
+                                "faction_id": "hostile",
+                                "role": "local_authored_spawn",
+                                "authored_spawner_id": spawner_id,
+                            },
+                        )
+                    )
+
+    def _handle_local_dungeon_author_intent(self, sim: Simulation, *, command: SimCommand, command_index: int) -> None:
+        action_uid = f"local_dungeon_author:{command.tick}:{command_index}"
+        entity = sim.state.entities.get(command.entity_id or "")
+        if entity is None:
+            self._schedule_local_dungeon_author_outcome(
+                sim, tick=command.tick, entity_id=command.entity_id, action_uid=action_uid, applied=False, reason="unknown_entity"
+            )
+            return
+        active_space = sim.state.world.spaces.get(entity.space_id)
+        if active_space is None or not entity.space_id.startswith(AUTHORED_SITE_LOCAL_SPACE_PREFIX):
+            self._schedule_local_dungeon_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="authored_local_space_required"
+            )
+            return
+        if str(getattr(active_space, "role", "")) != "local":
+            self._schedule_local_dungeon_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="local_space_required"
+            )
+            return
+        operation = str(command.params.get("operation", "")).strip()
+        details: dict[str, Any] = {"operation": operation}
+        if operation in {"upsert_hostile_spawner", "delete_hostile_spawner"}:
+            spawner_id = str(command.params.get("spawner_id", "")).strip()
+            details["spawner_id"] = spawner_id
+            if not spawner_id:
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="spawner_id_required", details=details
+                )
+                return
+            rows = [dict(row) for row in getattr(active_space, "local_hostile_spawners", []) if isinstance(row, dict)]
+            if operation == "delete_hostile_spawner":
+                next_rows = [row for row in rows if str(row.get("spawner_id", "")) != spawner_id]
+                active_space.local_hostile_spawners = next_rows
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+                )
+                return
+            coord = command.params.get("coord")
+            if not isinstance(coord, dict):
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="coord_required", details=details
+                )
+                return
+            try:
+                coord_payload = {"x": int(coord.get("x", 0)), "y": int(coord.get("y", 0))}
+                count = max(1, int(command.params.get("count", 1)))
+            except (TypeError, ValueError):
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_coord_or_count", details=details
+                )
+                return
+            if not active_space.is_valid_cell(coord_payload):
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_coord", details=details
+                )
+                return
+            replacement = {
+                "spawner_id": spawner_id,
+                "coord": coord_payload,
+                "template_id": str(command.params.get("template_id", LOCAL_HOSTILE_DEFAULT_TEMPLATE_ID)),
+                "count": count,
+                "enabled": bool(command.params.get("enabled", True)),
+                "label": str(command.params.get("label", spawner_id)),
+                "tags": sorted({str(tag) for tag in command.params.get("tags", []) if str(tag).strip()}),
+            }
+            next_rows = [row for row in rows if str(row.get("spawner_id", "")) != spawner_id]
+            next_rows.append(replacement)
+            active_space.local_hostile_spawners = sorted(next_rows, key=lambda row: str(row.get("spawner_id", "")))
+            self._schedule_local_dungeon_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+            )
+            return
+        if operation in {"upsert_transition_point", "delete_transition_point", "use_transition_point"}:
+            point_id = str(command.params.get("point_id", "")).strip()
+            details["point_id"] = point_id
+            if not point_id:
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="point_id_required", details=details
+                )
+                return
+            points = [dict(row) for row in getattr(active_space, "local_transition_points", []) if isinstance(row, dict)]
+            if operation == "delete_transition_point":
+                active_space.local_transition_points = [row for row in points if str(row.get("point_id", "")) != point_id]
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+                )
+                return
+            target = next((row for row in points if str(row.get("point_id", "")) == point_id), None)
+            if operation == "use_transition_point":
+                if target is None:
+                    self._schedule_local_dungeon_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="point_not_found", details=details
+                    )
+                    return
+                point_kind = str(target.get("point_kind", ""))
+                if point_kind not in {LOCAL_DUNGEON_POINT_KIND_EXTRACTION, LOCAL_DUNGEON_POINT_KIND_RETURN}:
+                    self._schedule_local_dungeon_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="point_not_extractable", details=details
+                    )
+                    return
+                site_id = str(entity.space_id.removeprefix(AUTHORED_SITE_LOCAL_SPACE_PREFIX))
+                linked_site = sim.state.world.sites.get(site_id)
+                campaign_anchor = linked_site.location.get("campaign_anchor") if linked_site is not None else None
+                if not isinstance(campaign_anchor, dict):
+                    self._schedule_local_dungeon_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="origin_site_missing", details=details
+                    )
+                    return
+                try:
+                    world_x = float(campaign_anchor.get("x", 0.0))
+                    world_y = float(campaign_anchor.get("y", 0.0))
+                except (TypeError, ValueError):
+                    self._schedule_local_dungeon_author_outcome(
+                        sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_origin_anchor", details=details
+                    )
+                    return
+                entity.space_id = "overworld"
+                entity.position_x = world_x
+                entity.position_y = world_y
+                self._schedule_local_dungeon_author_outcome(
+                    sim,
+                    tick=command.tick,
+                    entity_id=entity.entity_id,
+                    action_uid=action_uid,
+                    applied=True,
+                    reason="returned_to_origin",
+                    details={**details, "site_id": site_id, "to_space_id": "overworld"},
+                )
+                return
+            coord = command.params.get("coord")
+            if not isinstance(coord, dict):
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="coord_required", details=details
+                )
+                return
+            point_kind = str(command.params.get("point_kind", "")).strip()
+            if point_kind not in LOCAL_DUNGEON_POINT_KINDS:
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_point_kind", details=details
+                )
+                return
+            try:
+                coord_payload = {"x": int(coord.get("x", 0)), "y": int(coord.get("y", 0))}
+            except (TypeError, ValueError):
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_coord", details=details
+                )
+                return
+            if not active_space.is_valid_cell(coord_payload):
+                self._schedule_local_dungeon_author_outcome(
+                    sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="invalid_coord", details=details
+                )
+                return
+            replacement = {
+                "point_id": point_id,
+                "coord": coord_payload,
+                "point_kind": point_kind,
+                "enabled": bool(command.params.get("enabled", True)),
+                "label": str(command.params.get("label", point_id)),
+                "tags": sorted({str(tag) for tag in command.params.get("tags", []) if str(tag).strip()}),
+            }
+            next_rows = [row for row in points if str(row.get("point_id", "")) != point_id]
+            next_rows.append(replacement)
+            active_space.local_transition_points = sorted(next_rows, key=lambda row: str(row.get("point_id", "")))
+            site_id = str(entity.space_id.removeprefix(AUTHORED_SITE_LOCAL_SPACE_PREFIX))
+            linked_site = sim.state.world.sites.get(site_id)
+            if linked_site is not None and point_kind == LOCAL_DUNGEON_POINT_KIND_ENTRY:
+                entrance = dict(linked_site.entrance) if isinstance(linked_site.entrance, dict) else {}
+                entrance["target_space_id"] = entity.space_id
+                entrance["spawn"] = dict(coord_payload)
+                linked_site.entrance = entrance
+            self._schedule_local_dungeon_author_outcome(
+                sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=True, reason="applied", details=details
+            )
+            return
+        self._schedule_local_dungeon_author_outcome(
+            sim, tick=command.tick, entity_id=entity.entity_id, action_uid=action_uid, applied=False, reason="unsupported_operation", details=details
+        )
+
+    def _schedule_local_dungeon_author_outcome(
+        self,
+        sim: Simulation,
+        *,
+        tick: int,
+        entity_id: str | None,
+        action_uid: str,
+        applied: bool,
+        reason: str,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        sim.schedule_event_at(
+            tick=tick + 1,
+            event_type=LOCAL_DUNGEON_AUTHOR_OUTCOME_EVENT_TYPE,
             params={
                 "tick": int(tick),
                 "entity_id": entity_id,

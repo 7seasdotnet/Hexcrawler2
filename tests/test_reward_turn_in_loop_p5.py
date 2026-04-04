@@ -27,6 +27,7 @@ from hexcrawler.sim.exploration import (
     CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
     ENTER_SAFE_HUB_INTENT_COMMAND_TYPE,
     EXIT_SAFE_HUB_INTENT_COMMAND_TYPE,
+    LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
     LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
     LOOT_LOCAL_PROOF_INTENT_COMMAND_TYPE,
     REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
@@ -1183,6 +1184,9 @@ def test_campaign_dungeon_authoring_create_move_delete_persists_save_load(tmp_pa
     assert linked_space_id == "local_site:authoring_dungeon_site"
     assert linked_space_id in sim.state.world.spaces
     assert sim.state.world.spaces[linked_space_id].role == "local"
+    linked_space = sim.state.world.spaces[linked_space_id]
+    assert any(row.get("point_kind") == "entry_anchor" for row in linked_space.local_transition_points)
+    assert any(row.get("point_kind") == "return_to_origin_exit" for row in linked_space.local_transition_points)
 
     sim.append_command(
         SimCommand(
@@ -1291,6 +1295,148 @@ def test_local_structure_authoring_works_inside_authored_site_linked_local_space
     sim.advance_ticks(2)
     linked_space = sim.state.world.spaces[linked_space_id]
     assert any(row.get("structure_id") == "linked_author_shell" for row in linked_space.structure_primitives)
+
+
+def test_local_dungeon_authoring_spawner_and_points_create_move_delete_persist_save_load(tmp_path: Path) -> None:
+    sim = _build_sim(seed=61)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = 2.0
+    scout.position_y = 2.0
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_site",
+                "site_id": "authoring_dungeon_bridge",
+                "site_kind": "dungeon_entrance",
+                "label": "Dungeon Bridge",
+                "position": {"x": 2.0, "y": 2.0},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    sim.append_command(SimCommand(tick=sim.state.tick, entity_id="scout", command_type="enter_site", params={"site_id": "authoring_dungeon_bridge"}))
+    sim.advance_ticks(1)
+    linked_space_id = "local_site:authoring_dungeon_bridge"
+    assert scout.space_id == linked_space_id
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "upsert_hostile_spawner", "spawner_id": "spawner_a", "coord": {"x": 4, "y": 4}, "count": 1},
+        )
+    )
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "upsert_transition_point", "point_id": "entry_a", "point_kind": "entry_anchor", "coord": {"x": 1, "y": 1}},
+        )
+    )
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "upsert_transition_point", "point_id": "exit_a", "point_kind": "return_to_origin_exit", "coord": {"x": 2, "y": 6}},
+        )
+    )
+    sim.advance_ticks(2)
+    linked_space = sim.state.world.spaces[linked_space_id]
+    assert any(row.get("spawner_id") == "spawner_a" for row in linked_space.local_hostile_spawners)
+    assert any(row.get("point_id") == "entry_a" for row in linked_space.local_transition_points)
+    assert any(row.get("point_id") == "exit_a" for row in linked_space.local_transition_points)
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "upsert_hostile_spawner", "spawner_id": "spawner_a", "coord": {"x": 5, "y": 4}, "count": 1},
+        )
+    )
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "delete_transition_point", "point_id": "entry_a"},
+        )
+    )
+    sim.advance_ticks(2)
+    linked_space = sim.state.world.spaces[linked_space_id]
+    moved = next(row for row in linked_space.local_hostile_spawners if row.get("spawner_id") == "spawner_a")
+    assert moved["coord"] == {"x": 5, "y": 4}
+    assert all(row.get("point_id") != "entry_a" for row in linked_space.local_transition_points)
+
+    before_hash = simulation_hash(sim)
+    save_path = tmp_path / "local_dungeon_bridge_save.json"
+    save_game_json(save_path, sim.state.world, sim)
+    _, loaded = load_game_json(str(save_path))
+    assert simulation_hash(loaded) == before_hash
+    loaded_space = loaded.state.world.spaces[linked_space_id]
+    assert any(row.get("spawner_id") == "spawner_a" for row in loaded_space.local_hostile_spawners)
+    assert any(row.get("point_id") == "exit_a" for row in loaded_space.local_transition_points)
+
+
+def test_local_dungeon_authored_spawner_materialization_and_return_to_origin() -> None:
+    sim = _build_sim(seed=71)
+    scout = sim.state.entities["scout"]
+    scout.space_id = "overworld"
+    scout.position_x = 4.0
+    scout.position_y = -2.0
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=CAMPAIGN_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "create_or_update_site",
+                "site_id": "authoring_dungeon_extract",
+                "site_kind": "dungeon_entrance",
+                "position": {"x": 4.0, "y": -2.0},
+            },
+        )
+    )
+    sim.advance_ticks(2)
+    sim.append_command(SimCommand(tick=sim.state.tick, entity_id="scout", command_type="enter_site", params={"site_id": "authoring_dungeon_extract"}))
+    sim.advance_ticks(1)
+    linked_space_id = "local_site:authoring_dungeon_extract"
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "upsert_hostile_spawner", "spawner_id": "spawner_x", "coord": {"x": 4, "y": 4}, "count": 2},
+        )
+    )
+    sim.advance_ticks(2)
+    spawned = [
+        entity_id
+        for entity_id, row in sim.state.entities.items()
+        if row.space_id == linked_space_id
+        and isinstance(row.stats, dict)
+        and str(row.stats.get("authored_spawner_id", "")) == "spawner_x"
+    ]
+    assert len(spawned) == 2
+
+    sim.append_command(
+        SimCommand(
+            tick=sim.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
+            params={"operation": "use_transition_point", "point_id": "return_to_origin_default"},
+        )
+    )
+    sim.advance_ticks(2)
+    assert scout.space_id == "overworld"
+    assert round(scout.position_x, 2) == 4.0
+    assert round(scout.position_y, 2) == -2.0
 
 
 def test_patrol_loop_recontacts_after_leave_return_and_replacement_without_wedge() -> None:

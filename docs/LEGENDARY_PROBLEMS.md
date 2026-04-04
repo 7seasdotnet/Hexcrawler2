@@ -244,3 +244,29 @@
   - Do **not** leave authored town/dungeon sites without explicit entrance linkage.
   - Do **not** add viewer-side direct mutation for entry/delete lifecycle.
   - Do **not** mark this as “full town/dungeon authoring”; this is only the activation bridge.
+
+## 11) Authored Dungeon Exists but End-to-End Loop Is Not Testable (Missing Explicit Entry/Exit/Return Authoring)
+- **Problem name:** Authored dungeon bridge stalls before full loop verification.
+- **Symptom:** Campaign-authored dungeon can be entered, but local hostile population and explicit extraction/return markers cannot be authored, or return depends on implicit/hardcoded cells.
+- **Root cause:** Local authored truth lacked persistent primitives for hostile population and local transition points (entry/extraction/return), leaving no canonical editable targets and no deterministic authored extraction seam.
+- **Relevant architecture / UX invariant:**
+  - Right-click/context-menu is canonical spatial authoring UX.
+  - Viewer/UI remains read-only for mutation; commands/events only.
+  - Persistent authoring state must be serialized + hash-covered.
+  - Campaign/local role separation and deterministic transition semantics remain mandatory.
+- **Known-good fix path:**
+  1. Persist authored local hostile spawners in local space state (`local_hostile_spawners`).
+  2. Persist authored local transition points in local space state (`local_transition_points`) with explicit point kinds.
+  3. Route all place/move/delete/use actions through authoritative intent handling (`local_dungeon_author_intent`).
+  4. Seed default dungeon entry + return markers on authored dungeon creation.
+  5. Define deterministic return-to-origin semantics explicitly (linked campaign entrance anchor).
+- **Required regression tests:**
+  - local hostile spawner create/move/delete and save/load persistence.
+  - entry/extraction/return point create/move/delete and save/load persistence.
+  - deterministic materialization of local hostiles from authored spawner primitives.
+  - authored extraction/return transitions back to campaign origin anchor.
+  - existing authored site entry flow and core playable launch loop remain healthy.
+- **Do not regress by doing X:**
+  - Do **not** reintroduce hardcoded implicit spawn/return cells as canonical truth.
+  - Do **not** use viewer-side teleport or direct world mutation for extraction.
+  - Do **not** advertise global dungeon system completion from this bounded proof bridge.

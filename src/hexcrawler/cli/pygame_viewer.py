@@ -50,6 +50,7 @@ from hexcrawler.sim.exploration import (
     EXPLORATION_OUTCOME_EVENT_TYPE,
     LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
     LOCAL_STRUCTURE_AUTHOR_OUTCOME_EVENT_TYPE,
+    LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
     RECOVERY_OUTCOME_EVENT_TYPE,
     REWARD_TURN_IN_OUTCOME_EVENT_TYPE,
     REWARD_TOKEN_ITEM_ID,
@@ -430,6 +431,18 @@ class SimulationController:
                 tick=self.sim.state.tick,
                 entity_id=self.entity_id,
                 command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+                params=payload,
+            )
+        )
+
+    def local_dungeon_author_intent(self, operation: str, **params: object) -> None:
+        payload = {"operation": operation}
+        payload.update(params)
+        self.sim.append_command(
+            SimCommand(
+                tick=self.sim.state.tick,
+                entity_id=self.entity_id,
+                command_type=LOCAL_DUNGEON_AUTHOR_INTENT_COMMAND_TYPE,
                 params=payload,
             )
         )
@@ -1743,6 +1756,52 @@ def _collect_world_markers(
                     label=_truncate_label(label, max_length=26),
                 ),
             )
+        for spawner in sorted(getattr(space, "local_hostile_spawners", []), key=lambda row: str(row.get("spawner_id", ""))):
+            if not isinstance(spawner, dict):
+                continue
+            coord = spawner.get("coord")
+            if not isinstance(coord, dict):
+                continue
+            add_marker(
+                _marker_cell_from_location(
+                    {"space_id": active_space_id, "topology_type": space.topology_type, "coord": coord},
+                    active_location_topology,
+                ),
+                MarkerRecord(
+                    priority=0,
+                    marker_id=f"local_spawner:{spawner.get('spawner_id', '')}",
+                    marker_kind="local_spawner",
+                    color=(230, 120, 120),
+                    radius=5,
+                    label=_truncate_label(str(spawner.get("label", "hostile")), max_length=16),
+                ),
+            )
+        for point in sorted(getattr(space, "local_transition_points", []), key=lambda row: str(row.get("point_id", ""))):
+            if not isinstance(point, dict):
+                continue
+            coord = point.get("coord")
+            if not isinstance(coord, dict):
+                continue
+            point_kind = str(point.get("point_kind", ""))
+            marker_color = (145, 220, 160)
+            if point_kind == "entry_anchor":
+                marker_color = (123, 188, 255)
+            elif point_kind == "extraction_exit":
+                marker_color = (240, 204, 96)
+            add_marker(
+                _marker_cell_from_location(
+                    {"space_id": active_space_id, "topology_type": space.topology_type, "coord": coord},
+                    active_location_topology,
+                ),
+                MarkerRecord(
+                    priority=0,
+                    marker_id=f"local_transition:{point.get('point_id', '')}",
+                    marker_kind="local_transition",
+                    color=marker_color,
+                    radius=5,
+                    label=_truncate_label(str(point.get("label", point_kind)), max_length=18),
+                ),
+            )
 
     for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
         entity_space_id = _entity_space_id(entity)
@@ -2999,6 +3058,109 @@ def _campaign_authoring_edit_items(target: dict[str, str]) -> list[ContextMenuIt
     if target.get("kind") == "patrol":
         items.append(ContextMenuItem(label="Edit Path", action="campaign_author_edit_path", payload=target))
     return items
+
+
+def _local_dungeon_authored_target_at_cell(space: Any, *, cell: dict[str, int]) -> dict[str, str] | None:
+    best: dict[str, str] | None = None
+    for spawner in getattr(space, "local_hostile_spawners", []):
+        if not isinstance(spawner, dict):
+            continue
+        coord = spawner.get("coord")
+        if not isinstance(coord, dict):
+            continue
+        if int(coord.get("x", -9999)) == int(cell["x"]) and int(coord.get("y", -9999)) == int(cell["y"]):
+            return {
+                "kind": "spawner",
+                "id": str(spawner.get("spawner_id", "")),
+                "label": str(spawner.get("label", "Hostile Spawner")),
+            }
+    for point in getattr(space, "local_transition_points", []):
+        if not isinstance(point, dict):
+            continue
+        coord = point.get("coord")
+        if not isinstance(coord, dict):
+            continue
+        if int(coord.get("x", -9999)) == int(cell["x"]) and int(coord.get("y", -9999)) == int(cell["y"]):
+            best = {
+                "kind": "transition",
+                "id": str(point.get("point_id", "")),
+                "label": str(point.get("label", point.get("point_kind", "Transition Point"))),
+                "point_kind": str(point.get("point_kind", "")),
+            }
+            break
+    return best
+
+
+def _local_dungeon_authoring_placement_items(space: Any, *, cell: dict[str, int]) -> list[ContextMenuItem]:
+    cell_label = f"{cell['x']}_{cell['y']}"
+    return [
+        ContextMenuItem(label="Local Dungeon Authoring...", action="noop"),
+        ContextMenuItem(
+            label="Place Hostile Here",
+            action="local_dungeon_author_place_spawner",
+            payload={"spawner_id": f"spawner_{cell_label}", "coord": {"x": int(cell["x"]), "y": int(cell["y"])}},
+        ),
+        ContextMenuItem(
+            label="Place Entry Point Here",
+            action="local_dungeon_author_place_point",
+            payload={"point_id": f"entry_{cell_label}", "coord": {"x": int(cell["x"]), "y": int(cell["y"])}, "point_kind": "entry_anchor"},
+        ),
+        ContextMenuItem(
+            label="Place Exit / Extraction Here",
+            action="local_dungeon_author_place_point",
+            payload={"point_id": f"exit_{cell_label}", "coord": {"x": int(cell["x"]), "y": int(cell["y"])}, "point_kind": "extraction_exit"},
+        ),
+        ContextMenuItem(
+            label="Place Return-to-Origin Exit Here",
+            action="local_dungeon_author_place_point",
+            payload={
+                "point_id": f"return_{cell_label}",
+                "coord": {"x": int(cell["x"]), "y": int(cell["y"])},
+                "point_kind": "return_to_origin_exit",
+            },
+        ),
+    ]
+
+
+def _local_dungeon_authoring_edit_items(target: dict[str, str], *, cell: dict[str, int]) -> list[ContextMenuItem]:
+    if target.get("kind") == "spawner":
+        return [
+            ContextMenuItem(label=f"Local Authoring: {target.get('label', target.get('id', 'Spawner'))}", action="noop"),
+            ContextMenuItem(
+                label="Move Hostile Here",
+                action="local_dungeon_author_move_spawner",
+                payload={"spawner_id": target.get("id"), "coord": {"x": int(cell["x"]), "y": int(cell["y"])}},
+            ),
+            ContextMenuItem(
+                label="Delete Hostile",
+                action="local_dungeon_author_delete_spawner",
+                payload={"spawner_id": target.get("id")},
+            ),
+        ]
+    point_kind = target.get("point_kind", "")
+    use_label = "Use This Exit: Return to Origin" if point_kind in {"extraction_exit", "return_to_origin_exit"} else "Use Transition Point"
+    return [
+        ContextMenuItem(label=f"Local Authoring: {target.get('label', target.get('id', 'Point'))}", action="noop"),
+        ContextMenuItem(
+            label="Move Point Here",
+            action="local_dungeon_author_move_point",
+            payload={
+                "point_id": target.get("id"),
+                "coord": {"x": int(cell["x"]), "y": int(cell["y"])},
+                "point_kind": point_kind,
+            },
+        ),
+        ContextMenuItem(
+            label="Delete Point",
+            action="local_dungeon_author_delete_point",
+            payload={"point_id": target.get("id")},
+        ),
+        ContextMenuItem(
+            label=use_label,
+            action="local_dungeon_author_use_point",
+            payload={"point_id": target.get("id")},
+        ),
+    ]
 
 
 def _campaign_patrol_anchor_at_world(
@@ -4712,6 +4874,35 @@ def run_pygame_viewer(
                         items.append(ContextMenuItem(label="Interactable...", action="noop"))
                         items.append(ContextMenuItem(label="- Inspect (10 ticks)", action="interaction", payload=f"inspect:interactable:{interactable_id}:10"))
                         items.append(ContextMenuItem(label="- Use (20 ticks)", action="interaction", payload=f"use:interactable:{interactable_id}:20"))
+                    elif marker.marker_kind == "local_spawner":
+                        spawner_id = _marker_payload_id(marker, expected_kind="local_spawner")
+                        if spawner_id is not None:
+                            items.append(ContextMenuItem(label="Local Spawner...", action="noop"))
+                            items.append(
+                                ContextMenuItem(
+                                    label="Delete hostile spawner",
+                                    action="local_dungeon_author_delete_spawner",
+                                    payload={"spawner_id": spawner_id},
+                                )
+                            )
+                    elif marker.marker_kind == "local_transition":
+                        point_id = _marker_payload_id(marker, expected_kind="local_transition")
+                        if point_id is not None:
+                            items.append(ContextMenuItem(label="Local Transition Point...", action="noop"))
+                            items.append(
+                                ContextMenuItem(
+                                    label="Delete transition point",
+                                    action="local_dungeon_author_delete_point",
+                                    payload={"point_id": point_id},
+                                )
+                            )
+                            items.append(
+                                ContextMenuItem(
+                                    label="Use this exit",
+                                    action="local_dungeon_author_use_point",
+                                    payload={"point_id": point_id},
+                                )
+                            )
                 items.append(ContextMenuItem(label="Explore...", action="noop"))
                 items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
                 items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
@@ -4776,6 +4967,12 @@ def run_pygame_viewer(
                     if local_cell is not None:
                         local_world_x, local_world_y = square_grid_cell_to_world_xy(local_cell["x"], local_cell["y"])
                         items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{local_world_x},{local_world_y}"))
+                        if player is not None and str(player.space_id).startswith("local_site:"):
+                            authored_target = _local_dungeon_authored_target_at_cell(active_space, cell=local_cell)
+                            if authored_target is None:
+                                items.extend(_local_dungeon_authoring_placement_items(active_space, cell=local_cell))
+                            else:
+                                items.extend(_local_dungeon_authoring_edit_items(authored_target, cell=local_cell))
                         items.append(ContextMenuItem(label="Explore...", action="noop"))
                         items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
                         items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
@@ -4857,7 +5054,23 @@ def run_pygame_viewer(
                 items.extend(spatial_actions)
         if active_space is not None and str(getattr(active_space, "role", "")) == "local":
             return_context = _get_return_context_for_space(sim, active_space.space_id)
-            if return_context is None:
+            authored_return_points = [
+                row
+                for row in getattr(active_space, "local_transition_points", [])
+                if isinstance(row, dict)
+                and bool(row.get("enabled", True))
+                and str(row.get("point_kind", "")) in {"extraction_exit", "return_to_origin_exit"}
+            ]
+            if return_context is None and authored_return_points:
+                point = sorted(authored_return_points, key=lambda row: str(row.get("point_id", "")))[0]
+                items.append(
+                    ContextMenuItem(
+                        label=f"Return via authored exit ({point.get('point_id', '?')})",
+                        action="local_dungeon_author_use_point",
+                        payload={"point_id": str(point.get("point_id", ""))},
+                    )
+                )
+            elif return_context is None:
                 items.append(ContextMenuItem(label="Return to origin (unavailable)", action="noop"))
                 items.append(ContextMenuItem(label=f"No active return context for {active_space.space_id}", action="noop"))
             elif _is_return_in_progress(sim, active_space.space_id):
@@ -5422,6 +5635,62 @@ def run_pygame_viewer(
                                 patrol_label = campaign_path_edit_state.label
                                 campaign_path_edit_state = None
                                 status_message = f"campaign authoring: patrol path edit finished ({patrol_label})"
+                        elif item.action == "local_dungeon_author_place_spawner" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "upsert_hostile_spawner",
+                                spawner_id=str(item.payload.get("spawner_id", "")),
+                                coord=item.payload.get("coord", {}),
+                                template_id="encounter_hostile_v1",
+                                count=1,
+                                enabled=True,
+                            )
+                            status_message = "local authoring: hostile spawner placed"
+                        elif item.action == "local_dungeon_author_move_spawner" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "upsert_hostile_spawner",
+                                spawner_id=str(item.payload.get("spawner_id", "")),
+                                coord=item.payload.get("coord", {}),
+                                template_id="encounter_hostile_v1",
+                                count=1,
+                                enabled=True,
+                            )
+                            status_message = "local authoring: hostile spawner moved"
+                        elif item.action == "local_dungeon_author_delete_spawner" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "delete_hostile_spawner",
+                                spawner_id=str(item.payload.get("spawner_id", "")),
+                            )
+                            status_message = "local authoring: hostile spawner deleted"
+                        elif item.action == "local_dungeon_author_place_point" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "upsert_transition_point",
+                                point_id=str(item.payload.get("point_id", "")),
+                                coord=item.payload.get("coord", {}),
+                                point_kind=str(item.payload.get("point_kind", "")),
+                                enabled=True,
+                            )
+                            status_message = "local authoring: transition point placed"
+                        elif item.action == "local_dungeon_author_move_point" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "upsert_transition_point",
+                                point_id=str(item.payload.get("point_id", "")),
+                                coord=item.payload.get("coord", {}),
+                                point_kind=str(item.payload.get("point_kind", "")),
+                                enabled=True,
+                            )
+                            status_message = "local authoring: transition point moved"
+                        elif item.action == "local_dungeon_author_delete_point" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "delete_transition_point",
+                                point_id=str(item.payload.get("point_id", "")),
+                            )
+                            status_message = "local authoring: transition point deleted"
+                        elif item.action == "local_dungeon_author_use_point" and isinstance(item.payload, dict):
+                            controller.local_dungeon_author_intent(
+                                "use_transition_point",
+                                point_id=str(item.payload.get("point_id", "")),
+                            )
+                            status_message = "local authoring: extraction queued"
                         elif item.action == "select" and item.payload is not None:
                             controller.set_selected_entity(item.payload)
                         elif item.action == "clear_selection":
