@@ -1058,6 +1058,8 @@ class SpaceState:
     anchors: dict[str, AnchorRecord] = field(default_factory=dict)
     interactables: dict[str, InteractableRecord] = field(default_factory=dict)
     structure_primitives: list[dict[str, Any]] = field(default_factory=list)
+    local_hostile_spawners: list[dict[str, Any]] = field(default_factory=list)
+    local_transition_points: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.role = str(self.role)
@@ -1071,6 +1073,24 @@ class SpaceState:
             if not isinstance(row, dict):
                 raise ValueError("space.structure_primitives entries must be objects")
             _validate_json_value(row, field_name="space.structure_primitives[]")
+        if not isinstance(self.local_hostile_spawners, list):
+            raise ValueError("space.local_hostile_spawners must be a list")
+        for row in self.local_hostile_spawners:
+            if not isinstance(row, dict):
+                raise ValueError("space.local_hostile_spawners entries must be objects")
+            _validate_json_value(row, field_name="space.local_hostile_spawners[]")
+            coord = row.get("coord")
+            if not isinstance(coord, dict) or not self.is_valid_cell(coord):
+                raise ValueError("space.local_hostile_spawners[].coord must reference a valid cell")
+        if not isinstance(self.local_transition_points, list):
+            raise ValueError("space.local_transition_points must be a list")
+        for row in self.local_transition_points:
+            if not isinstance(row, dict):
+                raise ValueError("space.local_transition_points entries must be objects")
+            _validate_json_value(row, field_name="space.local_transition_points[]")
+            coord = row.get("coord")
+            if not isinstance(coord, dict) or not self.is_valid_cell(coord):
+                raise ValueError("space.local_transition_points[].coord must reference a valid cell")
         self._normalize_space_records()
 
     def _normalize_space_records(self) -> None:
@@ -1184,6 +1204,10 @@ class SpaceState:
         }
         if self.structure_primitives:
             payload["structure_primitives"] = [copy.deepcopy(row) for row in self.structure_primitives]
+        if self.local_hostile_spawners:
+            payload["local_hostile_spawners"] = [copy.deepcopy(row) for row in self.local_hostile_spawners]
+        if self.local_transition_points:
+            payload["local_transition_points"] = [copy.deepcopy(row) for row in self.local_transition_points]
         if self.doors:
             payload["doors"] = {record_id: self.doors[record_id].to_dict() for record_id in sorted(self.doors)}
         if self.anchors:
@@ -1208,6 +1232,8 @@ class SpaceState:
             role=role,
             topology_params=dict(data.get("topology_params", {})),
             structure_primitives=[dict(row) for row in data.get("structure_primitives", [])] if isinstance(data.get("structure_primitives", []), list) else [],
+            local_hostile_spawners=[dict(row) for row in data.get("local_hostile_spawners", [])] if isinstance(data.get("local_hostile_spawners", []), list) else [],
+            local_transition_points=[dict(row) for row in data.get("local_transition_points", [])] if isinstance(data.get("local_transition_points", []), list) else [],
         )
         for row in data.get("hexes", []):
             coord = HexCoord.from_dict(row["coord"])
