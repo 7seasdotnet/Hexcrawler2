@@ -270,3 +270,26 @@
   - Do **not** reintroduce hardcoded implicit spawn/return cells as canonical truth.
   - Do **not** use viewer-side teleport or direct world mutation for extraction.
   - Do **not** advertise global dungeon system completion from this bounded proof bridge.
+
+## 12) Local Structure Authoring Exists but Is Hidden Behind Hotkeys (Right-Click Standard Violation)
+- **Problem name:** Local structure authoring hidden behind hotkeys / inconsistent with right-click-first authoring standard.
+- **Symptom:** Campaign and local dungeon authoring are discoverable through right-click, but local structure/opening placement/edit feels missing unless users already know `B/O/P/Delete` debug keys.
+- **Root cause:** Existing `local_structure_author_intent` backend seam was present, but local context-menu target resolution and menu action hierarchy did not include structure/opening workflows or move-pending commit semantics.
+- **Relevant architecture / UX invariant:**
+  - Right-click/context-menu is canonical for spatial authoring workflows (campaign and local).
+  - Viewer remains read-only and emits authoritative intents only.
+  - Reuse existing deterministic authoring seams; do not fork parallel mutation paths.
+- **Known-good fix path:**
+  1. Unify local authored target resolution across structures, openings, hostile spawners, and transition markers.
+  2. Expose right-click empty-space placement actions for structure/opening plus existing hostile/entry/exit actions.
+  3. Expose right-click target edit actions (`Move`, `Delete`, context-specific `Use`) for authored local objects.
+  4. Use bounded move flow (`Move` -> next right-click destination -> commit; `Esc` cancels) through existing authoritative intents.
+- **Required regression tests:**
+  - Right-click empty local space exposes structure placement actions and existing local hostile/extraction actions.
+  - Right-click existing structure/opening exposes move/delete actions.
+  - Structure/opening create-move-delete operations persist through save/load and remain hash-stable at save boundaries.
+  - Existing local hostile/extraction right-click flows and authored town/dungeon linked-local workflow remain intact.
+- **Do not regress by doing X:**
+  - Do **not** relegate local structure authoring back to hotkey-only primary usage.
+  - Do **not** add viewer-side direct state mutation for local structure movement.
+  - Do **not** introduce a second local-structure backend separate from `local_structure_author_intent`.

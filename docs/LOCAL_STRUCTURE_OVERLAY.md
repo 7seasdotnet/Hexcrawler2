@@ -39,19 +39,30 @@ Canonical authored truth for this bridge pass:
 - Makes the authored truth semantic and future-safe.
 - Avoids framework bloat while proving the anti-lock-in direction with one Greybridge area.
 
-## C) Minimal in-game authoring workflow (bridge proof)
-This pass adds a small in-game authoring seam through authoritative command/event mutation:
+## C) Canonical in-game authoring workflow (right-click first)
+This pass keeps local structure authoring on the existing authoritative command/event seam while making right-click/context-menu the canonical player-facing workflow.
+
+Authoritative local structure mutations remain:
 - create one rectangular structure (`create_rect`)
 - add/move one opening (`move_opening` / `upsert_opening`)
 - remove one opening (`remove_opening`)
 - delete one structure (`delete_structure`)
 - persist through existing save/load path (hash-covered world topology payload)
 
-Viewer hotkeys for the bounded proof in Greybridge local hub:
-- `B` create/update demo rectangle at player cell.
-- `O` move demo opening to player cell.
-- `P` remove demo opening.
-- `Delete` remove demo structure.
+Canonical local right-click workflow (campaign/local authoring parity):
+- Right-click empty local space:
+  - `Place Room / Structure Here`
+  - `Place Opening / Door Here` (when bounded model has a valid structure target)
+  - Existing authored dungeon local actions remain available where relevant (`Place Hostile`, `Place Entry`, `Place Exit`, `Place Return-to-Origin Exit`)
+- Right-click existing authored local target:
+  - structures/openings: `Move`, `Delete`
+  - local hostile spawners/transition points: `Move`, `Delete` (plus `Use` for exits where applicable)
+- Move flow:
+  - choose `Move`
+  - next right-click destination commits authoritative move
+  - `Esc` cancels safely
+
+Hotkeys (`B/O/P/Delete`) remain fallback/debug paths only and are not the canonical spatial authoring UX.
 
 ## D) Zoom / nesting / projection path preservation
 This overlay keeps the path open by separating:

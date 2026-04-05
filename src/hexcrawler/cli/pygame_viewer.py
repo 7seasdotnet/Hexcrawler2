@@ -249,6 +249,15 @@ class CampaignAuthoringPathEditState:
 
 
 @dataclass
+class LocalAuthoringMoveState:
+    kind: str
+    object_id: str
+    label: str
+    point_kind: str | None = None
+    structure_id: str | None = None
+
+
+@dataclass
 class EncounterPanelScrollState:
     offsets: dict[str, int] = field(default_factory=lambda: {section: 0 for section in PANEL_SECTION_ORDER})
 
@@ -3091,6 +3100,110 @@ def _local_dungeon_authored_target_at_cell(space: Any, *, cell: dict[str, int]) 
     return best
 
 
+def _is_local_structure_authoring_enabled_space(space_id: str) -> bool:
+    return space_id == GREYBRIDGE_SAFE_HUB_SPACE_ID or space_id.startswith("local_site:")
+
+
+def _local_structure_authored_target_at_cell(space: Any, *, cell: dict[str, int]) -> dict[str, str] | None:
+    opening_hit: dict[str, str] | None = None
+    structure_hit: tuple[int, dict[str, str]] | None = None
+    for row in getattr(space, "structure_primitives", []):
+        if not isinstance(row, dict):
+            continue
+        structure_id = str(row.get("structure_id", "")).strip()
+        if not structure_id:
+            continue
+        openings = row.get("openings", [])
+        if isinstance(openings, (list, tuple)):
+            for opening in openings:
+                if not isinstance(opening, dict):
+                    continue
+                opening_cell = opening.get("cell")
+                if not isinstance(opening_cell, dict):
+                    continue
+                if int(opening_cell.get("x", -9999)) == int(cell["x"]) and int(opening_cell.get("y", -9999)) == int(cell["y"]):
+                    opening_hit = {
+                        "kind": "opening",
+                        "id": str(opening.get("opening_id", "")),
+                        "label": str(opening.get("kind", "Opening")),
+                        "structure_id": structure_id,
+                    }
+                    break
+        bounds = row.get("bounds")
+        if not isinstance(bounds, dict):
+            continue
+        try:
+            bx = int(bounds.get("x", 0))
+            by = int(bounds.get("y", 0))
+            width = int(bounds.get("width", 1))
+            height = int(bounds.get("height", 1))
+        except (TypeError, ValueError):
+            continue
+        if width < 1 or height < 1:
+            continue
+        cx = int(cell["x"])
+        cy = int(cell["y"])
+        if bx <= cx < (bx + width) and by <= cy < (by + height):
+            label = str(row.get("label", structure_id))
+            area = width * height
+            payload = {"kind": "structure", "id": structure_id, "label": label}
+            if structure_hit is None or (area, structure_id) < (structure_hit[0], structure_hit[1]["id"]):
+                structure_hit = (area, payload)
+    if opening_hit is not None:
+        return opening_hit
+    if structure_hit is not None:
+        return structure_hit[1]
+    return None
+
+
+def _default_structure_for_local_opening(space: Any, *, cell: dict[str, int]) -> str | None:
+    target = _local_structure_authored_target_at_cell(space, cell=cell)
+    if target is not None and target.get("kind") in {"structure", "opening"}:
+        structure_id = str(target.get("structure_id", target.get("id", ""))).strip()
+        if structure_id:
+            return structure_id
+    structure_ids = sorted(
+        str(row.get("structure_id", "")).strip()
+        for row in getattr(space, "structure_primitives", [])
+        if isinstance(row, dict) and str(row.get("structure_id", "")).strip()
+    )
+    if len(structure_ids) == 1:
+        return structure_ids[0]
+    return None
+
+
+def _local_structure_authoring_placement_items(space: Any, *, cell: dict[str, int]) -> list[ContextMenuItem]:
+    cell_label = f"{cell['x']}_{cell['y']}"
+    items = [
+        ContextMenuItem(label="Local Structure Authoring...", action="noop"),
+        ContextMenuItem(
+            label="Place Room / Structure Here",
+            action="local_structure_author_place_structure",
+            payload={
+                "structure_id": f"structure_{cell_label}",
+                "label": f"Structure {cell_label}",
+                "room_id": f"room_{cell_label}",
+                "bounds": {"x": int(cell["x"]), "y": int(cell["y"]), "width": 4, "height": 3},
+            },
+        ),
+    ]
+    opening_structure_id = _default_structure_for_local_opening(space, cell=cell)
+    if opening_structure_id:
+        items.append(
+            ContextMenuItem(
+                label="Place Opening / Door Here",
+                action="local_structure_author_place_opening",
+                payload={
+                    "structure_id": opening_structure_id,
+                    "opening_id": f"opening_{cell_label}",
+                    "kind": "door",
+                    "cell": {"x": int(cell["x"]), "y": int(cell["y"])},
+                },
+            )
+        )
+    return items
+
+
 def _local_dungeon_authoring_placement_items(space: Any, *, cell: dict[str, int]) -> list[ContextMenuItem]:
     cell_label = f"{cell['x']}_{cell['y']}"
     return [
@@ -3122,14 +3235,14 @@ def _local_dungeon_authoring_placement_items(space: Any, *, cell: dict[str, int]
     ]
 
 
-def _local_dungeon_authoring_edit_items(target: dict[str, str], *, cell: dict[str, int]) -> list[ContextMenuItem]:
+def _local_dungeon_authoring_edit_items(target: dict[str, str]) -> list[ContextMenuItem]:
     if target.get("kind") == "spawner":
         return [
             ContextMenuItem(label=f"Local Authoring: {target.get('label', target.get('id', 'Spawner'))}", action="noop"),
             ContextMenuItem(
-                label="Move Hostile Here",
+                label="Move Hostile",
                 action="local_dungeon_author_move_spawner",
-                payload={"spawner_id": target.get("id"), "coord": {"x": int(cell["x"]), "y": int(cell["y"])}},
+                payload={"spawner_id": target.get("id"), "label": target.get("label")},
             ),
             ContextMenuItem(
                 label="Delete Hostile",
@@ -3142,12 +3255,12 @@ def _local_dungeon_authoring_edit_items(target: dict[str, str], *, cell: dict[st
     return [
         ContextMenuItem(label=f"Local Authoring: {target.get('label', target.get('id', 'Point'))}", action="noop"),
         ContextMenuItem(
-            label="Move Point Here",
+            label="Move Point",
             action="local_dungeon_author_move_point",
             payload={
                 "point_id": target.get("id"),
-                "coord": {"x": int(cell["x"]), "y": int(cell["y"])},
                 "point_kind": point_kind,
+                "label": target.get("label"),
             },
         ),
         ContextMenuItem(
@@ -3161,6 +3274,49 @@ def _local_dungeon_authoring_edit_items(target: dict[str, str], *, cell: dict[st
             payload={"point_id": target.get("id")},
         ),
     ]
+
+
+def _local_structure_authoring_edit_items(target: dict[str, str]) -> list[ContextMenuItem]:
+    if target.get("kind") == "structure":
+        return [
+            ContextMenuItem(label=f"Local Structure: {target.get('label', target.get('id', 'Structure'))}", action="noop"),
+            ContextMenuItem(
+                label="Move Structure",
+                action="local_structure_author_move_structure",
+                payload={"structure_id": target.get("id"), "label": target.get("label")},
+            ),
+            ContextMenuItem(
+                label="Delete Structure",
+                action="local_structure_author_delete_structure",
+                payload={"structure_id": target.get("id")},
+            ),
+        ]
+    return [
+        ContextMenuItem(label=f"Local Structure: {target.get('label', target.get('id', 'Opening'))}", action="noop"),
+        ContextMenuItem(
+            label="Move Opening",
+            action="local_structure_author_move_opening",
+            payload={
+                "structure_id": target.get("structure_id"),
+                "opening_id": target.get("id"),
+                "kind": "door",
+                "label": target.get("label"),
+            },
+        ),
+        ContextMenuItem(
+            label="Delete Opening",
+            action="local_structure_author_delete_opening",
+            payload={"structure_id": target.get("structure_id"), "opening_id": target.get("id")},
+        ),
+    ]
+
+
+def _local_authored_target_at_cell(space: Any, *, cell: dict[str, int], include_dungeon_targets: bool) -> dict[str, str] | None:
+    if include_dungeon_targets:
+        dungeon_target = _local_dungeon_authored_target_at_cell(space, cell=cell)
+        if dungeon_target is not None:
+            return dungeon_target
+    return _local_structure_authored_target_at_cell(space, cell=cell)
 
 
 def _campaign_patrol_anchor_at_world(
@@ -4967,12 +5123,36 @@ def run_pygame_viewer(
                     if local_cell is not None:
                         local_world_x, local_world_y = square_grid_cell_to_world_xy(local_cell["x"], local_cell["y"])
                         items.append(ContextMenuItem(label="Move here", action="move_here", payload=f"{local_world_x},{local_world_y}"))
-                        if player is not None and str(player.space_id).startswith("local_site:"):
-                            authored_target = _local_dungeon_authored_target_at_cell(active_space, cell=local_cell)
+                        if player is not None and _is_local_structure_authoring_enabled_space(str(player.space_id)):
+                            include_dungeon_targets = str(player.space_id).startswith("local_site:")
+                            if local_move_state is not None:
+                                items.append(
+                                    ContextMenuItem(
+                                        label=f"Place moved {local_move_state.label} here",
+                                        action="local_author_move_commit",
+                                        payload={
+                                            "kind": local_move_state.kind,
+                                            "id": local_move_state.object_id,
+                                            "point_kind": local_move_state.point_kind,
+                                            "structure_id": local_move_state.structure_id,
+                                            "coord": {"x": int(local_cell['x']), "y": int(local_cell['y'])},
+                                        },
+                                    )
+                                )
+                                items.append(ContextMenuItem(label="Cancel move (Esc)", action="local_author_move_cancel"))
+                            authored_target = _local_authored_target_at_cell(
+                                active_space,
+                                cell=local_cell,
+                                include_dungeon_targets=include_dungeon_targets,
+                            )
                             if authored_target is None:
-                                items.extend(_local_dungeon_authoring_placement_items(active_space, cell=local_cell))
-                            else:
-                                items.extend(_local_dungeon_authoring_edit_items(authored_target, cell=local_cell))
+                                items.extend(_local_structure_authoring_placement_items(active_space, cell=local_cell))
+                                if include_dungeon_targets:
+                                    items.extend(_local_dungeon_authoring_placement_items(active_space, cell=local_cell))
+                            elif authored_target.get("kind") in {"structure", "opening"}:
+                                items.extend(_local_structure_authoring_edit_items(authored_target))
+                            elif include_dungeon_targets:
+                                items.extend(_local_dungeon_authoring_edit_items(authored_target))
                         items.append(ContextMenuItem(label="Explore...", action="noop"))
                         items.append(ContextMenuItem(label="- Search (60 ticks)", action="explore", payload="search:60"))
                         items.append(ContextMenuItem(label="- Listen (30 ticks)", action="explore", payload="listen:30"))
@@ -5153,6 +5333,7 @@ def run_pygame_viewer(
     push_recent_save(load_save)
     status_message: str | None = None
     campaign_move_state: CampaignAuthoringMoveState | None = None
+    local_move_state: LocalAuthoringMoveState | None = None
     campaign_path_edit_state: CampaignAuthoringPathEditState | None = None
     last_sent_move_vector = (0.0, 0.0)
     selected_site_id: str | None = None
@@ -5179,6 +5360,9 @@ def run_pygame_viewer(
                 elif campaign_move_state is not None:
                     campaign_move_state = None
                     status_message = "campaign authoring: move canceled"
+                elif local_move_state is not None:
+                    local_move_state = None
+                    status_message = "local authoring: move canceled"
                 elif campaign_path_edit_state is not None:
                     patrol_label = campaign_path_edit_state.label
                     campaign_path_edit_state = None
@@ -5595,6 +5779,9 @@ def run_pygame_viewer(
                         elif item.action == "campaign_author_move_cancel":
                             campaign_move_state = None
                             status_message = "campaign authoring: move canceled"
+                        elif item.action == "local_author_move_cancel":
+                            local_move_state = None
+                            status_message = "local authoring: move canceled"
                         elif item.action == "campaign_author_delete" and isinstance(item.payload, dict):
                             target_kind = str(item.payload.get("kind", ""))
                             target_id = str(item.payload.get("id", ""))
@@ -5646,15 +5833,14 @@ def run_pygame_viewer(
                             )
                             status_message = "local authoring: hostile spawner placed"
                         elif item.action == "local_dungeon_author_move_spawner" and isinstance(item.payload, dict):
-                            controller.local_dungeon_author_intent(
-                                "upsert_hostile_spawner",
-                                spawner_id=str(item.payload.get("spawner_id", "")),
-                                coord=item.payload.get("coord", {}),
-                                template_id="encounter_hostile_v1",
-                                count=1,
-                                enabled=True,
-                            )
-                            status_message = "local authoring: hostile spawner moved"
+                            spawner_id = str(item.payload.get("spawner_id", "")).strip()
+                            if spawner_id:
+                                local_move_state = LocalAuthoringMoveState(
+                                    kind="spawner",
+                                    object_id=spawner_id,
+                                    label=str(item.payload.get("label", "hostile spawner")),
+                                )
+                                status_message = "local authoring: move pending for hostile spawner; right-click destination and choose place"
                         elif item.action == "local_dungeon_author_delete_spawner" and isinstance(item.payload, dict):
                             controller.local_dungeon_author_intent(
                                 "delete_hostile_spawner",
@@ -5671,20 +5857,132 @@ def run_pygame_viewer(
                             )
                             status_message = "local authoring: transition point placed"
                         elif item.action == "local_dungeon_author_move_point" and isinstance(item.payload, dict):
-                            controller.local_dungeon_author_intent(
-                                "upsert_transition_point",
-                                point_id=str(item.payload.get("point_id", "")),
-                                coord=item.payload.get("coord", {}),
-                                point_kind=str(item.payload.get("point_kind", "")),
-                                enabled=True,
-                            )
-                            status_message = "local authoring: transition point moved"
+                            point_id = str(item.payload.get("point_id", "")).strip()
+                            if point_id:
+                                local_move_state = LocalAuthoringMoveState(
+                                    kind="transition",
+                                    object_id=point_id,
+                                    label=str(item.payload.get("label", "transition point")),
+                                    point_kind=str(item.payload.get("point_kind", "")),
+                                )
+                                status_message = "local authoring: move pending for transition point; right-click destination and choose place"
                         elif item.action == "local_dungeon_author_delete_point" and isinstance(item.payload, dict):
                             controller.local_dungeon_author_intent(
                                 "delete_transition_point",
                                 point_id=str(item.payload.get("point_id", "")),
                             )
                             status_message = "local authoring: transition point deleted"
+                        elif item.action == "local_structure_author_place_structure" and isinstance(item.payload, dict):
+                            controller.local_structure_author_intent(
+                                "create_rect",
+                                structure_id=str(item.payload.get("structure_id", "")),
+                                label=str(item.payload.get("label", "Structure")),
+                                room_id=str(item.payload.get("room_id", "room")),
+                                bounds=item.payload.get("bounds", {}),
+                                tags=["authoring"],
+                            )
+                            status_message = "local structure authoring: structure placement queued"
+                        elif item.action == "local_structure_author_place_opening" and isinstance(item.payload, dict):
+                            controller.local_structure_author_intent(
+                                "upsert_opening",
+                                structure_id=str(item.payload.get("structure_id", "")),
+                                opening_id=str(item.payload.get("opening_id", "")),
+                                kind=str(item.payload.get("kind", "door")),
+                                cell=item.payload.get("cell", {}),
+                            )
+                            status_message = "local structure authoring: opening placement queued"
+                        elif item.action == "local_structure_author_move_structure" and isinstance(item.payload, dict):
+                            structure_id = str(item.payload.get("structure_id", "")).strip()
+                            if structure_id:
+                                local_move_state = LocalAuthoringMoveState(
+                                    kind="structure",
+                                    object_id=structure_id,
+                                    label=str(item.payload.get("label", structure_id)),
+                                )
+                                status_message = "local structure authoring: move pending for structure; right-click destination and choose place"
+                        elif item.action == "local_structure_author_move_opening" and isinstance(item.payload, dict):
+                            opening_id = str(item.payload.get("opening_id", "")).strip()
+                            structure_id = str(item.payload.get("structure_id", "")).strip()
+                            if opening_id and structure_id:
+                                local_move_state = LocalAuthoringMoveState(
+                                    kind="opening",
+                                    object_id=opening_id,
+                                    label=str(item.payload.get("label", opening_id)),
+                                    structure_id=structure_id,
+                                )
+                                status_message = "local structure authoring: move pending for opening; right-click destination and choose place"
+                        elif item.action == "local_structure_author_delete_structure" and isinstance(item.payload, dict):
+                            controller.local_structure_author_intent(
+                                "delete_structure",
+                                structure_id=str(item.payload.get("structure_id", "")),
+                            )
+                            status_message = "local structure authoring: delete structure queued"
+                        elif item.action == "local_structure_author_delete_opening" and isinstance(item.payload, dict):
+                            controller.local_structure_author_intent(
+                                "remove_opening",
+                                structure_id=str(item.payload.get("structure_id", "")),
+                                opening_id=str(item.payload.get("opening_id", "")),
+                            )
+                            status_message = "local structure authoring: delete opening queued"
+                        elif item.action == "local_author_move_commit" and isinstance(item.payload, dict):
+                            target_kind = str(item.payload.get("kind", ""))
+                            target_id = str(item.payload.get("id", ""))
+                            coord = item.payload.get("coord", {})
+                            if target_kind == "spawner":
+                                controller.local_dungeon_author_intent(
+                                    "upsert_hostile_spawner",
+                                    spawner_id=target_id,
+                                    coord=coord,
+                                    template_id="encounter_hostile_v1",
+                                    count=1,
+                                    enabled=True,
+                                )
+                                status_message = "local authoring: hostile spawner moved"
+                                local_move_state = None
+                            elif target_kind == "transition":
+                                controller.local_dungeon_author_intent(
+                                    "upsert_transition_point",
+                                    point_id=target_id,
+                                    coord=coord,
+                                    point_kind=str(item.payload.get("point_kind", "")),
+                                    enabled=True,
+                                )
+                                status_message = "local authoring: transition point moved"
+                                local_move_state = None
+                            elif target_kind == "structure":
+                                active_player = sim.state.entities.get(PLAYER_ID)
+                                space = sim.state.world.spaces.get(active_player.space_id) if active_player is not None else None
+                                source = None
+                                for row in getattr(space, "structure_primitives", []):
+                                    if isinstance(row, dict) and str(row.get("structure_id", "")) == target_id:
+                                        source = row
+                                        break
+                                bounds = source.get("bounds", {}) if isinstance(source, dict) else {}
+                                width = int(bounds.get("width", 4)) if isinstance(bounds, dict) else 4
+                                height = int(bounds.get("height", 3)) if isinstance(bounds, dict) else 3
+                                label = str(source.get("label", target_id)) if isinstance(source, dict) else target_id
+                                room_id = str(source.get("room_id", target_id)) if isinstance(source, dict) else target_id
+                                tags = source.get("tags", ()) if isinstance(source, dict) else ()
+                                controller.local_structure_author_intent(
+                                    "create_rect",
+                                    structure_id=target_id,
+                                    label=label,
+                                    room_id=room_id,
+                                    bounds={"x": int(coord.get("x", 0)), "y": int(coord.get("y", 0)), "width": width, "height": height},
+                                    tags=tags,
+                                )
+                                status_message = "local structure authoring: structure moved"
+                                local_move_state = None
+                            elif target_kind == "opening":
+                                controller.local_structure_author_intent(
+                                    "move_opening",
+                                    structure_id=str(item.payload.get("structure_id", "")),
+                                    opening_id=target_id,
+                                    kind="door",
+                                    cell=coord,
+                                )
+                                status_message = "local structure authoring: opening moved"
+                                local_move_state = None
                         elif item.action == "local_dungeon_author_use_point" and isinstance(item.payload, dict):
                             controller.local_dungeon_author_intent(
                                 "use_transition_point",
@@ -5898,6 +6196,17 @@ def run_pygame_viewer(
                     "campaign authoring: right-click empty space to place town/dungeon/patrol; "
                     "right-click site/patrol to move/delete (hotkeys are debug fallback)"
                     f"{path_needed_suffix}"
+                )
+        elif player is not None and str(player.space_id).startswith("local_site:"):
+            if local_move_state is not None:
+                frame_status_message = (
+                    f"local authoring: moving {local_move_state.label}; "
+                    "right-click destination then choose place moved object (Esc cancels)"
+                )
+            elif not frame_status_message:
+                frame_status_message = (
+                    "local authoring: right-click empty space to place structure/opening/hostile/entry/exit; "
+                    "right-click authored targets to move/delete (hotkeys are debug fallback)"
                 )
 
         screen.fill((17, 18, 25))
