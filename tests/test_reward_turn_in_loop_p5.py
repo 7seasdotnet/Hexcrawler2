@@ -763,6 +763,36 @@ def test_local_structure_authoring_create_edit_delete_persists_save_load(tmp_pat
     loaded_space = loaded.state.world.spaces["safe_hub:greybridge"]
     loaded_structures = loaded_space.structure_primitives
     assert any(row.get("structure_id") == "authoring_demo_shell" for row in loaded_structures)
+    hash_before_opening_delete = simulation_hash(loaded)
+    save_again_path = tmp_path / "local_structure_authoring_save_round_trip.json"
+    save_game_json(save_again_path, loaded.state.world, loaded)
+    _, loaded_again = load_game_json(str(save_again_path))
+    loaded_again.register_rule_module(LocalEncounterRequestModule())
+    loaded_again.register_rule_module(LocalEncounterInstanceModule())
+    loaded_again.register_rule_module(CombatExecutionModule())
+    loaded_again.register_rule_module(ExplorationExecutionModule())
+    assert simulation_hash(loaded_again) == hash_before_opening_delete
+
+    loaded.append_command(
+        SimCommand(
+            tick=loaded.state.tick,
+            entity_id="scout",
+            command_type=LOCAL_STRUCTURE_AUTHOR_INTENT_COMMAND_TYPE,
+            params={
+                "operation": "remove_opening",
+                "structure_id": "authoring_demo_shell",
+                "opening_id": "authoring_demo_opening",
+            },
+        )
+    )
+    loaded.advance_ticks(2)
+    loaded_structures = loaded.state.world.spaces["safe_hub:greybridge"].structure_primitives
+    loaded_opening_rows = [
+        row
+        for row in compile_greybridge_overlay(loaded_structures)["opening_rows"]
+        if row.get("structure_id") == "authoring_demo_shell"
+    ]
+    assert not loaded_opening_rows
 
     loaded.append_command(
         SimCommand(

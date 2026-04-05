@@ -62,6 +62,11 @@ from hexcrawler.cli.pygame_viewer import (
     _campaign_authoring_edit_items,
     _campaign_authoring_placement_items,
     _campaign_authored_object_at_world,
+    _local_authored_target_at_cell,
+    _local_dungeon_authoring_placement_items,
+    _local_dungeon_authoring_edit_items,
+    _local_structure_authoring_placement_items,
+    _local_structure_authoring_edit_items,
     _campaign_patrol_anchor_at_world,
     _campaign_patrol_route_points,
     _campaign_patrol_path_needed_count,
@@ -328,6 +333,69 @@ def test_campaign_patrol_route_points_include_spawn_as_anchor_zero_then_authored
         tags=["authoring"],
     )
     assert _campaign_patrol_route_points(patrol) == [(-2.0, 1.0), (-1.5, 1.0), (-1.0, 0.5)]
+
+
+def test_local_authoring_empty_space_menu_exposes_structure_and_dungeon_placement_actions() -> None:
+    space = SpaceState(
+        space_id="local_site:test",
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 12, "height": 12, "blocked_cells": []},
+        structure_primitives=[],
+    )
+    cell = {"x": 4, "y": 3}
+
+    structure_items = _local_structure_authoring_placement_items(space, cell=cell)
+    dungeon_items = _local_dungeon_authoring_placement_items(space, cell=cell)
+    labels = [item.label for item in [*structure_items, *dungeon_items]]
+
+    assert "Place Room / Structure Here" in labels
+    assert "Place Hostile Here" in labels
+    assert "Place Entry Point Here" in labels
+    assert "Place Exit / Extraction Here" in labels
+
+
+def test_local_authoring_existing_structure_or_opening_menu_exposes_move_delete_actions() -> None:
+    space = SpaceState(
+        space_id="local_site:test",
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 12, "height": 12, "blocked_cells": []},
+        structure_primitives=[
+            {
+                "structure_id": "struct_a",
+                "label": "Structure A",
+                "room_id": "room_a",
+                "bounds": {"x": 2, "y": 2, "width": 4, "height": 3},
+                "openings": [{"opening_id": "door_a", "kind": "door", "cell": {"x": 2, "y": 3}}],
+            }
+        ],
+    )
+
+    structure_target = _local_authored_target_at_cell(space, cell={"x": 3, "y": 3}, include_dungeon_targets=True)
+    opening_target = _local_authored_target_at_cell(space, cell={"x": 2, "y": 3}, include_dungeon_targets=True)
+    structure_labels = [item.label for item in _local_structure_authoring_edit_items(structure_target or {})]
+    opening_labels = [item.label for item in _local_structure_authoring_edit_items(opening_target or {})]
+
+    assert structure_target is not None and structure_target["kind"] == "structure"
+    assert opening_target is not None and opening_target["kind"] == "opening"
+    assert "Move Structure" in structure_labels
+    assert "Delete Structure" in structure_labels
+    assert "Move Opening" in opening_labels
+    assert "Delete Opening" in opening_labels
+
+
+def test_local_authoring_existing_spawner_or_point_menu_exposes_move_delete_actions() -> None:
+    target_spawner = {"kind": "spawner", "id": "spawner_a", "label": "Spawner A"}
+    target_point = {"kind": "transition", "id": "exit_a", "label": "Exit A", "point_kind": "extraction_exit"}
+
+    spawner_labels = [item.label for item in _local_dungeon_authoring_edit_items(target_spawner)]
+    point_labels = [item.label for item in _local_dungeon_authoring_edit_items(target_point)]
+
+    assert "Move Hostile" in spawner_labels
+    assert "Delete Hostile" in spawner_labels
+    assert "Move Point" in point_labels
+    assert "Delete Point" in point_labels
 
 
 def test_run_pygame_viewer_right_click_campaign_map_does_not_raise_name_error(monkeypatch: pytest.MonkeyPatch) -> None:

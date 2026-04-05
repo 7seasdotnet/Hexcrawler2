@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual right-click local dungeon smoke (place dungeon entrance -> enter linked local space -> place/move/delete hostile + entry/exit markers -> extract via authored point -> save/load re-entry verification).
+- **Next action:** Run manual right-click local structure smoke (enter authored town/dungeon local space -> place/move/delete structure + opening via context menu -> verify local hostile/extraction actions still available -> save/load re-entry verification).
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -122,9 +122,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Added bounded authored dungeon local bridge primitives: persistent `local_hostile_spawners[]` and `local_transition_points[]` (entry/extraction/return) in local space state, including save/load/hash coverage and deterministic default dungeon entry+return markers.
-- Added authoritative `local_dungeon_author_intent` operations and viewer right-click local workflows for place/move/delete/use of hostile spawners and transition points, while preserving viewer read-only mutation rules.
-- Added regression coverage + bridge docs for authored dungeon end-to-end testability (author -> enter -> place hostile/points -> extraction return -> save/load persistence) without expanding into full dungeon systems.
+- Unified local right-click authoring hierarchy so local structure/opening workflows now share the same canonical context-menu path as local hostile/extraction and campaign authoring (hotkeys remain fallback/debug only).
+- Reused existing authoritative seams (`local_structure_author_intent`, `local_dungeon_author_intent`) for place/move/delete with bounded move-pending commit flow (`Move` -> next right-click destination -> commit, `Esc` cancel), preserving viewer read-only mutation rules.
+- Added targeted regression coverage for local right-click menu exposure and local structure/opening persistence/hash round-trip behavior; updated local structure + legendary problem docs for the right-click-first invariant.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
