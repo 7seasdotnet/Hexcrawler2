@@ -5,7 +5,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run manual right-click local structure smoke (enter authored town/dungeon local space -> place/move/delete structure + opening via context menu -> verify local hostile/extraction actions still available -> save/load re-entry verification).
+- **Next action:** Run manual authored proving-ground melee verdict smoke (enter Old Stair local proving ground -> replay choke fight 3-5 times -> verify telegraph/recovery/hit-outcome readability -> record top-down verdict vs projection-risk criteria).
 - **Phase status:** Active phase reset complete (documentation-only). Substrate expansion is no longer the default path unless directly required to ship this playable loop.
 
 ## Playable Milestone Definition (First Cash-Out Loop)
@@ -116,15 +116,17 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k player_feedback_lines_include_enemy_loop_line_in_local_space`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "greybridge_overlay or greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open or greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable"`
 - `PYTHONPATH=src pytest -q tests/test_reward_turn_in_loop_p5.py -k "overlay_compilation_is_deterministic_and_contains_gate_semantics or local_structure_authoring_create_edit_delete_persists_save_load or greybridge_hub_blocked_cells_stop_movement_but_doors_and_gate_path_remain_open or greybridge_gatehouse_round_trip_remains_traversable_and_exit_stable or greybridge_safe_hub_enter_exit_round_trip"`
+- `PYTHONPATH=src pytest -q tests/test_local_combat_proving_ground.py`
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py tests/test_local_combat_proving_ground.py`
 - `python play.py --headless`
 - `python play.py --headless --runtime-profile experimental_world`
 - `python play.py --headless --runtime-profile soak_audit`
 - `python play.py`
 
 ## What changed in this commit
-- Unified local right-click authoring hierarchy so local structure/opening workflows now share the same canonical context-menu path as local hostile/extraction and campaign authoring (hotkeys remain fallback/debug only).
-- Reused existing authoritative seams (`local_structure_author_intent`, `local_dungeon_author_intent`) for place/move/delete with bounded move-pending commit flow (`Move` -> next right-click destination -> commit, `Esc` cancel), preserving viewer read-only mutation rules.
-- Added targeted regression coverage for local right-click menu exposure and local structure/opening persistence/hash round-trip behavior; updated local structure + legendary problem docs for the right-click-first invariant.
+- Seeded one bounded authored local combat proving ground at `demo_dungeon_entrance` -> `local_site:demo_dungeon_entrance` (entry room + combat room + doorway choke + authored hostile + extraction/return), all save/load/hash stable through existing authored seams.
+- Added bounded on-world top-down melee readability cues (hostile telegraph/active/recovery ring states + player readiness ring) without altering authoritative combat architecture.
+- Added targeted proving-ground regression tests (authored data presence, entry/return flow, hostile materialization, save/load hash stability) and documented scope/verdict in `docs/LOCAL_COMBAT_PROVING_GROUND.md`.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
