@@ -20,8 +20,12 @@ from hexcrawler.cli.pygame_viewer import (
     _single_player_offer_pause,
     _transition_overlay_alpha,
     _selected_entity_lines,
+    _collect_recent_combat_feedback,
+    COMBAT_FEEDBACK_MAX_ITEMS,
+    SoundFeedback,
 )
 from hexcrawler.sim.core import EntityState
+from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 
 
@@ -241,3 +245,40 @@ def test_transition_overlay_alpha_is_viewer_only_and_non_mutating() -> None:
     assert world_hash(sim.state.world) == world_before
     assert simulation_hash(sim) == sim_before
     assert len(sim.input_log) == input_before
+
+
+def test_combat_feedback_rows_are_bounded_and_viewer_local_non_mutating() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    target = EntityState(entity_id="encounter_hostile:test", position_x=0.2, position_y=0.2, space_id="overworld")
+    sim.add_entity(target)
+    for idx in range(COMBAT_FEEDBACK_MAX_ITEMS + 5):
+        sim.record_event(
+            COMBAT_OUTCOME_EVENT_TYPE,
+            {
+                "tick": idx,
+                "attacker_id": PLAYER_ID,
+                "target_id": target.entity_id,
+                "reason": "resolved",
+                "applied": True,
+            },
+        )
+    sim.state.tick = COMBAT_FEEDBACK_MAX_ITEMS + 6
+    world_before = world_hash(sim.state.world)
+    sim_before = simulation_hash(sim)
+    input_before = len(sim.input_log)
+    rows = _collect_recent_combat_feedback(sim, player_space_id="overworld")
+    assert len(rows) <= COMBAT_FEEDBACK_MAX_ITEMS
+    assert world_hash(sim.state.world) == world_before
+    assert simulation_hash(sim) == sim_before
+    assert len(sim.input_log) == input_before
+
+
+def test_sound_feedback_noop_methods_are_headless_safe() -> None:
+    sound = SoundFeedback()
+    sound.ui_select()
+    sound.contact_warning()
+    sound.fight_or_flee()
+    sound.attack()
+    sound.hit()
+    sound.block_or_miss()
+    sound.down()

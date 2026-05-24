@@ -124,9 +124,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Polished default `core_playable` HUD copy into concise player-facing language and reduced debug-style phrasing on the main surface while preserving existing read-only debug panels.
-- Upgraded campaign contact presentation with clearer Fight/Flee modal text (situational sentence + explicit choice prompt) without changing command/event authority seams.
-- Added a presentation-only campaign/local transition overlay fade + title card and a narrow regression test proving transition presentation helpers do not mutate simulation/world hashes or input logs.
+- Added bounded viewer-local floating combat feedback labels (for existing melee outcomes) anchored to local targets, with deterministic caps and lifetime windows that never serialize or mutate authoritative state.
+- Tightened default HUD action hints for campaign vs contact vs local spaces while preserving existing command/event seams and keeping debug-heavy detail in existing inspector/debug panels.
+- Added runtime tests for bounded combat feedback collection and headless-safe no-op sound hooks, and retained transition/hash non-mutation coverage.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
