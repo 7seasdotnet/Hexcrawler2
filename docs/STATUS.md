@@ -149,3 +149,16 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "core_playable or feedback or local_contact or right_click"`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `python play.py --headless`
+
+
+## What changed in this commit
+- Presentation Gate 1C verification hardening: headless pygame launch now sets dummy video+audio drivers in `--headless`, while sound hooks remain no-op and viewer-local.
+- Added bounded duplicate-suppression for floating combat feedback via viewer-local seen-event keys (capped), preserving role/space filtering and non-mutation behavior.
+- Narrow readability pass: clearer player marker silhouette, slightly higher floating feedback text placement, and shorter HUD/modal action wording for core_playable.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_render_interpolation.py tests/test_pygame_viewer_runtime.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "core_playable or feedback or local_contact or right_click"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --headless`

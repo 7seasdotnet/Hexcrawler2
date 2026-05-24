@@ -157,6 +157,7 @@ RECENT_MELEE_CUE_TICK_WINDOW = 12
 TRANSITION_OVERLAY_FRAMES = 14
 COMBAT_FEEDBACK_MAX_ITEMS = 8
 COMBAT_FEEDBACK_MAX_AGE_TICKS = 20
+COMBAT_FEEDBACK_SEEN_EVENT_CAP = 64
 GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
@@ -569,6 +570,7 @@ class ViewerRuntimeState:
     runtime_profile: RuntimeProfile | None = None
     paused: bool = False
     last_loaded_identity: str | None = None
+    seen_combat_feedback_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -2417,6 +2419,7 @@ def _draw_frame_layers(
         world_center=world_center,
         zoom_scale=world_zoom_scale,
         clip_rect=viewport_rect,
+        seen_event_keys=runtime_state.seen_combat_feedback_keys,
     )
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
@@ -2496,13 +2499,13 @@ def _draw_entity(
     size = HEX_SIZE * zoom_scale
     x = int(center[0] + world_x * size)
     y = int(center[1] + world_y * size)
-    pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
-    pygame.draw.circle(screen, (15, 15, 15), (x, y), 8, 1)
+    pygame.draw.circle(screen, (255, 242, 122), (x, y), 10)
+    pygame.draw.circle(screen, (18, 18, 18), (x, y), 10, 2)
     if str(entity.space_id).startswith("local_site:"):
         cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
         ring_color = (132, 220, 146) if cooldown_remaining == 0 else (229, 182, 84)
         pygame.draw.circle(screen, ring_color, (x, y), 12, 2)
-    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(40, 40, 24), angle_override=facing_angle)
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(52, 44, 14), angle_override=facing_angle)
     screen.set_clip(old_clip)
 
 
@@ -2589,8 +2592,9 @@ def _draw_floating_combat_feedback(
     world_center: tuple[float, float],
     zoom_scale: float,
     clip_rect: pygame.Rect,
+    seen_event_keys: list[tuple[int, str, str, str]] | None = None,
 ) -> None:
-    feedback = _collect_recent_combat_feedback(sim, player_space_id=current_space_id)
+    feedback = _collect_recent_combat_feedback(sim, player_space_id=current_space_id, seen_event_keys=seen_event_keys)
     if not feedback:
         return
     old_clip = screen.get_clip()
@@ -2604,7 +2608,7 @@ def _draw_floating_combat_feedback(
         age = max(0, now_tick - row.tick)
         rise_px = int(age * 2)
         text = font.render(row.label, True, row.color)
-        screen.blit(text, (int(px) - (text.get_width() // 2), int(py) - 20 - rise_px))
+        screen.blit(text, (int(px) - (text.get_width() // 2), int(py) - 28 - rise_px))
     screen.set_clip(old_clip)
 
 
@@ -2751,9 +2755,15 @@ def _combat_feedback_label_and_color(*, reason: str, applied: bool, neutralized:
     return "MISS", (188, 198, 220)
 
 
-def _collect_recent_combat_feedback(sim: Simulation, *, player_space_id: str) -> list[FloatingCombatFeedback]:
+def _collect_recent_combat_feedback(
+    sim: Simulation,
+    *,
+    player_space_id: str,
+    seen_event_keys: list[tuple[int, str, str, str]] | None = None,
+) -> list[FloatingCombatFeedback]:
     rows: list[FloatingCombatFeedback] = []
     now_tick = int(sim.state.tick)
+    recent_seen: set[tuple[int, str, str, str]] = set(seen_event_keys or ())
     for entry in reversed(sim.get_event_trace()):
         if entry.get("event_type") != COMBAT_OUTCOME_EVENT_TYPE:
             continue
@@ -2769,9 +2779,15 @@ def _collect_recent_combat_feedback(sim: Simulation, *, player_space_id: str) ->
         target = sim.state.entities.get(target_id)
         if target is None or target.space_id != player_space_id:
             continue
+        reason = str(params.get("reason", ""))
+        attacker_id = str(params.get("attacker_id", ""))
+        event_key = (tick, attacker_id, target_id, reason)
+        if event_key in recent_seen:
+            continue
+        recent_seen.add(event_key)
         neutralized = is_incapacitated_from_wounds(target.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
         label, color = _combat_feedback_label_and_color(
-            reason=str(params.get("reason", "")),
+            reason=reason,
             applied=bool(params.get("applied")),
             neutralized=neutralized,
         )
@@ -2779,6 +2795,10 @@ def _collect_recent_combat_feedback(sim: Simulation, *, player_space_id: str) ->
         if len(rows) >= COMBAT_FEEDBACK_MAX_ITEMS:
             break
     rows.reverse()
+    if seen_event_keys is not None:
+        newest_keys = sorted(recent_seen, key=lambda key: (key[0], key[1], key[2], key[3]))
+        del seen_event_keys[:]
+        seen_event_keys.extend(newest_keys[-COMBAT_FEEDBACK_SEEN_EVENT_CAP:])
     return rows
 
 
@@ -3051,11 +3071,11 @@ def _player_facing_hud_lines(
         f"Runtime: {'paused' if runtime_state.paused else 'running'} ({runtime_state.runtime_profile or CORE_PLAYABLE})",
     ]
     if str(entity.space_id).startswith("local_site:"):
-        lines.append("Local actions: Left-click hostile=attack | A/D turn | E/Q extract/return")
+        lines.append("Local actions: L-click hostile attack | A/D turn | E/Q extract")
     elif pending_offer is not None:
         lines.append("Contact actions: Fight [F] | Flee [X]")
     else:
-        lines.append("Campaign actions: Enter/E at Greybridge | Fight/Flee on contact")
+        lines.append("Campaign actions: Enter [E] at Greybridge | Contact: Fight [F] / Flee [X]")
     lines.extend(_player_feedback_lines(sim, entity=entity))
     if pending_offer is not None:
         lines.append(
@@ -3064,7 +3084,7 @@ def _player_facing_hud_lines(
     if entity.space_id == "safe_hub:greybridge":
         lines.append("Greybridge Hub: [T] Watch Hall turn-in | [R] Recover | [Q/E] Exit gate")
     elif _is_home_site(safe_site_id):
-        lines.append("Greybridge outskirts: Press [Enter/E] to enter local hub")
+        lines.append("Greybridge outskirts: Press [Enter/E] to enter hub")
     elif at_safe_site:
         lines.append(f"site=safe ({safe_site_id if isinstance(safe_site_id, str) else '-'})")
     return lines
@@ -3750,11 +3770,11 @@ def _draw_encounter_offer_modal(
     title = _truncate_text_to_pixel_width(f"CONTACT: {label}", font, panel.width - 18)
     screen.blit(font.render(title, True, (245, 235, 190)), (panel.x + 9, panel.y + 10))
     source_label = str(offer.get("source_label", "contact source"))
-    hint = _truncate_text_to_pixel_width(f"You spot danger nearby: {source_label}.", font, panel.width - 18)
+    hint = _truncate_text_to_pixel_width(f"Danger spotted near {source_label}.", font, panel.width - 18)
     screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
     action_hint = _truncate_text_to_pixel_width("Choose now: Fight [F] or Flee [X]", font, panel.width - 18)
     screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 58))
-    waiting_hint = _truncate_text_to_pixel_width("Decision required: campaign flow paused until input.", font, panel.width - 18)
+    waiting_hint = _truncate_text_to_pixel_width("Campaign paused until you choose.", font, panel.width - 18)
     screen.blit(font.render(waiting_hint, True, (236, 196, 160)), (panel.x + 9, panel.y + 78))
 
     button_w = 110
@@ -5053,6 +5073,7 @@ def run_pygame_viewer(
 ) -> int:
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
         print("[hexcrawler.viewer] warning: headless mode active; no window will open.")
 
     _print_startup_banner()
