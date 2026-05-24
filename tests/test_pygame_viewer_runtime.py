@@ -282,3 +282,27 @@ def test_sound_feedback_noop_methods_are_headless_safe() -> None:
     sound.hit()
     sound.block_or_miss()
     sound.down()
+
+
+def test_combat_feedback_duplicate_events_are_suppressed_with_seen_ledger() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    target = EntityState(entity_id="encounter_hostile:dup", position_x=0.0, position_y=0.0, space_id="overworld")
+    sim.add_entity(target)
+    duplicate_event = {
+        "tick": 10,
+        "attacker_id": PLAYER_ID,
+        "target_id": target.entity_id,
+        "reason": "target_moved",
+        "applied": False,
+    }
+    sim.record_event(COMBAT_OUTCOME_EVENT_TYPE, duplicate_event)
+    sim.record_event(COMBAT_OUTCOME_EVENT_TYPE, duplicate_event)
+    sim.state.tick = 11
+    seen: list[tuple[int, str, str, str]] = []
+
+    rows_first = _collect_recent_combat_feedback(sim, player_space_id="overworld", seen_event_keys=seen)
+    rows_second = _collect_recent_combat_feedback(sim, player_space_id="overworld", seen_event_keys=seen)
+
+    assert len(rows_first) == 1
+    assert rows_first[0].label == "MISS"
+    assert rows_second == []
