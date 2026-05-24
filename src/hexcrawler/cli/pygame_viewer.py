@@ -154,6 +154,7 @@ LOCAL_INTERPOLATION_SNAP_DISTANCE = 0.08
 RECENT_COMBAT_FEEDBACK_TICK_WINDOW = 20
 RECENT_HIT_FLASH_TICK_WINDOW = 4
 RECENT_MELEE_CUE_TICK_WINDOW = 12
+TRANSITION_OVERLAY_FRAMES = 14
 GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
@@ -2925,14 +2926,14 @@ def _player_facing_hud_lines(
     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
     calendar = _calendar_presentation(sim)
     lines = [
-        "WASD move | Enter/E use site | F fight | X flee | L loot | T turn in | R recover | Q exit hub",
-        f"condition={condition} wound_total={severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
-        f"inventory proof_token={proof_tokens} rations={rations}",
+        "Move: WASD  |  Context: Right-click  |  Fight/Flee: F/X",
+        f"Condition: {condition}  |  Wounds: {severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
+        f"Supplies: Proof {proof_tokens}  |  Rations {rations}",
         (
-            f"time {calendar['hour']:02d}:{calendar['minute']:02d} | {calendar['day_night']} | "
+            f"Time {calendar['hour']:02d}:{calendar['minute']:02d} | {calendar['day_night']} | "
             f"{calendar['month_name']} {calendar['day_of_month']} (day {calendar['day']}) | moon {calendar['moon_phase']}"
         ),
-        f"runtime={'paused' if runtime_state.paused else 'running'} profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
+        f"Runtime: {'paused' if runtime_state.paused else 'running'} ({runtime_state.runtime_profile or CORE_PLAYABLE})",
     ]
     lines.extend(_player_feedback_lines(sim, entity=entity))
     if pending_offer is not None:
@@ -2940,9 +2941,9 @@ def _player_facing_hud_lines(
             f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"
         )
     if entity.space_id == "safe_hub:greybridge":
-        lines.append("site=INSIDE Greybridge hub | Watch Hall [T] | Inn/Infirmary [R] | Gate exit [Q/E]")
+        lines.append("Greybridge Hub: [T] Watch Hall turn-in | [R] Recover | [Q/E] Exit gate")
     elif _is_home_site(safe_site_id):
-        lines.append("site=OUTSIDE Greybridge on campaign map | Enter/E to step into local hub")
+        lines.append("Greybridge outskirts: Press [Enter/E] to enter local hub")
     elif at_safe_site:
         lines.append(f"site=safe ({safe_site_id if isinstance(safe_site_id, str) else '-'})")
     return lines
@@ -3625,12 +3626,12 @@ def _draw_encounter_offer_modal(
     pygame.draw.rect(screen, (128, 132, 144), panel, 1)
 
     label = str(offer.get("encounter_label", "Encounter"))
-    title = _truncate_text_to_pixel_width(f"Encounter: {label}", font, panel.width - 18)
+    title = _truncate_text_to_pixel_width(f"CONTACT: {label}", font, panel.width - 18)
     screen.blit(font.render(title, True, (245, 235, 190)), (panel.x + 9, panel.y + 10))
     source_label = str(offer.get("source_label", "contact source"))
-    hint = _truncate_text_to_pixel_width(f"Source: {source_label}", font, panel.width - 18)
+    hint = _truncate_text_to_pixel_width(f"You spot danger nearby: {source_label}.", font, panel.width - 18)
     screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
-    action_hint = _truncate_text_to_pixel_width("Fight [F] or Flee [X]", font, panel.width - 18)
+    action_hint = _truncate_text_to_pixel_width("Choose now: Fight [F] or Flee [X]", font, panel.width - 18)
     screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 58))
     waiting_hint = _truncate_text_to_pixel_width("Decision required: campaign flow paused until input.", font, panel.width - 18)
     screen.blit(font.render(waiting_hint, True, (236, 196, 160)), (panel.x + 9, panel.y + 78))
@@ -3647,6 +3648,32 @@ def _draw_encounter_offer_modal(
         pygame.draw.rect(screen, (16, 18, 22), rect, 1)
         screen.blit(font.render(text, True, (15, 15, 15)), (rect.x + 30, rect.y + 8))
     return {"fight": fight_rect, "flee": flee_rect}
+
+
+def _transition_overlay_alpha(remaining_frames: int) -> float:
+    if remaining_frames <= 0:
+        return 0.0
+    return clamp01(float(remaining_frames) / float(max(1, TRANSITION_OVERLAY_FRAMES)))
+
+
+def _draw_transition_overlay(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    viewport_rect: pygame.Rect,
+    *,
+    title: str,
+    remaining_frames: int,
+) -> None:
+    alpha = _transition_overlay_alpha(remaining_frames)
+    if alpha <= 0.0:
+        return
+    overlay = pygame.Surface((viewport_rect.width, viewport_rect.height), pygame.SRCALPHA)
+    shade = int(round(190 * alpha))
+    overlay.fill((8, 10, 14, shade))
+    title_surface = font.render(title, True, (235, 238, 245))
+    title_rect = title_surface.get_rect(center=viewport_rect.center)
+    overlay.blit(title_surface, (title_rect.x - viewport_rect.x, title_rect.y - viewport_rect.y))
+    screen.blit(overlay, (viewport_rect.x, viewport_rect.y))
 
 
 def _draw_local_arena_overlay(
@@ -5368,6 +5395,8 @@ def run_pygame_viewer(
     last_sent_move_vector = (0.0, 0.0)
     selected_site_id: str | None = None
     visual_facing_by_entity: dict[str, float] = {}
+    transition_overlay_frames = 0
+    transition_overlay_title = ""
 
     while running:
         target_fps = 30 if runtime_state.paused else 60
@@ -6160,9 +6189,17 @@ def run_pygame_viewer(
         if current_space_id is None:
             current_space_id = "overworld"
         if current_space_id != tracked_space_id:
+            previous_space_id = tracked_space_id
             tracked_space_id = current_space_id
             local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
             previous_snapshot = current_snapshot
+            transition_overlay_frames = TRANSITION_OVERLAY_FRAMES
+            if str(previous_space_id).startswith("local_site:") and current_space_id == "overworld":
+                transition_overlay_title = "Returning to Campaign"
+            elif previous_space_id == "overworld" and str(current_space_id).startswith("local_site:"):
+                transition_overlay_title = "Entering Local Encounter"
+            else:
+                transition_overlay_title = "Transition"
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
         selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
         follow_center, follow_message = _apply_follow_selected_camera(
@@ -6270,6 +6307,14 @@ def run_pygame_viewer(
             alpha=alpha,
             visual_facing_by_entity=visual_facing_by_entity,
         )
+        _draw_transition_overlay(
+            screen,
+            marker_font,
+            viewport_rect,
+            title=transition_overlay_title,
+            remaining_frames=transition_overlay_frames,
+        )
+        transition_overlay_frames = max(0, transition_overlay_frames - 1)
         pygame_module.display.flip()
 
     pygame_module.quit()

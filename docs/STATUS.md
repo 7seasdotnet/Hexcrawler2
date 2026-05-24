@@ -124,9 +124,9 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python play.py`
 
 ## What changed in this commit
-- Seeded one bounded authored local combat proving ground at `demo_dungeon_entrance` -> `local_site:demo_dungeon_entrance` (entry room + combat room + doorway choke + authored hostile + extraction/return), all save/load/hash stable through existing authored seams.
-- Added bounded on-world top-down melee readability cues (hostile telegraph/active/recovery ring states + player readiness ring) without altering authoritative combat architecture.
-- Added targeted proving-ground regression tests (authored data presence, entry/return flow, hostile materialization, save/load hash stability) and documented scope/verdict in `docs/LOCAL_COMBAT_PROVING_GROUND.md`.
+- Polished default `core_playable` HUD copy into concise player-facing language and reduced debug-style phrasing on the main surface while preserving existing read-only debug panels.
+- Upgraded campaign contact presentation with clearer Fight/Flee modal text (situational sentence + explicit choice prompt) without changing command/event authority seams.
+- Added a presentation-only campaign/local transition overlay fade + title card and a narrow regression test proving transition presentation helpers do not mutate simulation/world hashes or input logs.
 
 ## Core-playable clarity note (this pass)
 - Default `core_playable` startup now presents a sparse intentional campaign scene (Greybridge + Old Stair + one patrol + player) with clearer travel rhythm and reduced map-surface text clutter.
@@ -144,3 +144,8 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - **Main driver:** viewer/runtime overhead remains the dominant long-run slowdown source once caps are enforced, because viewer-coupled systems keep additional entities/events/encounter-control bookkeeping active; record containers are now bounded.
 - **Simulation-side status:** headless run stayed bounded with no active entities/events growth (20k-tick diagnostic: `signals=256`, `tracks=256`, `spawn_descriptors=256`, `entities=0`, `pending_events=0`).
 - **Viewer/runtime-side status:** 20k-tick diagnostic remained bounded on capped records but retained higher active-state load (`entities=258`, `event_trace=256`, `pending_events=6`, `pending_offers=1`), matching expected viewer+encounter module workload and confirming slowdown is now mostly runtime/viewer-coupled rather than unbounded container growth.
+
+- `PYTHONPATH=src pytest -q tests/test_render_interpolation.py tests/test_pygame_viewer_runtime.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "core_playable or feedback or local_contact or right_click"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --headless`
