@@ -18,6 +18,7 @@ from hexcrawler.cli.pygame_viewer import (
     _focus_camera_on_selected,
     interpolate_entity_position,
     _single_player_offer_pause,
+    _transition_overlay_alpha,
     _selected_entity_lines,
 )
 from hexcrawler.sim.core import EntityState
@@ -225,3 +226,18 @@ def test_selected_entity_lines_show_explicit_incapacitated_state() -> None:
 
     assert any("Incapacitated: YES" in line for line in lines)
     assert any("severity_total=4" in line for line in lines)
+
+
+def test_transition_overlay_alpha_is_viewer_only_and_non_mutating() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    world_before = world_hash(sim.state.world)
+    sim_before = simulation_hash(sim)
+    input_before = len(sim.input_log)
+
+    assert _transition_overlay_alpha(0) == 0.0
+    assert 0.0 < _transition_overlay_alpha(4) < 1.0
+    assert _transition_overlay_alpha(999) == 1.0
+
+    assert world_hash(sim.state.world) == world_before
+    assert simulation_hash(sim) == sim_before
+    assert len(sim.input_log) == input_before
