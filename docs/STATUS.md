@@ -162,3 +162,25 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "core_playable or feedback or local_contact or right_click"`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `python play.py --headless`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Execute local machine visual audit for default `core_playable` scene after installing `pygame`, then capture pass/fail against Presentation Gates 1A–1C checklist.
+
+## What Exists (folders / entry points)
+- `play.py`: canonical launcher (`python play.py`, `python play.py --headless`).
+- `src/hexcrawler/cli/play.py`: startup/save bootstrap + runtime profile wiring.
+- `src/hexcrawler/cli/pygame_viewer.py`: read-only viewer loop and headless/runtime diagnostics.
+- `src/hexcrawler/cli/runtime_profiles.py`: `core_playable` default runtime profile composition.
+- `requirements.txt`: runtime dependency declaration (`pygame`).
+- `README.md`: dependency install, headless smoke, and manual visual-audit checklist.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `python play.py --headless` (returns explicit install guidance + non-zero if `pygame` is missing)
+- `python -m pip install -r requirements.txt` (required before pygame/viewer tests; may fail in restricted CI with blocked package index)
+
+## What changed in this commit
+- Added explicit `ModuleNotFoundError` handling in viewer startup to fail with actionable dependency-install instructions instead of an unhandled traceback.
+- Documented pygame dependency/runtime verification path and exact local install commands in `README.md`, including index-restricted environment fallback command.
+- Added a minimal manual visual-audit workflow for default `core_playable` scene (what to inspect for first-minute presentation gates) and recorded this phase-aligned verification guidance in `STATUS.md`.

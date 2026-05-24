@@ -5077,7 +5077,16 @@ def run_pygame_viewer(
         print("[hexcrawler.viewer] warning: headless mode active; no window will open.")
 
     _print_startup_banner()
-    pygame_module = _ensure_pygame_imported()
+    try:
+        pygame_module = _ensure_pygame_imported()
+    except ModuleNotFoundError as exc:
+        print(
+            "[hexcrawler.viewer] pygame import failed: "
+            f"{exc}. Install dependencies with `python -m pip install -r requirements.txt` "
+            "(or `python -m pip install pygame`) before running play.py.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         pygame_module.init()
