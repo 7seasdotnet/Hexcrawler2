@@ -184,3 +184,16 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - Added explicit `ModuleNotFoundError` handling in viewer startup to fail with actionable dependency-install instructions instead of an unhandled traceback.
 - Documented pygame dependency/runtime verification path and exact local install commands in `README.md`, including index-restricted environment fallback command.
 - Added a minimal manual visual-audit workflow for default `core_playable` scene (what to inspect for first-minute presentation gates) and recorded this phase-aligned verification guidance in `STATUS.md`.
+
+## What changed in this commit
+- Added a new presentation helper module (`src/hexcrawler/cli/presentation_theme.py`) for an OSR-styled palette plus reusable panel/vignette drawing primitives to support a stronger default core_playable visual pass.
+- Reworked core viewer framing in `pygame_viewer.py` to use themed top-bar presentation, darker campaign/local grounding, and stronger CONTACT modal direction (dimmer backdrop + sharper action language).
+- Kept all presentation-only changes viewer-local (no simulation authority/state mutation), with pygame import binding for theme helpers.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run local visual audit with pygame installed and capture before/after screenshots for first-frame, CONTACT, and local combat readability.
