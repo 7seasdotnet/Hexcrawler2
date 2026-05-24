@@ -155,6 +155,8 @@ RECENT_COMBAT_FEEDBACK_TICK_WINDOW = 20
 RECENT_HIT_FLASH_TICK_WINDOW = 4
 RECENT_MELEE_CUE_TICK_WINDOW = 12
 TRANSITION_OVERLAY_FRAMES = 14
+COMBAT_FEEDBACK_MAX_ITEMS = 8
+COMBAT_FEEDBACK_MAX_AGE_TICKS = 20
 GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
@@ -567,6 +569,37 @@ class ViewerRuntimeState:
     runtime_profile: RuntimeProfile | None = None
     paused: bool = False
     last_loaded_identity: str | None = None
+
+
+@dataclass(frozen=True)
+class FloatingCombatFeedback:
+    entity_id: str
+    label: str
+    tick: int
+    color: tuple[int, int, int]
+
+
+class SoundFeedback:
+    def ui_select(self) -> None:
+        return None
+
+    def contact_warning(self) -> None:
+        return None
+
+    def fight_or_flee(self) -> None:
+        return None
+
+    def attack(self) -> None:
+        return None
+
+    def hit(self) -> None:
+        return None
+
+    def block_or_miss(self) -> None:
+        return None
+
+    def down(self) -> None:
+        return None
 
 
 class ViewerRuntimeController:
@@ -2376,6 +2409,15 @@ def _draw_frame_layers(
                 clip_rect=viewport_rect,
                 facing_angle=facing_angle,
             )
+    _draw_floating_combat_feedback(
+        screen,
+        sim,
+        marker_font,
+        current_space_id=current_space_id,
+        world_center=world_center,
+        zoom_scale=world_zoom_scale,
+        clip_rect=viewport_rect,
+    )
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
@@ -2538,6 +2580,34 @@ def _draw_facing_wedge(
     pygame.draw.polygon(screen, color, [tip, left, right])
 
 
+def _draw_floating_combat_feedback(
+    screen: pygame.Surface,
+    sim: Simulation,
+    font: pygame.font.Font,
+    *,
+    current_space_id: str,
+    world_center: tuple[float, float],
+    zoom_scale: float,
+    clip_rect: pygame.Rect,
+) -> None:
+    feedback = _collect_recent_combat_feedback(sim, player_space_id=current_space_id)
+    if not feedback:
+        return
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
+    now_tick = int(sim.state.tick)
+    for row in feedback:
+        entity = sim.state.entities.get(row.entity_id)
+        if entity is None:
+            continue
+        px, py = _world_to_pixel(entity.position_x, entity.position_y, world_center, zoom_scale)
+        age = max(0, now_tick - row.tick)
+        rise_px = int(age * 2)
+        text = font.render(row.label, True, row.color)
+        screen.blit(text, (int(px) - (text.get_width() // 2), int(py) - 20 - rise_px))
+    screen.set_clip(old_clip)
+
+
 def _draw_top_control_bar(
     screen: pygame.Surface,
     sim: Simulation,
@@ -2665,6 +2735,51 @@ def _combat_reason_label(reason: str) -> str:
         "ineligible": "ineligible",
     }
     return mapping.get(reason, reason)
+
+
+def _combat_feedback_label_and_color(*, reason: str, applied: bool, neutralized: bool) -> tuple[str, tuple[int, int, int]]:
+    if reason == "windup_started":
+        return "WINDUP", (244, 196, 120)
+    if reason == "cooldown_blocked":
+        return "BLOCKED", (186, 192, 206)
+    if reason == "target_moved":
+        return "MISS", (188, 198, 220)
+    if applied:
+        if neutralized:
+            return "DOWN", (255, 144, 124)
+        return "WOUNDED", (255, 178, 122)
+    return "MISS", (188, 198, 220)
+
+
+def _collect_recent_combat_feedback(sim: Simulation, *, player_space_id: str) -> list[FloatingCombatFeedback]:
+    rows: list[FloatingCombatFeedback] = []
+    now_tick = int(sim.state.tick)
+    for entry in reversed(sim.get_event_trace()):
+        if entry.get("event_type") != COMBAT_OUTCOME_EVENT_TYPE:
+            continue
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            continue
+        tick = params.get("tick")
+        if not isinstance(tick, int) or (now_tick - tick) > COMBAT_FEEDBACK_MAX_AGE_TICKS:
+            continue
+        target_id = params.get("target_id")
+        if not isinstance(target_id, str):
+            continue
+        target = sim.state.entities.get(target_id)
+        if target is None or target.space_id != player_space_id:
+            continue
+        neutralized = is_incapacitated_from_wounds(target.wounds, threshold=WOUND_INCAPACITATE_SEVERITY)
+        label, color = _combat_feedback_label_and_color(
+            reason=str(params.get("reason", "")),
+            applied=bool(params.get("applied")),
+            neutralized=neutralized,
+        )
+        rows.append(FloatingCombatFeedback(entity_id=target_id, label=label, tick=tick, color=color))
+        if len(rows) >= COMBAT_FEEDBACK_MAX_ITEMS:
+            break
+    rows.reverse()
+    return rows
 
 
 def _nearest_local_hostile(sim: Simulation, *, entity: EntityState) -> tuple[str, EntityState, float] | None:
@@ -2926,7 +3041,7 @@ def _player_facing_hud_lines(
     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
     calendar = _calendar_presentation(sim)
     lines = [
-        "Move: WASD  |  Context: Right-click  |  Fight/Flee: F/X",
+        "Move WASD | Context Right-click",
         f"Condition: {condition}  |  Wounds: {severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
         f"Supplies: Proof {proof_tokens}  |  Rations {rations}",
         (
@@ -2935,6 +3050,12 @@ def _player_facing_hud_lines(
         ),
         f"Runtime: {'paused' if runtime_state.paused else 'running'} ({runtime_state.runtime_profile or CORE_PLAYABLE})",
     ]
+    if str(entity.space_id).startswith("local_site:"):
+        lines.append("Local actions: Left-click hostile=attack | A/D turn | E/Q extract/return")
+    elif pending_offer is not None:
+        lines.append("Contact actions: Fight [F] | Flee [X]")
+    else:
+        lines.append("Campaign actions: Enter/E at Greybridge | Fight/Flee on contact")
     lines.extend(_player_feedback_lines(sim, entity=entity))
     if pending_offer is not None:
         lines.append(
