@@ -23,6 +23,7 @@ from hexcrawler.cli.runtime_profiles import (
     configure_runtime_profile,
     configure_non_encounter_viewer_modules,
 )
+from hexcrawler.cli import presentation_theme
 from hexcrawler.sim.core import HEX_TOPOLOGY_TYPES, EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
@@ -2236,6 +2237,7 @@ def _draw_world(
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     topology_diagnostic = _viewer_topology_diagnostic(active_space)
+    pygame.draw.rect(screen, (24, 20, 18), clip_rect)
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
     if active_space is not None and active_space.topology_type == SQUARE_GRID_TOPOLOGY:
@@ -2246,8 +2248,8 @@ def _draw_world(
             pixel_x = center[0] + world_x * cell_size
             pixel_y = center[1] + world_y * cell_size
             rect = pygame.Rect(int(pixel_x - cell_size / 2), int(pixel_y - cell_size / 2), int(cell_size), int(cell_size))
-            pygame.draw.rect(screen, (58, 58, 64), rect)
-            pygame.draw.rect(screen, (35, 35, 40), rect, 1)
+            pygame.draw.rect(screen, (46, 40, 36), rect)
+            pygame.draw.rect(screen, (76, 68, 62), rect, 1)
         _draw_local_structure_overlay_bounds(screen, active_space=active_space, center=center, zoom_scale=zoom_scale)
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
         screen.set_clip(old_clip)
@@ -2266,11 +2268,16 @@ def _draw_world(
         record = sim.state.world.get_hex_record(coord)
         terrain_type = record.terrain_type if record else "void"
         terrain_color = TERRAIN_COLORS.get(terrain_type, (90, 90, 96))
+        terrain_color = tuple(max(0, int(channel * 0.72)) for channel in terrain_color)
         pygame.draw.polygon(screen, terrain_color, points)
-        pygame.draw.polygon(screen, (35, 35, 40), points, 1)
+        pygame.draw.polygon(screen, (62, 58, 52), points, 1)
 
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
+    if active_space is not None and str(getattr(active_space, "role", "")) == CAMPAIGN_SPACE_ROLE:
+        presentation_theme.draw_vignette(screen, clip_rect, 0.34)
+    if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
+        presentation_theme.draw_vignette(screen, clip_rect, 0.52)
     screen.set_clip(old_clip)
 
 
@@ -2620,8 +2627,7 @@ def _draw_top_control_bar(
     bar_rect: pygame.Rect,
     follow_state: FollowSelectionState,
 ) -> None:
-    pygame.draw.rect(screen, (28, 30, 40), bar_rect)
-    pygame.draw.rect(screen, (95, 98, 110), bar_rect, 1)
+    presentation_theme.draw_panel(screen, bar_rect, "", font)
 
     calendar = _calendar_presentation(sim)
     hash_suffix = simulation_hash(sim)[-8:]
@@ -2631,11 +2637,11 @@ def _draw_top_control_bar(
         f"{calendar['day_night']} moon={calendar['moon_phase']} "
         f"seed={sim.seed} src={identity} hash={hash_suffix} follow={follow_state.status}"
     )
-    sections_text = "Controls: Simulation | Save/Load | Time | View | Debug"
+    sections_text = "HEXCrawler: Greybridge March | Move: RMB / WASD | Contact: [F]ight [X]flee"
     left_label = _truncate_text_to_pixel_width(sections_text, font, 460)
     right_label = _truncate_text_to_pixel_width(metadata_text, font, max(160, bar_rect.width - 490))
-    screen.blit(font.render(left_label, True, (235, 235, 240)), (10, 8))
-    screen.blit(font.render(right_label, True, (220, 220, 225)), (480, 8))
+    screen.blit(font.render(left_label, True, (235, 228, 210)), (10, 8))
+    screen.blit(font.render(right_label, True, (208, 202, 188)), (480, 8))
 
 
 def _find_safe_site_status(sim: Simulation, entity: EntityState) -> tuple[bool, str | None, str | None]:
@@ -3763,27 +3769,29 @@ def _draw_encounter_offer_modal(
         width,
         height,
     )
-    pygame.draw.rect(screen, (26, 28, 38), panel)
-    pygame.draw.rect(screen, (128, 132, 144), panel, 1)
+    shade = pygame.Surface((viewport_rect.width, viewport_rect.height), pygame.SRCALPHA)
+    shade.fill((16, 8, 8, 110))
+    screen.blit(shade, (viewport_rect.x, viewport_rect.y))
+    presentation_theme.draw_panel(screen, panel, "", font)
 
     label = str(offer.get("encounter_label", "Encounter"))
     title = _truncate_text_to_pixel_width(f"CONTACT: {label}", font, panel.width - 18)
     screen.blit(font.render(title, True, (245, 235, 190)), (panel.x + 9, panel.y + 10))
     source_label = str(offer.get("source_label", "contact source"))
-    hint = _truncate_text_to_pixel_width(f"Danger spotted near {source_label}.", font, panel.width - 18)
+    hint = _truncate_text_to_pixel_width(f"{source_label}: hostile movement closes in.", font, panel.width - 18)
     screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
     action_hint = _truncate_text_to_pixel_width("Choose now: Fight [F] or Flee [X]", font, panel.width - 18)
     screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 58))
-    waiting_hint = _truncate_text_to_pixel_width("Campaign paused until you choose.", font, panel.width - 18)
-    screen.blit(font.render(waiting_hint, True, (236, 196, 160)), (panel.x + 9, panel.y + 78))
+    waiting_hint = _truncate_text_to_pixel_width("Commit or break contact now.", font, panel.width - 18)
+    screen.blit(font.render(waiting_hint, True, (236, 166, 150)), (panel.x + 9, panel.y + 78))
 
     button_w = 110
     button_h = 34
     fight_rect = pygame.Rect(panel.x + 24, panel.bottom - button_h - 14, button_w, button_h)
     flee_rect = pygame.Rect(panel.right - button_w - 24, panel.bottom - button_h - 14, button_w, button_h)
     for rect, text, color in (
-        (fight_rect, "Fight", (125, 198, 128)),
-        (flee_rect, "Flee", (208, 138, 112)),
+        (fight_rect, "Fight", (128, 72, 70)),
+        (flee_rect, "Flee", (112, 112, 122)),
     ):
         pygame.draw.rect(screen, color, rect)
         pygame.draw.rect(screen, (16, 18, 22), rect, 1)
@@ -4930,6 +4938,7 @@ def _ensure_pygame_imported() -> Any:
         import pygame as pygame_module
 
         pygame = pygame_module
+        presentation_theme.bind(pygame_module)
     return pygame
 
 
