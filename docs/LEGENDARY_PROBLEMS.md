@@ -293,3 +293,25 @@
   - Do **not** relegate local structure authoring back to hotkey-only primary usage.
   - Do **not** add viewer-side direct state mutation for local structure movement.
   - Do **not** introduce a second local-structure backend separate from `local_structure_author_intent`.
+
+## 13) Local Melee Readability Regresses When Cues Stay HUD-Only
+- **Problem name:** HUD-only combat cues fail in close local melee.
+- **Symptom:** Players cannot reliably read telegraph/recovery windows during movement and contact despite debug text lines; fights collapse into walk-and-spam behavior.
+- **Root cause:** Feedback was concentrated in panel text while the decision space is near entities in-world; top-down local fights need immediate positional cues at actor locations.
+- **Relevant architecture / UX invariant:**
+  - Viewer/presentation may add readability cues but must remain read-only for simulation mutation.
+  - Combat authority remains deterministic simulation state + event outcomes.
+  - Readability improvements should prefer on-world signals before adding more HUD text.
+- **Known-good bounded fix path:**
+  1. Keep authoritative combat seams unchanged.
+  2. Add on-world hostile phase/readiness cues tied to existing deterministic events (`windup`, `active`, `recovery`).
+  3. Add on-world player readiness cue tied to cooldown state.
+  4. Keep cue logic viewer-only (no serialized render state).
+- **Required regression tests:**
+  - Proving-ground authored data persists and remains enterable.
+  - Hostile materialization and extraction/return remain deterministic save/load stable.
+  - Viewer cue code does not mutate simulation state or hashes.
+- **Do not regress by doing X:**
+  - Do **not** solve readability only by adding more debug/HUD lines.
+  - Do **not** add non-deterministic presentation state into authoritative world/sim hashes.
+  - Do **not** couple simulation semantics to a specific projection.

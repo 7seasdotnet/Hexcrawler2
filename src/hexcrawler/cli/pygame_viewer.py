@@ -153,6 +153,7 @@ HOME_MARKER_RING_WIDTH = 3
 LOCAL_INTERPOLATION_SNAP_DISTANCE = 0.08
 RECENT_COMBAT_FEEDBACK_TICK_WINDOW = 20
 RECENT_HIT_FLASH_TICK_WINDOW = 4
+RECENT_MELEE_CUE_TICK_WINDOW = 12
 GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
@@ -2211,7 +2212,7 @@ def _draw_world(
             rect = pygame.Rect(int(pixel_x - cell_size / 2), int(pixel_y - cell_size / 2), int(cell_size), int(cell_size))
             pygame.draw.rect(screen, (58, 58, 64), rect)
             pygame.draw.rect(screen, (35, 35, 40), rect, 1)
-        _draw_greybridge_hub_bounds(screen, active_space=active_space, center=center, zoom_scale=zoom_scale)
+        _draw_local_structure_overlay_bounds(screen, active_space=active_space, center=center, zoom_scale=zoom_scale)
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
         screen.set_clip(old_clip)
         return
@@ -2237,18 +2238,24 @@ def _draw_world(
     screen.set_clip(old_clip)
 
 
-def _draw_greybridge_hub_bounds(
+def _draw_local_structure_overlay_bounds(
     screen: pygame.Surface,
     *,
     active_space: Any,
     center: tuple[float, float],
     zoom_scale: float,
 ) -> None:
-    if getattr(active_space, "space_id", "") != GREYBRIDGE_SAFE_HUB_SPACE_ID:
+    if active_space is None:
+        return
+    if str(getattr(active_space, "topology_type", "")) != SQUARE_GRID_TOPOLOGY:
+        return
+    if str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
         return
     cell_size = HEX_SIZE * zoom_scale
     structure_primitives = getattr(active_space, "structure_primitives", []) if active_space is not None else []
     compiled_overlay = compile_greybridge_overlay(structure_primitives)
+    if not compiled_overlay.get("wall_segments") and not compiled_overlay.get("opening_cells"):
+        return
     opening_by_cell: dict[tuple[int, int], dict[str, object]] = {}
     for row in compiled_overlay["opening_rows"]:
         if not isinstance(row, dict):
@@ -2347,6 +2354,7 @@ def _draw_frame_layers(
         if entity_id == PLAYER_ID:
             _draw_entity(
                 screen,
+                sim,
                 entity,
                 interpolated[0],
                 interpolated[1],
@@ -2430,6 +2438,7 @@ def _draw_frame_layers(
 
 def _draw_entity(
     screen: pygame.Surface,
+    sim: Simulation,
     entity: EntityState,
     world_x: float,
     world_y: float,
@@ -2446,6 +2455,10 @@ def _draw_entity(
     y = int(center[1] + world_y * size)
     pygame.draw.circle(screen, (255, 243, 130), (x, y), 8)
     pygame.draw.circle(screen, (15, 15, 15), (x, y), 8, 1)
+    if str(entity.space_id).startswith("local_site:"):
+        cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
+        ring_color = (132, 220, 146) if cooldown_remaining == 0 else (229, 182, 84)
+        pygame.draw.circle(screen, ring_color, (x, y), 12, 2)
     _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(40, 40, 24), angle_override=facing_angle)
     screen.set_clip(old_clip)
 
@@ -2471,14 +2484,31 @@ def _draw_spawned_entity(
     y = int(center[1] + world_y * size)
     marker_color = (140, 225, 255)
     marker_radius = 6
+    ring_color: tuple[int, int, int] | None = None
+    ring_radius = marker_radius + 5
+    ring_width = 2
     if str(entity.template_id or "") == "encounter_hostile_v1":
         marker_color = (214, 104, 98)
         marker_radius = 7
+        hostile_event = _last_combat_outcome_for_entity(sim, entity_id=entity.entity_id)
+        if hostile_event is not None and hostile_event.get("attacker_id") == entity.entity_id:
+            event_tick = hostile_event.get("tick")
+            if isinstance(event_tick, int) and (int(sim.state.tick) - event_tick) <= RECENT_MELEE_CUE_TICK_WINDOW:
+                reason = str(hostile_event.get("reason", ""))
+                if reason == "windup_started":
+                    ring_color = (247, 181, 92)
+                elif str(hostile_event.get("strike_phase", "")) in {"active", "active_miss"}:
+                    ring_color = (240, 116, 102)
+        if ring_color is None and int(entity.cooldown_until_tick) > int(sim.state.tick):
+            ring_color = (118, 182, 236)
         if is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
             marker_color = (122, 124, 130)
             marker_radius = 8
+            ring_color = None
     pygame.draw.circle(screen, marker_color, (x, y), marker_radius)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
+    if ring_color is not None:
+        pygame.draw.circle(screen, ring_color, (x, y), ring_radius, ring_width)
     _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(18, 24, 28), angle_override=facing_angle)
     last_impact_tick = _last_combat_impact_tick_for_entity(sim, entity_id=entity.entity_id)
     if isinstance(last_impact_tick, int) and (int(sim.state.tick) - last_impact_tick) <= RECENT_HIT_FLASH_TICK_WINDOW:
