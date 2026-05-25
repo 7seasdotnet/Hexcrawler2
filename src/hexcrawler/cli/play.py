@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Sequence
 
 from hexcrawler.cli.pygame_viewer import run_pygame_viewer
+from hexcrawler.cli.visual_audit import run_visual_audit, DEFAULT_SCRIPT, DEFAULT_OUT
 from hexcrawler.cli.runtime_profiles import CORE_PLAYABLE, DEFAULT_RUNTIME_PROFILE, RUNTIME_PROFILE_CHOICES, RuntimeProfile
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.sim.core import EntityState, Simulation, WorldState
@@ -106,6 +107,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--load-save", default=DEFAULT_SAVE_PATH, help="Path to canonical save JSON to load at startup.")
     parser.add_argument("--map-path", default=DEFAULT_MAP_PATH, help="Map path used if canonical save must be created.")
     parser.add_argument("--headless", action="store_true", help="Run startup path in headless mode.")
+    parser.add_argument("--visual-audit", action="store_true", help="Run scripted visual audit and emit report artifacts.")
+    parser.add_argument("--script", default=DEFAULT_SCRIPT, help="Visual audit script id.")
+    parser.add_argument("--out", default=str(DEFAULT_OUT), help="Visual audit output directory.")
     parser.add_argument(
         "--runtime-profile",
         choices=RUNTIME_PROFILE_CHOICES,
@@ -196,6 +200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"dungeon_entrance_count={startup_truth.dungeon_entrance_count} "
         f"hostile_patrol_count={startup_truth.patrol_count}"
     )
+    if args.visual_audit:
+        return run_visual_audit(map_path=args.map_path, out_dir=args.out, script=args.script, command="python play.py --visual-audit --script %s --out %s" % (args.script, args.out))
+
     return run_pygame_viewer(
         map_path=args.map_path,
         runtime_profile=args.runtime_profile,

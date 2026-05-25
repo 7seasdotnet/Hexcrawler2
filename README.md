@@ -63,3 +63,11 @@ During the first minute, verify:
 - HUD action hints are present and role-appropriate
 
 This audit is presentation-only and must not mutate simulation through UI shortcuts outside existing command/event seams.
+
+## AI Visual Audit / Upload Artifact
+Run:
+`python play.py --visual-audit`
+
+Then upload `docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png` to ChatGPT.
+
+`docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md` is updated by each audit run and should be committed when visual presentation changes.
