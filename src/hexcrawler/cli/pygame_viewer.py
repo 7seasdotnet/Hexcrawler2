@@ -24,6 +24,7 @@ from hexcrawler.cli.runtime_profiles import (
     configure_non_encounter_viewer_modules,
 )
 from hexcrawler.cli import presentation_theme
+from hexcrawler.cli.presentation_effects import PresentationEffects, pulse_intensity
 from hexcrawler.sim.core import HEX_TOPOLOGY_TYPES, EntityState, SimCommand, Simulation
 from hexcrawler.sim.encounters import (
     ENCOUNTER_ACTION_OUTCOME_EVENT_TYPE,
@@ -159,6 +160,7 @@ TRANSITION_OVERLAY_FRAMES = 14
 COMBAT_FEEDBACK_MAX_ITEMS = 8
 COMBAT_FEEDBACK_MAX_AGE_TICKS = 20
 COMBAT_FEEDBACK_SEEN_EVENT_CAP = 64
+TITLE_CARD_TICKS = 90
 GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
@@ -572,6 +574,7 @@ class ViewerRuntimeState:
     paused: bool = False
     last_loaded_identity: str | None = None
     seen_combat_feedback_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
+    presentation_effects: PresentationEffects = field(default_factory=PresentationEffects)
 
 
 @dataclass(frozen=True)
@@ -2139,7 +2142,11 @@ def _draw_major_campaign_sites(
         icon_pos = projection.screen_position
         label_dx, label_dy, overlaps_player = _major_site_label_offset(icon_pos, player_screen)
         ring_radius = max(HOME_MARKER_RING_RADIUS, marker_radius + 10) + (5 if overlaps_player else 0)
+        pulse = pulse_intensity(int(sim.state.tick))
+        pulse_ring = ring_radius + int(6 * pulse) if site.site_type in {"dungeon", "dungeon_entrance", "ruin"} else ring_radius
         pygame.draw.circle(screen, (255, 248, 180), icon_pos, ring_radius, HOME_MARKER_RING_WIDTH)
+        if site.site_type in {"dungeon", "dungeon_entrance", "ruin"}:
+            pygame.draw.circle(screen, (180, 48, 42), icon_pos, pulse_ring, 2)
         pygame.draw.circle(screen, (36, 28, 12), icon_pos, ring_radius + 1, 1)
         pygame.draw.circle(screen, marker_color, icon_pos, max(marker_radius + 2, 12))
         pygame.draw.circle(screen, (10, 14, 20), icon_pos, max(marker_radius + 2, 12), 2)
@@ -2428,6 +2435,7 @@ def _draw_frame_layers(
         clip_rect=viewport_rect,
         seen_event_keys=runtime_state.seen_combat_feedback_keys,
     )
+    runtime_state.presentation_effects.draw(pygame, screen)
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
@@ -2486,6 +2494,7 @@ def _draw_frame_layers(
     offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect)
     if home_panel_state.visible:
         _draw_home_panel(screen, sim, font, viewport_rect)
+    _draw_title_card(screen, sim, marker_font, viewport_rect)
     return inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons
 
 
@@ -2506,7 +2515,8 @@ def _draw_entity(
     size = HEX_SIZE * zoom_scale
     x = int(center[0] + world_x * size)
     y = int(center[1] + world_y * size)
-    pygame.draw.circle(screen, (255, 242, 122), (x, y), 10)
+    pygame.draw.circle(screen, (255, 242, 122), (x, y), 12)
+    pygame.draw.circle(screen, (120, 32, 28), (x, y), 16, 2)
     pygame.draw.circle(screen, (18, 18, 18), (x, y), 10, 2)
     if str(entity.space_id).startswith("local_site:"):
         cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
@@ -2642,6 +2652,26 @@ def _draw_top_control_bar(
     right_label = _truncate_text_to_pixel_width(metadata_text, font, max(160, bar_rect.width - 490))
     screen.blit(font.render(left_label, True, (235, 228, 210)), (10, 8))
     screen.blit(font.render(right_label, True, (208, 202, 188)), (480, 8))
+
+
+def _draw_title_card(screen: pygame.Surface, sim: Simulation, font: pygame.font.Font, viewport_rect: pygame.Rect) -> None:
+    if int(sim.state.tick) > TITLE_CARD_TICKS:
+        return
+    age = int(sim.state.tick)
+    alpha = max(0, 220 - int((age / max(1, TITLE_CARD_TICKS)) * 220))
+    overlay = pygame.Surface((viewport_rect.width, viewport_rect.height), pygame.SRCALPHA)
+    overlay.fill((8, 7, 6, alpha))
+    screen.blit(overlay, viewport_rect.topleft)
+    lines = [
+        ("HEXCRAWLER", (232, 220, 190), 0),
+        ("Greybridge March", (190, 210, 190), 42),
+        ("Road to Old Stair", (220, 140, 120), 74),
+        ("RMB move · F fight · X flee · Survive and return", (210, 210, 210), 116),
+    ]
+    for text, color, dy in lines:
+        surf = font.render(text, True, color)
+        pos = surf.get_rect(center=(viewport_rect.centerx, viewport_rect.centery - 90 + dy))
+        screen.blit(surf, pos)
 
 
 def _find_safe_site_status(sim: Simulation, entity: EntityState) -> tuple[bool, str | None, str | None]:
@@ -3067,7 +3097,7 @@ def _player_facing_hud_lines(
     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
     calendar = _calendar_presentation(sim)
     lines = [
-        "Move WASD | Context Right-click",
+        "RMB Move · LMB Attack (local) · WASD steer",
         f"Condition: {condition}  |  Wounds: {severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
         f"Supplies: Proof {proof_tokens}  |  Rations {rations}",
         (
@@ -3082,7 +3112,7 @@ def _player_facing_hud_lines(
         lines.append("Contact actions: Fight [F] | Flee [X]")
     else:
         lines.append("Campaign actions: Enter [E] at Greybridge | Contact: Fight [F] / Flee [X]")
-    lines.extend(_player_feedback_lines(sim, entity=entity))
+    lines.extend(_player_feedback_lines(sim, entity=entity)[:5])
     if pending_offer is not None:
         lines.append(
             f"encounter=offer_pending source={pending_offer.get('source_label', '?')} title={pending_offer.get('encounter_label', '?')}"

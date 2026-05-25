@@ -197,3 +197,13 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
 - **Next action:** Run local visual audit with pygame installed and capture before/after screenshots for first-frame, CONTACT, and local combat readability.
+
+## What changed in this commit
+- Reworked the viewer presentation into a stronger vertical-slice framing with launch title card, compact player-facing HUD trimming, and stronger campaign major-site threat signaling (Old Stair pulse emphasis) to improve first 3–5 minute readability.
+- Added viewer-local presentation effects substrate (`presentation_effects.py`) with bounded pulse-ring lifecycle for non-authoritative, non-serialized combat/map feedback scaffolding.
+- Kept all additions presentation-only and deterministic-safe: no simulation authority mutation, no hash/input-log coupling, and no save-state schema changes.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --headless` (graceful dependency error when pygame missing)
