@@ -207,3 +207,18 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `python play.py --headless` (graceful dependency error when pygame missing)
+
+## What changed in this commit
+- Added a built-in visual audit CLI path (`python play.py --visual-audit`) plus script/output options, wired through `src/hexcrawler/cli/visual_audit.py`.
+- Added stable AI visual audit report output at `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md` and timeline output at `docs/ai_playtest/latest/audit_timeline.json` (graceful blocker reporting when pygame is unavailable).
+- Added baseline tests for visual-audit CLI defaults and report writer, and documented upload artifact workflow in `README.md`.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py tests/test_pygame_viewer_cli.py -k "visual_audit or core_playable"`
+- `python play.py --headless` (returns non-zero with explicit dependency guidance if pygame is missing)
+- `python play.py --visual-audit`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Install pygame in local runtime, rerun `python play.py --visual-audit`, and verify full frame capture + contact sheet generation with reachable campaign/local beats.

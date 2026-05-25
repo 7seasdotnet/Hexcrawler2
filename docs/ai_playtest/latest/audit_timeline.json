@@ -1,0 +1,66 @@
+{
+  "script": "core_playable_first_loop",
+  "command": "python play.py --visual-audit --script core_playable_first_loop --out docs/ai_playtest/latest",
+  "timestamp": "2026-05-25T09:35:54.345984+00:00",
+  "commit": "e821fed",
+  "pygame_version": "unavailable",
+  "beats": [
+    {
+      "name": "title",
+      "file": "00_title.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "campaign_start",
+      "file": "01_campaign_start.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "danger_visible",
+      "file": "02_danger_visible.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "contact_modal",
+      "file": "03_contact_modal.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "local_entry",
+      "file": "04_local_entry.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "first_attack",
+      "file": "05_first_attack.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "combat_result",
+      "file": "06_combat_result.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    },
+    {
+      "name": "extraction_return",
+      "file": "07_extraction_return.png",
+      "status": "failed",
+      "tick": 0,
+      "notes": "No module named 'pygame'"
+    }
+  ],
+  "hashes_unchanged_by_screenshots": true
+}
