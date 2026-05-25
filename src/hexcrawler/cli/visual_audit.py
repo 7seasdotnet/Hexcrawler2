@@ -14,7 +14,7 @@ from hexcrawler.sim.core import SimCommand
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, COMBAT_OUTCOME_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.world import LOCAL_SPACE_ROLE
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE
 
 DEFAULT_SCRIPT = "core_playable_first_loop"
 DEFAULT_OUT = Path("docs/ai_playtest/latest")
@@ -41,10 +41,22 @@ def _visual_sanity(pg:Any,surf:Any)->dict[str,Any]:
     blank=uniq<18 or non_bg<0.04
     return {"unique_color_count":uniq,"non_background_pixel_ratio":round(non_bg,4),"blank_frame_suspected":blank}
 
+
+
+def _get_space_role(sim: Any, space_id: str | None) -> str | None:
+    if not isinstance(space_id, str) or not space_id:
+        return None
+    space = sim.state.world.spaces.get(space_id)
+    if space is None:
+        return None
+    role = getattr(space, "role", None)
+    if isinstance(role, str) and role:
+        return role
+    return None
 def _write_report(cmd,ts,commit,beats,pygame_status,result,blockers=None):
     reached=[b.name for b in beats if b.status=="ok"]; failed=[b.name for b in beats if b.status!="ok"]
     rows="\n".join(f"| {b.name} | `{b.file}` | {b.tick} | {b.status} | {b.notes} |" for b in beats)
-    blocker_lines=blockers or ["None recorded."]
+    blocker_lines = blockers if blockers else (["None recorded."] if result == "success" else ["Audit failed before blockers were fully recorded."])
     REPORT_PATH.parent.mkdir(parents=True,exist_ok=True)
     REPORT_PATH.write_text(f"""# Hexcrawler2 AI Visual Audit Report
 Upload docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png to ChatGPT for visual critique.
@@ -97,11 +109,17 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         render_meta=render_viewer_frame_to_surface(screen=screen,sim=sim,runtime_state=runtime_state,status_message=f"audit beat: {name}")
         sanity=_visual_sanity(pg,screen)
         path=out/f"{i:02d}_{name}.png"; pg.image.save(screen,str(path))
-        player=sim.state.entities.get(PLAYER_ID); role=sim.state.world.spaces.get(player.space_id).space_role if player and sim.state.world.spaces.get(player.space_id) else None
+        player=sim.state.entities.get(PLAYER_ID)
+        role: str | None = None
+        role_error: str | None = None
+        try:
+            role = _get_space_role(sim, player.space_id if player else None)
+        except Exception as exc:
+            role_error = f"{type(exc).__name__}: {exc}"
         status="ok"
         if name=="title" and sim.state.tick>=90: status="partial"; notes.append("title overlay no longer guaranteed after title-card ticks")
         if name=="campaign_start":
-            if not (player and role!="local" and "home_greybridge" in site_ids and "demo_dungeon_entrance" in site_ids and patrol_exists): status="failed"
+            if not (player and role==CAMPAIGN_SPACE_ROLE and "home_greybridge" in site_ids and "demo_dungeon_entrance" in site_ids and patrol_exists): status="failed"
         if name=="danger_visible" and not patrol_exists: status="failed"; notes.append("no hostile patrol found")
         pending=sim.get_rules_state("campaign_danger").get("pending_offer_by_player",{}).get(PLAYER_ID)
         if name=="contact_modal" and not isinstance(pending,dict): status="failed"; notes.append("no pending contact offer")
@@ -111,6 +129,10 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             if not attack_seen: status="partial"; notes.append("attack outcome not observed yet")
         if name=="combat_result" and not any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE for e in sim.get_event_trace()): status="failed"
         if name=="extraction_return" and role==LOCAL_SPACE_ROLE: status="partial"; notes.append("return/extraction not reached")
+        if role_error is not None:
+            status = "failed"
+            notes.append(f"runtime_exception: space role lookup failed ({role_error})")
+            blockers.append(f"runtime_exception during role lookup on beat '{name}': {role_error}")
         if sanity["blank_frame_suspected"]:
             status="failed" if status=="ok" else status
             notes.append("blank_frame_suspected")
@@ -124,6 +146,8 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             "visual_sanity": sanity,
         }))
     result="success" if all(b.status=="ok" for b in beats) else "partial"
+    if any(b.status=="failed" for b in beats):
+        result="failed"
     if any(b.diagnostics and b.diagnostics["visual_sanity"]["blank_frame_suspected"] for b in beats):
         result="failed"; blockers.append("Captured frames appear blank or non-game-rendered.")
     if any(b.status!="ok" for b in beats): blockers.append("Audit did not capture all requested visible player/site/danger/local/combat beats.")
