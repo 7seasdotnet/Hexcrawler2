@@ -1,3 +1,24 @@
+## What changed in this commit
+- Reworked `src/hexcrawler/cli/visual_audit.py` to drive the core playable loop through authoritative command seams (`set_move_vector` -> `accept_encounter_offer` -> local `attack_intent` -> `end_local_encounter_intent`) with bounded waits and explicit failure reasons.
+- Tightened visual-audit beat truth rules: `contact_modal` now requires a real pending offer, `local_entry` requires local-role/`in_local`, and `extraction_return` is no longer marked OK when local entry never happened.
+- Added per-beat timeline diagnostics (space id/role, player position, encounter-control state, pending-offer count, command issued, and last event-trace rows) plus truthful failure labels on contact-sheet frames.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py tests/test_encounter_controller_smoke_slice.py`
+- `python play.py --visual-audit` (currently fails in this environment due to missing `pygame` dependency)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Validate the updated scripted visual-audit loop on a machine with `pygame` installed and confirm beats `contact_modal`/`local_entry`/`first_attack`/`combat_result` reach truthful OK states.
+
+## What Exists (folders / entry points)
+- `play.py`: canonical launcher including `--visual-audit`.
+- `src/hexcrawler/cli/visual_audit.py`: scripted capture driver, beat status logic, report/contact-sheet/timeline writers.
+- `src/hexcrawler/cli/pygame_viewer.py`: authoritative command emitters and viewer rendering path used by visual audit.
+- `src/hexcrawler/cli/runtime_profiles.py`: `core_playable` runtime profile composition for playable-loop execution.
+
 
 ## What changed in this commit
 - Fixed `visual_audit.py` space-role lookup to use canonical `SpaceState.role` via a tolerant helper, replacing invalid `.space_role` access that crashed audit capture.
