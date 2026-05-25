@@ -244,3 +244,25 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `src/hexcrawler/cli/visual_audit.py`: visual audit runner, report/timeline/contact-sheet generation.
 - `src/hexcrawler/cli/pygame_viewer.py`: authoritative viewer simulation bootstrap and pygame runtime integration.
 - `src/hexcrawler/cli/runtime_profiles.py`: default `core_playable` runtime profile composition used by visual audit.
+
+## What changed in this commit
+- Fixed visual audit capture to render screenshots via the actual pygame viewer frame pipeline (`render_viewer_frame_to_surface` -> `_draw_frame_layers`) instead of placeholder-filled surfaces.
+- Added state-validated beat evaluation plus visual sanity diagnostics (unique colors, non-background ratio, blank-frame suspicion) and propagated them into both report/timeline outputs.
+- Updated visual-audit result semantics to return `partial`/`failed` truthfully when contact/local/combat beats are not actually reached or frames appear blank.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "visual_audit or core_playable"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Inspect generated visual-audit contact sheet for campaign/local readability and tune scripted action path only where needed to reach truthful beats.
+
+## What Exists (folders / entry points)
+- `src/hexcrawler/cli/visual_audit.py`: scripted visual audit orchestration, beat validation, report/timeline generation.
+- `src/hexcrawler/cli/pygame_viewer.py`: canonical viewer frame drawing path now reusable for offscreen audit capture.
+- `docs/ai_playtest/latest/audit_timeline.json`: per-beat diagnostic timeline including role/state/render-path/sanity metadata.
+- `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md`: truthful partial/fail success semantics and blocker reporting.
