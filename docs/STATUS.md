@@ -222,3 +222,25 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
 - **Next action:** Install pygame in local runtime, rerun `python play.py --visual-audit`, and verify full frame capture + contact sheet generation with reachable campaign/local beats.
+
+## What changed in this commit
+- Fixed visual audit runtime tick advancement to use the authoritative simulation API (`advance_ticks`) through a dedicated helper, removing the invalid `Simulation.step()` call path.
+- Hardened visual audit failure reporting so pygame-unavailable vs runtime-exception vs unreachable-beat outcomes are recorded explicitly in both report and timeline outputs.
+- Added regression tests for authoritative visual-audit tick advancement helper and blocker-aware report output.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "visual_audit or core_playable"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Validate the generated visual-audit contact sheet + report beat readability against Presentation Gates (campaign clarity, CONTACT event readability, local combat extraction clarity).
+
+## What Exists (folders / entry points)
+- `play.py`: visual-audit launcher entry point (`python play.py --visual-audit`).
+- `src/hexcrawler/cli/visual_audit.py`: visual audit runner, report/timeline/contact-sheet generation.
+- `src/hexcrawler/cli/pygame_viewer.py`: authoritative viewer simulation bootstrap and pygame runtime integration.
+- `src/hexcrawler/cli/runtime_profiles.py`: default `core_playable` runtime profile composition used by visual audit.

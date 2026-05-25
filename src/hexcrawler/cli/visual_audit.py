@@ -36,11 +36,13 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def _write_report(cmd: str, ts: str, commit: str, beats: list[BeatResult], pygame_status: str, result: str) -> None:
+def _write_report(cmd: str, ts: str, commit: str, beats: list[BeatResult], pygame_status: str, result: str, blockers: list[str] | None = None) -> None:
     reached = [b.name for b in beats if b.status == "ok"]
     failed = [b.name for b in beats if b.status != "ok"]
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     rows = "\n".join(f"| {b.name} | `{b.file}` | {b.tick} | {b.status} | {b.notes} |" for b in beats)
+    blocker_lines = blockers or ["None recorded."]
+    blocker_text = "\n".join(f"- {line}" for line in blocker_lines)
     REPORT_PATH.write_text(f"""# Hexcrawler2 AI Visual Audit Report
 
 ## Upload This File
@@ -76,11 +78,28 @@ Upload docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png to ChatGPT for visual 
 - What remains ugliest?
 
 ## Known Blockers
-- None recorded.
+{blocker_text}
 
 ## Notes for Codex
 Presentation changes must improve the contact sheet. If the contact sheet still looks basically the same, the presentation pass failed.
 """, encoding='utf-8')
+
+
+
+def _advance_one_tick(sim: Any) -> None:
+    sim.advance_ticks(1)
+
+
+def _pygame_version_string(pg: Any) -> str:
+    if hasattr(pg, "version") and hasattr(pg.version, "ver"):
+        return str(pg.version.ver)
+    return "unknown"
+
+
+def _record_failure_artifacts(*, out: Path, script: str, command: str, ts: str, commit: str, beats: list[BeatResult], pygame_status: str, result: str, error: str) -> None:
+    timeline = {"script": script, "command": command, "timestamp": ts, "commit": commit, "pygame_status": pygame_status, "result": result, "error": error, "beats": [b.__dict__ for b in beats], "hashes_unchanged_by_screenshots": True}
+    (out / "audit_timeline.json").write_text(json.dumps(timeline, indent=2), encoding="utf-8")
+    _write_report(command, ts, commit, beats, pygame_status, result, blockers=[error])
 
 
 def run_visual_audit(*, map_path: str, out_dir: str | None = None, script: str = DEFAULT_SCRIPT, command: str = "python play.py --visual-audit") -> int:
@@ -98,22 +117,30 @@ def run_visual_audit(*, map_path: str, out_dir: str | None = None, script: str =
         font = pg.font.Font(None, 24)
     except Exception as exc:
         beats = [BeatResult(name=b, file=f"{i:02d}_{b}.png", status="failed", tick=sim.state.tick, notes=str(exc)) for i,b in enumerate(BEATS)]
-        (out / "audit_timeline.json").write_text(json.dumps({"script": script, "command": command, "timestamp": ts, "commit": commit, "pygame_version": "unavailable", "beats": [b.__dict__ for b in beats], "hashes_unchanged_by_screenshots": True}, indent=2), encoding="utf-8")
-        _write_report(command, ts, commit, beats, "unavailable", "failed")
+        _record_failure_artifacts(out=out, script=script, command=command, ts=ts, commit=commit, beats=beats, pygame_status="unavailable", result="pygame_unavailable", error=f"pygame unavailable: {exc}")
         return 1
     beats: list[BeatResult] = []
     names = ["00_title","01_campaign_start","02_danger_visible","03_contact_modal","04_local_entry","05_first_attack","06_combat_result","07_extraction_return"]
-    for i, n in enumerate(names):
-        surf = pg.Surface((1280, 720))
-        surf.fill((28 + i*8, 32, 40))
-        surf.blit(font.render(f"Hexcrawler2 Audit Beat {n}", True, (230,230,230)), (40, 40))
-        surf.blit(font.render(f"tick={sim.state.tick} commit={commit}", True, (200,200,200)), (40, 80))
-        if i > 0:
-            sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type="set_move_vector", params={"x":1.0,"y":0.0}))
-            sim.step()
-        path = out / f"{n}.png"
-        pg.image.save(surf, str(path))
-        beats.append(BeatResult(name=BEATS[i], file=str(path), status="ok", tick=sim.state.tick))
+    try:
+        for i, n in enumerate(names):
+            surf = pg.Surface((1280, 720))
+            surf.fill((28 + i*8, 32, 40))
+            surf.blit(font.render(f"Hexcrawler2 Audit Beat {n}", True, (230,230,230)), (40, 40))
+            surf.blit(font.render(f"tick={sim.state.tick} commit={commit}", True, (200,200,200)), (40, 80))
+            if i > 0:
+                sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type="set_move_vector", params={"x":1.0,"y":0.0}))
+                _advance_one_tick(sim)
+            path = out / f"{n}.png"
+            pg.image.save(surf, str(path))
+            beats.append(BeatResult(name=BEATS[i], file=str(path), status="ok", tick=sim.state.tick))
+    except Exception as exc:
+        beat_idx = len(beats)
+        if beat_idx < len(BEATS):
+            beats.append(BeatResult(name=BEATS[beat_idx], file=str(out / f"{names[beat_idx]}.png"), status="failed", tick=sim.state.tick, notes=str(exc)))
+        for j in range(len(beats), len(BEATS)):
+            beats.append(BeatResult(name=BEATS[j], file=str(out / f"{names[j]}.png"), status="unreachable", tick=sim.state.tick, notes="beat unreachable after runtime exception"))
+        _record_failure_artifacts(out=out, script=script, command=command, ts=ts, commit=commit, beats=beats, pygame_status="available", result="runtime_exception", error=f"audit runtime exception: {exc.__class__.__name__}: {exc}")
+        return 1
     # contact sheet
     sheet = pg.Surface((1600, 1200)); sheet.fill((16,16,20))
     hfont = pg.font.Font(None, 36); sfont = pg.font.Font(None, 24)
@@ -129,12 +156,12 @@ def run_visual_audit(*, map_path: str, out_dir: str | None = None, script: str =
     final_sim_hash = simulation_hash(sim)
     timeline = {
       "script": script, "command": command, "timestamp": ts, "commit": commit,
-      "pygame_version": getattr(pg, "version", None).ver if hasattr(pg, "version") else "unknown",
+      "pygame_version": _pygame_version_string(pg), "pygame_status": "available", "result": "success",
       "initial_world_hash": initial_world_hash, "initial_simulation_hash": initial_sim_hash,
       "final_world_hash": final_world_hash, "final_simulation_hash": final_sim_hash,
       "hashes_unchanged_by_screenshots": initial_world_hash == final_world_hash,
       "beats": [b.__dict__ for b in beats],
     }
     (out / "audit_timeline.json").write_text(json.dumps(timeline, indent=2), encoding='utf-8')
-    _write_report(command, ts, commit, beats, "available", "success")
+    _write_report(command, ts, commit, beats, "available", "success", blockers=["None recorded."])
     return 0

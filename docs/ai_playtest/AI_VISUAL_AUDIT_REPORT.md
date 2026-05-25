@@ -5,12 +5,12 @@ Upload docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png to ChatGPT for visual 
 
 ## Latest Run
 - Command: `python play.py --visual-audit --script core_playable_first_loop --out docs/ai_playtest/latest`
-- Timestamp: 2026-05-25T09:35:54.345984+00:00
-- Commit: e821fed
+- Timestamp: 2026-05-25T13:27:44.304393+00:00
+- Commit: 3127cfe
 - Runtime profile: core_playable
 - Script: core_playable_first_loop
 - Pygame status: unavailable
-- Result: failed
+- Result: pygame_unavailable
 - Screenshots captured: 8
 - Beats reached: none
 - Beats failed: title, campaign_start, danger_visible, contact_modal, local_entry, first_attack, combat_result, extraction_return
@@ -40,7 +40,7 @@ Upload docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png to ChatGPT for visual 
 - What remains ugliest?
 
 ## Known Blockers
-- None recorded.
+- pygame unavailable: No module named 'pygame'
 
 ## Notes for Codex
 Presentation changes must improve the contact sheet. If the contact sheet still looks basically the same, the presentation pass failed.
