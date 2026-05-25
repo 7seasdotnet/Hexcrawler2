@@ -1,3 +1,16 @@
+
+## What changed in this commit
+- Fixed `visual_audit.py` space-role lookup to use canonical `SpaceState.role` via a tolerant helper, replacing invalid `.space_role` access that crashed audit capture.
+- Hardened visual-audit failure handling so role-lookup runtime exceptions are captured into beat notes/blockers and timeline/report writing still completes whenever possible.
+- Expanded `tests/test_visual_audit.py` coverage for canonical role lookup and failed-result blocker/report behavior.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "visual_audit or core_playable"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit`
+
 # Hexcrawler2 — Current State
 
 ## Lock-out Review

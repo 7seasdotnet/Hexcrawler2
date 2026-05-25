@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from hexcrawler.cli.visual_audit import DEFAULT_OUT, _advance_one_tick, _write_report
+from hexcrawler.cli.visual_audit import DEFAULT_OUT, _advance_one_tick, _get_space_role, _write_report
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, SpaceState
 from hexcrawler.cli.play import _build_parser
 
 
@@ -48,3 +49,35 @@ def test_advance_one_tick_uses_authoritative_advance_ticks_api() -> None:
     _advance_one_tick(sim)
 
     assert sim.calls == [1]
+
+
+def test_get_space_role_reads_canonical_space_state_role() -> None:
+    class _World:
+        def __init__(self) -> None:
+            self.spaces = {"overworld": SpaceState(space_id="overworld", topology_type="hex", role=CAMPAIGN_SPACE_ROLE), "local:test": SpaceState(space_id="local:test", topology_type="square_grid", role=LOCAL_SPACE_ROLE, topology_params={"width": 2, "height": 2})}
+
+    class _State:
+        def __init__(self) -> None:
+            self.world = _World()
+
+    class _Sim:
+        def __init__(self) -> None:
+            self.state = _State()
+
+    sim = _Sim()
+    assert _get_space_role(sim, "overworld") == CAMPAIGN_SPACE_ROLE
+    assert _get_space_role(sim, "local:test") == LOCAL_SPACE_ROLE
+    assert _get_space_role(sim, "missing") is None
+
+
+def test_visual_audit_report_writer_failed_result_does_not_report_none_blocker(tmp_path: Path, monkeypatch) -> None:
+    import hexcrawler.cli.visual_audit as mod
+
+    report_path = tmp_path / "AI_VISUAL_AUDIT_REPORT.md"
+    monkeypatch.setattr(mod, "REPORT_PATH", report_path)
+    _write_report("cmd", "ts", "abc", [], "available", "failed")
+
+    text = report_path.read_text(encoding="utf-8")
+    assert "Result: failed" in text
+    assert "None recorded." not in text
+    assert "Audit failed before blockers were fully recorded." in text
