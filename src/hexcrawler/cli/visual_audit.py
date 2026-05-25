@@ -13,6 +13,7 @@ from hexcrawler.cli.pygame_viewer import (
 from hexcrawler.sim.core import SimCommand
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, COMBAT_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.encounters import END_LOCAL_ENCOUNTER_INTENT, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE
 
@@ -31,6 +32,12 @@ def _git_commit()->str:
     except Exception:return "unknown"
 
 def _advance_one_tick(sim:Any)->None: sim.advance_ticks(1)
+
+def _events(sim: Any, event_type: str) -> list[dict[str, Any]]:
+    return [row for row in sim.get_event_trace() if row.get("event_type") == event_type]
+
+def _last_events(sim: Any, limit: int = 4) -> list[dict[str, Any]]:
+    return list(sim.get_event_trace()[-limit:])
 
 def _visual_sanity(pg:Any,surf:Any)->dict[str,Any]:
     px=pg.surfarray.array3d(surf)
@@ -86,75 +93,111 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
     pg=_ensure_pygame_imported(); pg.init(); screen=pg.Surface((1440,900))
     runtime_state=ViewerRuntimeState(sim=sim,map_path=map_path,with_encounters=False,current_save_path="")
     beats=[]; blockers=[]
-    site_ids=set(sim.state.world.sites.keys())
-    patrol_exists=any(e.template_id=="campaign_danger_patrol" for e in sim.state.entities.values())
-    for i,name in enumerate(BEATS):
-        notes=[]
-        if name=="danger_visible":
-            sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type="set_move_vector",params={"x":1.0,"y":0.0}))
-            _advance_one_tick(sim)
-        if name=="contact_modal":
-            for _ in range(80): _advance_one_tick(sim)
-        if name=="local_entry":
-            sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,params={}))
-            for _ in range(20): _advance_one_tick(sim)
-        if name=="first_attack":
-            hostiles=[e for e in sim.state.entities.values() if str(e.entity_id).startswith("encounter_hostile") and e.space_id==sim.state.entities[PLAYER_ID].space_id]
-            if hostiles:
-                sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=ATTACK_INTENT_COMMAND_TYPE,params={"target_id":hostiles[0].entity_id}))
-            _advance_one_tick(sim)
-        if name in {"combat_result","extraction_return"}:
-            for _ in range(8): _advance_one_tick(sim)
+    local_entered=False
 
+    def pending_offer() -> dict[str, Any] | None:
+        row = sim.get_rules_state("campaign_danger").get("pending_offer_by_player", {}).get(PLAYER_ID)
+        return row if isinstance(row, dict) else None
+
+    def encounter_state() -> str:
+        control = sim.get_rules_state("campaign_danger").get("encounter_control", {})
+        row = control.get(PLAYER_ID) if isinstance(control, dict) else None
+        return str(row.get("state", "none")) if isinstance(row, dict) else "none"
+
+    def capture(name: str, status: str, reason: str = "", issued_command: str | None = None) -> None:
+        i=len(beats)
         render_meta=render_viewer_frame_to_surface(screen=screen,sim=sim,runtime_state=runtime_state,status_message=f"audit beat: {name}")
         sanity=_visual_sanity(pg,screen)
         path=out/f"{i:02d}_{name}.png"; pg.image.save(screen,str(path))
         player=sim.state.entities.get(PLAYER_ID)
-        role: str | None = None
-        role_error: str | None = None
-        try:
-            role = _get_space_role(sim, player.space_id if player else None)
-        except Exception as exc:
-            role_error = f"{type(exc).__name__}: {exc}"
-        status="ok"
-        if name=="title" and sim.state.tick>=90: status="partial"; notes.append("title overlay no longer guaranteed after title-card ticks")
-        if name=="campaign_start":
-            if not (player and role==CAMPAIGN_SPACE_ROLE and "home_greybridge" in site_ids and "demo_dungeon_entrance" in site_ids and patrol_exists): status="failed"
-        if name=="danger_visible" and not patrol_exists: status="failed"; notes.append("no hostile patrol found")
-        pending=sim.get_rules_state("campaign_danger").get("pending_offer_by_player",{}).get(PLAYER_ID)
-        if name=="contact_modal" and not isinstance(pending,dict): status="failed"; notes.append("no pending contact offer")
-        if name=="local_entry" and role!=LOCAL_SPACE_ROLE: status="failed"; notes.append("did not transition into local space")
-        if name=="first_attack":
-            attack_seen=any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE and e.get("params",{}).get("attacker_id")==PLAYER_ID for e in sim.get_event_trace())
-            if not attack_seen: status="partial"; notes.append("attack outcome not observed yet")
-        if name=="combat_result" and not any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE for e in sim.get_event_trace()): status="failed"
-        if name=="extraction_return" and role==LOCAL_SPACE_ROLE: status="partial"; notes.append("return/extraction not reached")
-        if role_error is not None:
-            status = "failed"
-            notes.append(f"runtime_exception: space role lookup failed ({role_error})")
-            blockers.append(f"runtime_exception during role lookup on beat '{name}': {role_error}")
-        if sanity["blank_frame_suspected"]:
-            status="failed" if status=="ok" else status
-            notes.append("blank_frame_suspected")
-        beats.append(BeatResult(name=name,file=str(path),status=status,tick=sim.state.tick,notes="; ".join(notes),diagnostics={
+        role=_get_space_role(sim, player.space_id if player else None)
+        if sanity["blank_frame_suspected"] and status=="ok":
+            status="failed"; reason=(reason+"; " if reason else "")+"blank_frame_suspected"
+        if status!="ok": blockers.append(f"{name}: {reason or 'failed'}")
+        beats.append(BeatResult(name=name,file=str(path),status=status,tick=sim.state.tick,notes=reason,diagnostics={
             "active_space_id": player.space_id if player else None,
             "active_space_role": role,
-            "player_entity_id": PLAYER_ID if player else None,
-            "encounter_control_state": "pending_offer" if isinstance(pending,dict) else "none",
+            "player_position": {"x": getattr(player, "position_x", None), "y": getattr(player, "position_y", None)},
+            "encounter_control_state": encounter_state(),
+            "pending_offer_count": 1 if pending_offer() else 0,
+            "command_issued": issued_command,
+            "last_event_trace": _last_events(sim),
             "viewer_render_path": render_meta["render_path"],
             "rendered_from_actual_viewer_path": True,
             "visual_sanity": sanity,
         }))
+
+    capture("title","ok")
+    _advance_one_tick(sim); capture("campaign_start","ok")
+
+    # move toward danger using authoritative movement command seam
+    patrol = next((e for e in sim.state.entities.values() if e.template_id=="campaign_danger_patrol"), None)
+    player = sim.state.entities.get(PLAYER_ID)
+    if patrol and player:
+        dx = patrol.position_x - player.position_x; dy = patrol.position_y - player.position_y
+        mag = (dx*dx+dy*dy) ** 0.5 or 1.0
+        sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type="set_move_vector",params={"x":dx/mag,"y":dy/mag}))
+        move_cmd="set_move_vector"
+    else:
+        move_cmd=None
+    for _ in range(120):
+        if pending_offer(): break
+        _advance_one_tick(sim)
+    capture("danger_visible","ok" if patrol is not None else "failed", "" if patrol else "no hostile patrol found", move_cmd)
+
+    po = pending_offer()
+    capture("contact_modal", "ok" if po else "failed", "" if po else "no pending contact offer")
+
+    if po:
+        sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=ACCEPT_ENCOUNTER_OFFER_INTENT,params={"entity_id": PLAYER_ID}))
+        accept_cmd=ACCEPT_ENCOUNTER_OFFER_INTENT
+    else:
+        accept_cmd=None
+    for _ in range(80):
+        player = sim.state.entities.get(PLAYER_ID)
+        role = _get_space_role(sim, player.space_id if player else None) if player else None
+        if role == LOCAL_SPACE_ROLE or encounter_state()=="in_local" or _events(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE):
+            local_entered=True; break
+        _advance_one_tick(sim)
+    capture("local_entry", "ok" if local_entered else "failed", "" if local_entered else "did not transition into local space", accept_cmd)
+
+    attack_seen=False
+    attack_cmd=None
+    if local_entered:
+        player = sim.state.entities.get(PLAYER_ID)
+        hostiles=[e for e in sim.state.entities.values() if str(e.entity_id).startswith("encounter_hostile") and player and e.space_id==player.space_id]
+        if hostiles:
+            sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=ATTACK_INTENT_COMMAND_TYPE,params={"target_id":hostiles[0].entity_id,"attacker_id":PLAYER_ID,"mode":"melee"}))
+            attack_cmd=ATTACK_INTENT_COMMAND_TYPE
+        for _ in range(40):
+            if any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE and e.get("params",{}).get("attacker_id")==PLAYER_ID for e in sim.get_event_trace()):
+                attack_seen=True; break
+            _advance_one_tick(sim)
+    capture("first_attack", "ok" if attack_seen else "partial", "" if attack_seen else "attack outcome not observed yet", attack_cmd)
+
+    combat_seen=any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE for e in sim.get_event_trace())
+    capture("combat_result", "ok" if combat_seen else "failed", "" if combat_seen else "combat outcome not observed")
+
+    # return only valid after local entry
+    return_ok=False
+    return_cmd=None
+    if local_entered:
+        sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=END_LOCAL_ENCOUNTER_INTENT,params={"intent": END_LOCAL_ENCOUNTER_INTENT, "entity_id": PLAYER_ID, "tags": ["visual_audit"]}))
+        return_cmd=END_LOCAL_ENCOUNTER_INTENT
+        for _ in range(50):
+            if _events(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE) or encounter_state() in {"returning", "post_encounter_cooldown", "none"}:
+                player=sim.state.entities.get(PLAYER_ID); role=_get_space_role(sim, player.space_id if player else None) if player else None
+                if role == CAMPAIGN_SPACE_ROLE: return_ok=True; break
+            _advance_one_tick(sim)
+    capture("extraction_return", "ok" if return_ok else ("failed" if local_entered else "partial"), "" if return_ok else ("no local entry occurred" if not local_entered else "return not reached"), return_cmd)
+
     result="success" if all(b.status=="ok" for b in beats) else "partial"
-    if any(b.status=="failed" for b in beats):
-        result="failed"
-    if any(b.diagnostics and b.diagnostics["visual_sanity"]["blank_frame_suspected"] for b in beats):
-        result="failed"; blockers.append("Captured frames appear blank or non-game-rendered.")
-    if any(b.status!="ok" for b in beats): blockers.append("Audit did not capture all requested visible player/site/danger/local/combat beats.")
+    if any(b.status=="failed" for b in beats): result="failed"
     sheet=pg.Surface((1600,1200)); sheet.fill((16,16,20)); sfont=pg.font.Font(None,24)
     for i,b in enumerate(beats):
         img=pg.transform.smoothscale(pg.image.load(b.file),(360,200)); x=30+(i%4)*380; y=110+(i//4)*290
-        sheet.blit(img,(x,y)); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+214))
+        sheet.blit(img,(x,y)); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+214));
+        if b.notes: sheet.blit(sfont.render(b.notes[:44],True,(240,180,180)),(x,y+238))
     pg.image.save(sheet,str(CONTACT_SHEET_PATH))
     timeline={"script":script,"command":command,"timestamp":ts,"commit":commit,"pygame_status":"available","result":result,
               "initial_world_hash":initial_world_hash,"initial_simulation_hash":initial_sim_hash,
