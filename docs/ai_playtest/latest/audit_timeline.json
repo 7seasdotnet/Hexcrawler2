@@ -1,9 +1,11 @@
 {
   "script": "core_playable_first_loop",
   "command": "python play.py --visual-audit --script core_playable_first_loop --out docs/ai_playtest/latest",
-  "timestamp": "2026-05-25T09:35:54.345984+00:00",
-  "commit": "e821fed",
-  "pygame_version": "unavailable",
+  "timestamp": "2026-05-25T13:27:44.304393+00:00",
+  "commit": "3127cfe",
+  "pygame_status": "unavailable",
+  "result": "pygame_unavailable",
+  "error": "pygame unavailable: No module named 'pygame'",
   "beats": [
     {
       "name": "title",
