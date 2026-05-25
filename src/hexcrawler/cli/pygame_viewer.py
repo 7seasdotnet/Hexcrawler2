@@ -6511,6 +6511,71 @@ def run_pygame_viewer(
     return 0
 
 
+def render_viewer_frame_to_surface(
+    *,
+    screen: pygame.Surface,
+    sim: Simulation,
+    runtime_state: ViewerRuntimeState,
+    status_message: str = "",
+    follow_state: FollowSelectionState | None = None,
+) -> dict[str, Any]:
+    """Render a single viewer frame through the canonical pygame viewer draw path."""
+    layout = _compute_viewer_layout(screen.get_size())
+    viewport_rect = layout.world_view
+    marker_font = pygame.font.Font(None, 24)
+    font = pygame.font.Font(None, 26)
+    debug_font = pygame.font.Font(None, 22)
+    follow = follow_state or FollowSelectionState(enabled=False)
+    local_camera_cache = LocalCameraCache()
+    world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+    selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
+    follow_center, _ = _apply_follow_selected_camera(
+        sim,
+        selected_entity_id,
+        viewport_rect,
+        zoom_scale=world_zoom_scale,
+        follow_state=follow,
+    )
+    if follow_center is not None:
+        world_center = follow_center
+    screen.fill((17, 18, 25))
+    offer_buttons = _draw_frame_layers(
+        screen=screen,
+        sim=sim,
+        world_center=world_center,
+        world_zoom_scale=world_zoom_scale,
+        viewport_rect=viewport_rect,
+        marker_font=marker_font,
+        font=font,
+        debug_font=debug_font,
+        status_message=status_message,
+        hover_message=None,
+        runtime_state=runtime_state,
+        follow_state=follow,
+        show_local_arena_overlay=False,
+        layout=layout,
+        inspector_scroll=0,
+        panel_scroll=EncounterPanelScrollState(),
+        active_panel_section=PANEL_SECTION_ORDER[0],
+        rumor_panel_state=RumorPanelState(),
+        debug_filter_state=DebugFilterState(),
+        debug_panel_cache=DebugPanelRenderCache(),
+        home_panel_state=HomePanelState(),
+        context_menu=None,
+        campaign_path_edit_state=None,
+        previous_snapshot=extract_render_snapshot(sim),
+        current_snapshot=extract_render_snapshot(sim),
+        current_space_id=sim.state.entities.get(PLAYER_ID).space_id if sim.state.entities.get(PLAYER_ID) is not None else None,
+        alpha=1.0,
+        visual_facing_by_entity={},
+    )[-1]
+    return {
+        "render_path": "pygame_viewer._draw_frame_layers",
+        "offer_buttons": tuple(offer_buttons.keys()),
+        "viewport": [viewport_rect.x, viewport_rect.y, viewport_rect.w, viewport_rect.h],
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
