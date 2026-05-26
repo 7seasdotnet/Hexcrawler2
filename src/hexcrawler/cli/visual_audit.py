@@ -27,6 +27,20 @@ BEATS = ["title","campaign_start","danger_visible","contact_modal","local_entry"
 class BeatResult:
     name:str; file:str; status:str; tick:int; notes:str=""; diagnostics:dict[str,Any]|None=None
 
+
+@dataclass
+class AttackDriveResult:
+    target_id: str | None
+    target_distance: float | None
+    turn_issued: bool
+    attack_issued: bool
+    attack_tick: int | None
+    outcome_detected: bool
+    outcome_reason: str | None
+    event_types_after_attack: list[str]
+    first_attack_status: str
+    combat_result_status: str
+
 def _git_commit()->str:
     try:return subprocess.check_output(["git","rev-parse","--short","HEAD"],text=True).strip()
     except Exception:return "unknown"
@@ -38,6 +52,19 @@ def _events(sim: Any, event_type: str) -> list[dict[str, Any]]:
 
 def _last_events(sim: Any, limit: int = 4) -> list[dict[str, Any]]:
     return list(sim.get_event_trace()[-limit:])
+
+
+def _distance(a: Any, b: Any) -> float:
+    dx = float(a.position_x) - float(b.position_x)
+    dy = float(a.position_y) - float(b.position_y)
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def _local_hostiles(sim: Any, player: Any) -> list[Any]:
+    return [
+        e for e in sim.state.entities.values()
+        if e.space_id == player.space_id and str(e.entity_id).startswith("encounter_hostile")
+    ]
 
 def _visual_sanity(pg:Any,surf:Any)->dict[str,Any]:
     px=pg.surfarray.array3d(surf)
@@ -104,7 +131,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         row = control.get(PLAYER_ID) if isinstance(control, dict) else None
         return str(row.get("state", "none")) if isinstance(row, dict) else "none"
 
-    def capture(name: str, status: str, reason: str = "", issued_command: str | None = None) -> None:
+    def capture(name: str, status: str, reason: str = "", issued_command: str | None = None, extra: dict[str, Any] | None = None) -> None:
         i=len(beats)
         render_meta=render_viewer_frame_to_surface(screen=screen,sim=sim,runtime_state=runtime_state,status_message=f"audit beat: {name}")
         sanity=_visual_sanity(pg,screen)
@@ -123,8 +150,10 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             "command_issued": issued_command,
             "last_event_trace": _last_events(sim),
             "viewer_render_path": render_meta["render_path"],
+            "viewer_viewport_rect": render_meta.get("viewport", [0, 0, 0, 0]),
             "rendered_from_actual_viewer_path": True,
             "visual_sanity": sanity,
+            **(extra or {}),
         }))
 
     capture("title","ok")
@@ -161,22 +190,64 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         _advance_one_tick(sim)
     capture("local_entry", "ok" if local_entered else "failed", "" if local_entered else "did not transition into local space", accept_cmd)
 
-    attack_seen=False
-    attack_cmd=None
+    attack_result = AttackDriveResult(
+        target_id=None, target_distance=None, turn_issued=False, attack_issued=False, attack_tick=None,
+        outcome_detected=False, outcome_reason=None, event_types_after_attack=[], first_attack_status="partial", combat_result_status="failed",
+    )
     if local_entered:
         player = sim.state.entities.get(PLAYER_ID)
-        hostiles=[e for e in sim.state.entities.values() if str(e.entity_id).startswith("encounter_hostile") and player and e.space_id==player.space_id]
-        if hostiles:
-            sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=ATTACK_INTENT_COMMAND_TYPE,params={"target_id":hostiles[0].entity_id,"attacker_id":PLAYER_ID,"mode":"melee"}))
-            attack_cmd=ATTACK_INTENT_COMMAND_TYPE
-        for _ in range(40):
-            if any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE and e.get("params",{}).get("attacker_id")==PLAYER_ID for e in sim.get_event_trace()):
-                attack_seen=True; break
-            _advance_one_tick(sim)
-    capture("first_attack", "ok" if attack_seen else "partial", "" if attack_seen else "attack outcome not observed yet", attack_cmd)
+        if player:
+            hostiles = _local_hostiles(sim, player)
+            if hostiles:
+                hostiles.sort(key=lambda e: _distance(player, e))
+                target = hostiles[0]
+                attack_result.target_id = str(target.entity_id)
+                attack_result.target_distance = round(_distance(player, target), 3)
+                for _ in range(80):
+                    if _distance(player, target) <= 1.35:
+                        break
+                    dx = target.position_x - player.position_x
+                    dy = target.position_y - player.position_y
+                    mag = (dx * dx + dy * dy) ** 0.5 or 1.0
+                    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type="set_move_vector", params={"x": dx / mag, "y": dy / mag}))
+                    _advance_one_tick(sim)
+                    player = sim.state.entities.get(PLAYER_ID)
+                if _distance(player, target) <= 1.35:
+                    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ATTACK_INTENT_COMMAND_TYPE, params={"target_id": target.entity_id, "attacker_id": PLAYER_ID, "mode": "melee"}))
+                    attack_result.attack_issued = True
+                    attack_result.attack_tick = sim.state.tick
+                else:
+                    attack_result.outcome_reason = "target_not_in_range_after_bounded_move"
+            else:
+                attack_result.outcome_reason = "no_local_hostile_found"
 
-    combat_seen=any(e.get("event_type")==COMBAT_OUTCOME_EVENT_TYPE for e in sim.get_event_trace())
-    capture("combat_result", "ok" if combat_seen else "failed", "" if combat_seen else "combat outcome not observed")
+            if attack_result.attack_issued:
+                for _ in range(120):
+                    latest = sim.state.combat_log[-1] if sim.state.combat_log else None
+                    if isinstance(latest, dict) and latest.get("attacker_id") == PLAYER_ID:
+                        if latest.get("reason") == "windup_started":
+                            attack_result.first_attack_status = "ok"
+                        if latest.get("applied") is True or latest.get("reason") in {"resolved", "target_incapacitated"}:
+                            attack_result.outcome_detected = True
+                            attack_result.outcome_reason = str(latest.get("reason"))
+                            attack_result.combat_result_status = "ok"
+                            break
+                    _advance_one_tick(sim)
+                if attack_result.combat_result_status != "ok":
+                    attack_result.combat_result_status = "partial"
+                    if attack_result.first_attack_status != "ok":
+                        attack_result.first_attack_status = "partial"
+                    if attack_result.outcome_reason is None:
+                        attack_result.outcome_reason = "attack_issued_no_outcome_within_wait"
+            elif attack_result.outcome_reason is None:
+                attack_result.outcome_reason = "attack_not_issued"
+
+    event_types_seen = {row.get("event_type") for row in sim.get_event_trace() if isinstance(row, dict)}
+    attack_result.event_types_after_attack = sorted(str(t) for t in event_types_seen if t)
+    first_attack_note = "" if attack_result.first_attack_status == "ok" else (attack_result.outcome_reason or "first attack not observed")
+    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__})
+    combat_note = "" if attack_result.combat_result_status == "ok" else (attack_result.outcome_reason or "combat outcome not observed")
+    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__})
 
     # return only valid after local entry
     return_ok=False
@@ -195,7 +266,11 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
     if any(b.status=="failed" for b in beats): result="failed"
     sheet=pg.Surface((1600,1200)); sheet.fill((16,16,20)); sfont=pg.font.Font(None,24)
     for i,b in enumerate(beats):
-        img=pg.transform.smoothscale(pg.image.load(b.file),(360,200)); x=30+(i%4)*380; y=110+(i//4)*290
+        raw=pg.image.load(b.file)
+        viewport = (b.diagnostics or {}).get("viewer_viewport_rect", [0, 0, 0, 0])
+        vx, vy, vw, vh = [int(v) for v in viewport]
+        view = raw.subsurface(pg.Rect(vx, vy, vw, vh)).copy() if vw > 0 and vh > 0 else raw
+        img=pg.transform.smoothscale(view,(360,200)); x=30+(i%4)*380; y=110+(i//4)*290
         sheet.blit(img,(x,y)); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+214));
         if b.notes: sheet.blit(sfont.render(b.notes[:44],True,(240,180,180)),(x,y+238))
     pg.image.save(sheet,str(CONTACT_SHEET_PATH))

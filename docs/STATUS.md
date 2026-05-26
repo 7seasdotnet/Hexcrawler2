@@ -300,3 +300,24 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `src/hexcrawler/cli/pygame_viewer.py`: canonical viewer frame drawing path now reusable for offscreen audit capture.
 - `docs/ai_playtest/latest/audit_timeline.json`: per-beat diagnostic timeline including role/state/render-path/sanity metadata.
 - `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md`: truthful partial/fail success semantics and blocker reporting.
+
+## What changed in this commit
+- Updated `src/hexcrawler/cli/visual_audit.py` local-combat beat driving to select nearest local hostile, approach using authoritative `set_move_vector`, issue `attack_intent`, and evaluate combat outcome truth from authoritative combat results instead of screenshot-only timing.
+- Added richer combat diagnostics in `audit_timeline.json` via `combat_probe` (target id/distance, attack tick, command issuance, observed event types, outcome reason/status).
+- Updated visual audit contact-sheet generation to crop each screenshot to the main viewport rectangle so critique panels prioritize player-facing gameplay while preserving full screenshots and full diagnostics.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py tests/test_combat_execution_module.py tests/test_local_encounter_return.py tests/test_encounter_controller_smoke_slice.py`
+- `python play.py --visual-audit` *(currently fails in this environment due to missing `pygame` dependency)*
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Re-run `python play.py --visual-audit` on a machine with `pygame` installed and validate truthful `first_attack`/`combat_result` beats plus viewport-focused contact-sheet output.
+
+## What Exists (folders / entry points)
+- `play.py`: entry point supporting `--visual-audit`.
+- `src/hexcrawler/cli/visual_audit.py`: scripted visual-audit beat runner and report/timeline/contact-sheet writer.
+- `src/hexcrawler/cli/pygame_viewer.py`: canonical draw path and viewport metadata used for audit captures.
+- `docs/ai_playtest/latest/`: visual audit artifacts (full beat screenshots + `audit_timeline.json`).
