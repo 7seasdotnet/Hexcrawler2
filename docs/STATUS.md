@@ -321,3 +321,23 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `src/hexcrawler/cli/visual_audit.py`: scripted visual-audit beat runner and report/timeline/contact-sheet writer.
 - `src/hexcrawler/cli/pygame_viewer.py`: canonical draw path and viewport metadata used for audit captures.
 - `docs/ai_playtest/latest/`: visual audit artifacts (full beat screenshots + `audit_timeline.json`).
+
+## What changed in this commit
+- Fixed visual-audit hostile target discovery to use canonical local hostile eligibility (template/faction + local-space + incapacitation filters) instead of brittle hostile-id prefix matching.
+- Added per-beat `local_entity_probe` diagnostics to visual audit timeline/report metadata for `local_entry`, `first_attack`, and `combat_result`, including acceptance/rejection reasons for each local entity.
+- Added visual-audit unit coverage for canonical hostile discovery and rejection-reason diagnostics to prevent regressions.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py tests/test_combat_execution_module.py tests/test_local_encounter_return.py tests/test_encounter_controller_smoke_slice.py tests/test_campaign_danger_contact_slice.py`
+- `python play.py --visual-audit` *(fails in this container due to missing pygame dependency)*
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run `python play.py --visual-audit` in an environment with `pygame` installed to verify that `first_attack` and `combat_result` now resolve against authoritative local hostile/combat outcomes and inspect the new `local_entity_probe` timeline payload.
+
+## What Exists (folders / entry points)
+- `src/hexcrawler/cli/visual_audit.py`: visual-audit beat orchestration + canonical hostile targeting + local entity diagnostics.
+- `tests/test_visual_audit.py`: visual-audit regression tests for hostile discovery and probe rejection reasons.
+- `docs/ai_playtest/latest/audit_timeline.json`: generated timeline artifact now expected to include `local_entity_probe` records per local/combat beats.

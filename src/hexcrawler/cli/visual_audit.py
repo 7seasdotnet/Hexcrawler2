@@ -16,6 +16,7 @@ from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, COMBAT_OUTCOME_EVE
 from hexcrawler.sim.encounters import END_LOCAL_ENCOUNTER_INTENT, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE
+from hexcrawler.sim.wounds import is_incapacitated_from_wounds
 
 DEFAULT_SCRIPT = "core_playable_first_loop"
 DEFAULT_OUT = Path("docs/ai_playtest/latest")
@@ -61,10 +62,65 @@ def _distance(a: Any, b: Any) -> float:
 
 
 def _local_hostiles(sim: Any, player: Any) -> list[Any]:
-    return [
-        e for e in sim.state.entities.values()
-        if e.space_id == player.space_id and str(e.entity_id).startswith("encounter_hostile")
-    ]
+    return [row["entity"] for row in _select_local_attack_targets(sim=sim, player=player)]
+
+
+def _is_local_hostile_candidate(entity: Any) -> bool:
+    template_id = str(getattr(entity, "template_id", "") or "")
+    if template_id == "encounter_hostile_v1":
+        return True
+    faction_id = str((getattr(entity, "stats", {}) or {}).get("faction_id", "")).strip().lower()
+    return faction_id == "hostile"
+
+
+def _build_local_entity_probe(sim: Any, player: Any, *, selected_target_id: str | None = None) -> dict[str, Any]:
+    local_space_id = getattr(player, "space_id", None) if player is not None else None
+    rows: list[dict[str, Any]] = []
+    for entity in sorted(sim.state.entities.values(), key=lambda e: str(getattr(e, "entity_id", ""))):
+        if entity.space_id != local_space_id:
+            continue
+        stats = dict(entity.stats) if isinstance(entity.stats, dict) else {}
+        reasons: list[str] = []
+        if player is None:
+            reasons.append("no_player")
+        elif entity.entity_id == player.entity_id:
+            reasons.append("player_self")
+        if not _is_local_hostile_candidate(entity):
+            reasons.append("not_hostile_marker")
+        if is_incapacitated_from_wounds(getattr(entity, "wounds", [])):
+            reasons.append("incapacitated")
+        if selected_target_id is not None and str(entity.entity_id) == str(selected_target_id):
+            reasons.append("selected_target")
+        rows.append({
+            "entity_id": str(entity.entity_id),
+            "template_id": getattr(entity, "template_id", None),
+            "position": {"x": float(getattr(entity, "position_x", 0.0)), "y": float(getattr(entity, "position_y", 0.0))},
+            "faction_id": stats.get("faction_id"),
+            "tags": list(getattr(entity, "tags", [])) if isinstance(getattr(entity, "tags", []), list) else [],
+            "combat_fields": {"wounds_count": len(getattr(entity, "wounds", []))},
+            "incapacitated": is_incapacitated_from_wounds(getattr(entity, "wounds", [])),
+            "accepted_as_attack_target": len(reasons) == 0 or reasons == ["selected_target"],
+            "target_selection_reasons": reasons or ["accepted"],
+        })
+    return {"active_local_space_id": local_space_id, "entities": rows}
+
+
+def _select_local_attack_targets(sim: Any, player: Any) -> list[dict[str, Any]]:
+    if player is None:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for entity in sim.state.entities.values():
+        if entity.space_id != player.space_id:
+            continue
+        if entity.entity_id == player.entity_id:
+            continue
+        if not _is_local_hostile_candidate(entity):
+            continue
+        if is_incapacitated_from_wounds(entity.wounds):
+            continue
+        candidates.append({"entity": entity, "distance": _distance(player, entity)})
+    candidates.sort(key=lambda row: (row["distance"], str(row["entity"].entity_id)))
+    return candidates
 
 def _visual_sanity(pg:Any,surf:Any)->dict[str,Any]:
     px=pg.surfarray.array3d(surf)
@@ -188,7 +244,8 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         if role == LOCAL_SPACE_ROLE or encounter_state()=="in_local" or _events(sim, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE):
             local_entered=True; break
         _advance_one_tick(sim)
-    capture("local_entry", "ok" if local_entered else "failed", "" if local_entered else "did not transition into local space", accept_cmd)
+    player_local = sim.state.entities.get(PLAYER_ID)
+    capture("local_entry", "ok" if local_entered else "failed", "" if local_entered else "did not transition into local space", accept_cmd, extra={"local_entity_probe": _build_local_entity_probe(sim, player_local)})
 
     attack_result = AttackDriveResult(
         target_id=None, target_distance=None, turn_issued=False, attack_issued=False, attack_tick=None,
@@ -199,10 +256,10 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         if player:
             hostiles = _local_hostiles(sim, player)
             if hostiles:
-                hostiles.sort(key=lambda e: _distance(player, e))
-                target = hostiles[0]
+                target_candidates = _select_local_attack_targets(sim, player)
+                target = target_candidates[0]["entity"]
                 attack_result.target_id = str(target.entity_id)
-                attack_result.target_distance = round(_distance(player, target), 3)
+                attack_result.target_distance = round(float(target_candidates[0]["distance"]), 3)
                 for _ in range(80):
                     if _distance(player, target) <= 1.35:
                         break
@@ -245,9 +302,11 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
     event_types_seen = {row.get("event_type") for row in sim.get_event_trace() if isinstance(row, dict)}
     attack_result.event_types_after_attack = sorted(str(t) for t in event_types_seen if t)
     first_attack_note = "" if attack_result.first_attack_status == "ok" else (attack_result.outcome_reason or "first attack not observed")
-    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__})
+    player_first = sim.state.entities.get(PLAYER_ID)
+    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_first, selected_target_id=attack_result.target_id)})
     combat_note = "" if attack_result.combat_result_status == "ok" else (attack_result.outcome_reason or "combat outcome not observed")
-    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__})
+    player_combat = sim.state.entities.get(PLAYER_ID)
+    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_combat, selected_target_id=attack_result.target_id)})
 
     # return only valid after local entry
     return_ok=False

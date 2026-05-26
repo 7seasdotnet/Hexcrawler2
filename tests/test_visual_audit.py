@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from hexcrawler.cli.visual_audit import DEFAULT_OUT, _advance_one_tick, _get_space_role, _write_report
+from hexcrawler.cli.visual_audit import (
+    DEFAULT_OUT,
+    _advance_one_tick,
+    _build_local_entity_probe,
+    _get_space_role,
+    _select_local_attack_targets,
+    _write_report,
+)
+from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, SpaceState
 from hexcrawler.cli.play import _build_parser
 
@@ -81,3 +89,56 @@ def test_visual_audit_report_writer_failed_result_does_not_report_none_blocker(t
     assert "Result: failed" in text
     assert "None recorded." not in text
     assert "Audit failed before blockers were fully recorded." in text
+
+
+def test_visual_audit_target_discovery_uses_canonical_hostile_fields() -> None:
+    class _State:
+        def __init__(self) -> None:
+            self.entities = {
+                "scout": EntityState(entity_id="scout", position_x=0.0, position_y=0.0, space_id="local:a"),
+                "encounter_participant:1": EntityState(
+                    entity_id="encounter_participant:1",
+                    position_x=1.0,
+                    position_y=0.0,
+                    space_id="local:a",
+                    template_id="encounter_hostile_v1",
+                ),
+                "transition_marker": EntityState(entity_id="transition_marker", position_x=0.5, position_y=0.5, space_id="local:a"),
+            }
+
+    class _Sim:
+        def __init__(self) -> None:
+            self.state = _State()
+
+    sim = _Sim()
+    player = sim.state.entities["scout"]
+    targets = _select_local_attack_targets(sim, player)
+    assert [row["entity"].entity_id for row in targets] == ["encounter_participant:1"]
+
+
+def test_local_entity_probe_records_rejection_reasons() -> None:
+    class _State:
+        def __init__(self) -> None:
+            self.entities = {
+                "scout": EntityState(entity_id="scout", position_x=0.0, position_y=0.0, space_id="local:a"),
+                "neutral": EntityState(entity_id="neutral", position_x=1.0, position_y=0.0, space_id="local:a"),
+                "hostile_dead": EntityState(
+                    entity_id="hostile_dead",
+                    position_x=2.0,
+                    position_y=0.0,
+                    space_id="local:a",
+                    template_id="encounter_hostile_v1",
+                    wounds=[{"severity": 4, "region": "torso"}],
+                ),
+            }
+
+    class _Sim:
+        def __init__(self) -> None:
+            self.state = _State()
+
+    sim = _Sim()
+    probe = _build_local_entity_probe(sim, sim.state.entities["scout"])
+    by_id = {row["entity_id"]: row for row in probe["entities"]}
+    assert "player_self" in by_id["scout"]["target_selection_reasons"]
+    assert "not_hostile_marker" in by_id["neutral"]["target_selection_reasons"]
+    assert "incapacitated" in by_id["hostile_dead"]["target_selection_reasons"]
