@@ -1,4 +1,22 @@
 ## What changed in this commit
+- Fixed Windows portability regression in `pygame_viewer` by removing the unconditional Unix-only `resource` import and moving memory sampling to a guarded cross-platform helper.
+- Perf sentinel now records `memory_sampler` (`resource`/`psutil`/`tracemalloc`/`unavailable`) and keeps dumping metrics when RSS sampling is unavailable (`memory_rss_kb: null`).
+- Added viewer tests proving import and perf sample capture remain safe when `resource` is unavailable.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_durability_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "memory_sampler or resource_module_missing"`
+- `python play.py --visual-audit` (fails in this environment if `pygame` is not installed)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (fails in this environment if `pygame` is not installed)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Re-run the two `play.py` viewer commands on a Windows machine with `pygame` installed to confirm end-to-end launch succeeds without `resource`.
+
+## What changed in this commit
 - Added viewer-local lag sentinel toggles (`--perf-sentinel`, `--profile-on-lag`, `--lag-frame-ms`) with bounded ring-buffer sampling and deterministic-safe report dumps under `docs/ai_playtest/perf/`.
 - Added first `CombatPresentationCue` viewer seam model (non-authoritative, non-serialized) for attack presentation scaffolding without combat outcome authority changes.
 - Added hot-path audit notes and lag capture report templates for long-session runtime diagnosis.

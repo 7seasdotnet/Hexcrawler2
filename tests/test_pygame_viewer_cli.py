@@ -1171,6 +1171,67 @@ def test_rumor_panel_consumes_matching_pending_outcome_by_action_uid() -> None:
     assert rumor_state.pending_action_uid is None
     assert [row.get("rumor_id") for row in rumor_state.rows] == ["r-02"]
 
+
+def test_memory_sampler_returns_unavailable_when_resource_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    original_import = builtins.__import__
+
+    def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"resource", "psutil", "tracemalloc"}:
+            raise ModuleNotFoundError(name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked_import)
+
+    rss_kb, sampler = viewer_module._sample_memory_rss_kb()
+
+    assert rss_kb is None
+    assert sampler == "unavailable"
+
+
+def test_record_perf_sample_is_resilient_when_memory_sampler_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    monkeypatch.setattr(viewer_module, "_sample_memory_rss_kb", lambda: (None, "unavailable"))
+
+    viewer_module._record_perf_sample(
+        sentinel,
+        sim=sim,
+        frame_ms=16.0,
+        tick_ms=1.0,
+        ticks_advanced=1,
+        debug_rows_rendered=0,
+        debug_panel_active=False,
+    )
+
+    assert len(sentinel.records) == 1
+    assert sentinel.records[0]["memory_rss_kb"] is None
+    assert sentinel.records[0]["memory_sampler"] == "unavailable"
+
+
+def test_import_pygame_viewer_succeeds_when_resource_module_missing(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    script = """
+import builtins
+import sys
+orig = builtins.__import__
+def blocked(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == 'resource':
+        raise ModuleNotFoundError(name)
+    return orig(name, globals, locals, fromlist, level)
+builtins.__import__ = blocked
+import hexcrawler.cli.pygame_viewer
+print('ok')
+"""
+    result = subprocess.run([sys.executable, "-c", script], cwd=Path.cwd(), env={**__import__("os").environ, "PYTHONPATH": "src"}, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    assert "ok" in result.stdout
+
+
 def test_main_help_prints_usage_without_starting_viewer(capsys: pytest.CaptureFixture[str]) -> None:
     from hexcrawler.cli.pygame_viewer import main
 
