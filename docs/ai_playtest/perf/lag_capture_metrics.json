@@ -1,0 +1,5 @@
+{
+  "status": "awaiting_runtime_capture",
+  "note": "Run python play.py --perf-sentinel and press F10 (or set --lag-frame-ms low) to populate live samples.",
+  "records": []
+}
