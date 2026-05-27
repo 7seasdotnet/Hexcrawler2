@@ -1,7 +1,7 @@
 ## What changed in this commit
-- Implemented Frame Pacing Gate 1 viewer instrumentation: per-frame timing components (input/update/sim/draw/flip/throttle) plus frame pacing config capture (`target_fps`, `observed_fps`, sim tick, coupling flag) in perf sentinel samples/dumps.
-- Extended lag report dump summaries to emit avg/p95/max for frame/draw/sim/debug/flip/throttle and an automatic `frame_time_diagnosis` (`mostly_sleep_or_throttle` vs `mostly_compute`).
-- Added focused viewer tests for safe timing degradation and frame pacing config reporting while preserving deterministic sim authority boundaries.
+- Moved volatile perf sentinel runtime outputs to ignored `docs/ai_playtest/perf/latest/` so local lag captures no longer modify tracked documentation files.
+- Kept stable tracked perf docs as templates (`LAG_CAPTURE_REPORT_TEMPLATE.md`, `lag_capture_metrics.template.json`) and documented the runtime output path for contributors.
+- Added narrow git hygiene rules for perf captures and removed legacy tracked capture artifacts from the index to prevent pull-blocking local overwrite conflicts.
 
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
@@ -10,7 +10,7 @@
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "perf_sample or perf_sentinel or memory_sampler"`
 - `python play.py --visual-audit` (fails in this environment if `pygame` is not installed)
-- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (fails in this environment if `pygame` is not installed)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50  # writes to docs/ai_playtest/perf/latest/` (fails in this environment if `pygame` is not installed)
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.

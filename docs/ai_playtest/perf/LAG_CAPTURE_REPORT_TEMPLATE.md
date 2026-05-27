@@ -1,6 +1,9 @@
-# LAG_CAPTURE_REPORT
+# LAG_CAPTURE_REPORT_TEMPLATE
 
 ## Scope
+
+> Runtime perf sentinel writes live captures to `docs/ai_playtest/perf/latest/LAG_CAPTURE_REPORT.md` and `docs/ai_playtest/perf/latest/lag_capture_metrics.json`.
+
 - Space role: campaign + local viewer presentation/runtime path only.
 - Sentinel is viewer-local, read-only, bounded, and non-serialized.
 
