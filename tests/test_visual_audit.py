@@ -6,6 +6,8 @@ from hexcrawler.cli.visual_audit import (
     _build_local_entity_probe,
     _find_local_return_context,
     _distance_to_return_exit,
+    _at_return_exit,
+    _player_local_coord,
     _get_space_role,
     _select_local_attack_targets,
     _write_report,
@@ -179,3 +181,35 @@ def test_distance_to_return_exit_returns_none_without_coord() -> None:
     player = sim.state.entities["scout"]
     assert _distance_to_return_exit(sim, player, None) is None
 
+
+def test_distance_to_return_exit_uses_canonical_square_grid_world_mapping() -> None:
+    class _State:
+        entities = {"scout": EntityState(entity_id="scout", position_x=2.5, position_y=3.5, space_id="local:a")}
+        class _World:
+            spaces = {}
+        world = _World()
+
+    class _Sim:
+        state = _State()
+
+    sim = _Sim()
+    player = sim.state.entities["scout"]
+    assert _distance_to_return_exit(sim, player, {"x": 2, "y": 3}) == 0.0
+
+
+def test_at_return_exit_uses_cell_semantics_not_visual_distance() -> None:
+    class _Sim:
+        class _State:
+            entities = {"scout": EntityState(entity_id="scout", position_x=2.99, position_y=3.99, space_id="local:a")}
+        state = _State()
+
+        class _Ref:
+            coord = {"x": 2, "y": 3}
+
+        def _entity_location_ref(self, entity):
+            return self._Ref()
+
+    sim = _Sim()
+    player = sim.state.entities["scout"]
+    assert _player_local_coord(sim, player) == {"x": 2, "y": 3}
+    assert _at_return_exit(sim, player, {"x": 2, "y": 3}) is True
