@@ -385,3 +385,26 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `src/hexcrawler/cli/visual_audit.py`: visual-audit beat orchestration + canonical hostile targeting + local entity diagnostics.
 - `tests/test_visual_audit.py`: visual-audit regression tests for hostile discovery and probe rejection reasons.
 - `docs/ai_playtest/latest/audit_timeline.json`: generated timeline artifact now expected to include `local_entity_probe` records per local/combat beats.
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run/inspect the new Durability Gate 1 long-run audit outputs and isolate day-14 lag source from headless vs viewer-runtime metrics.
+
+## What Exists (folders / entry points)
+- `play.py`: supports `--durability-audit --days N --out <dir>` alongside `--visual-audit`.
+- `src/hexcrawler/cli/durability_audit.py`: deterministic long-run audit runner + metrics/report/CSV writers.
+- `tests/test_durability_audit.py`: coverage for durability artifact generation.
+
+## What changed in this commit
+- Added `run_durability_audit` command path with core_playable/experimental_world/soak_audit sampling for headless and viewer-runtime-style execution.
+- Added interval durability metrics capture and artifact writers (`durability_metrics.json`, `durability_summary.csv`, `DURABILITY_REPORT.md`) including rules-state sizing and growth warnings.
+- Added focused audit writer test and wired CLI flags in `play.py`.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/durability_audit.py src/hexcrawler/cli/play.py tests/test_durability_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_durability_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_soak_bounds_slice.py tests/test_soak_audit_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit`
+- `python play.py --durability-audit --days 30 --out docs/ai_playtest/durability`
