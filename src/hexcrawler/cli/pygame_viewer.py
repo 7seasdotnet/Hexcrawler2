@@ -2808,7 +2808,7 @@ def _record_perf_sample(
 
 
 def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: str) -> str:
-    out_dir = Path("docs/ai_playtest/perf")
+    out_dir = Path("docs/ai_playtest/perf/latest")
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / "LAG_CAPTURE_REPORT.md"
     metrics_path = out_dir / "lag_capture_metrics.json"

@@ -1,0 +1,3 @@
+{
+  "template": "Perf sentinel writes live metrics to docs/ai_playtest/perf/latest/lag_capture_metrics.json"
+}

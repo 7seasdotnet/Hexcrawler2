@@ -5,3 +5,5 @@ saves/
 viewer_out.txt
 viewer_err.txt
 /python
+docs/ai_playtest/perf/latest/*
+!docs/ai_playtest/perf/latest/.gitkeep
