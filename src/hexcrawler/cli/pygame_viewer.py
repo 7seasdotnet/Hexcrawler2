@@ -606,6 +606,23 @@ class PerfSentinelState:
 
 
 @dataclass(frozen=True)
+class FrameTimingBreakdown:
+    input_ms: float = 0.0
+    command_ms: float = 0.0
+    simulation_advance_ms: float = 0.0
+    draw_world_ms: float = 0.0
+    draw_entities_ms: float = 0.0
+    draw_hud_debug_ms: float = 0.0
+    draw_modals_overlays_ms: float = 0.0
+    flip_ms: float = 0.0
+    throttle_ms: float = 0.0
+    update_ms: float = 0.0
+    draw_ms: float = 0.0
+    debug_draw_ms: float = 0.0
+    total_frame_ms: float = 0.0
+
+
+@dataclass(frozen=True)
 class FloatingCombatFeedback:
     entity_id: str
     label: str
@@ -2724,6 +2741,12 @@ def _record_perf_sample(
     ticks_advanced: int,
     debug_rows_rendered: int | None,
     debug_panel_active: bool | None,
+    timing: FrameTimingBreakdown | None = None,
+    target_fps: int | None = None,
+    tick_cap_fps: int | None = None,
+    observed_fps: float | None = None,
+    frame_cap_near_20fps: bool | None = None,
+    render_coupled_to_sim_tick: bool | None = None,
 ) -> None:
     if not sentinel.enabled:
         return
@@ -2756,6 +2779,29 @@ def _record_perf_sample(
         "debug_panel_active": safe_debug_panel_active,
         "memory_rss_kb": memory_rss_kb,
         "memory_sampler": memory_sampler,
+        "timing": {
+            "input_ms": round(float(timing.input_ms if timing else 0.0), 3),
+            "command_ms": round(float(timing.command_ms if timing else 0.0), 3),
+            "simulation_advance_ms": round(float(timing.simulation_advance_ms if timing else 0.0), 3),
+            "draw_world_ms": round(float(timing.draw_world_ms if timing else 0.0), 3),
+            "draw_entities_ms": round(float(timing.draw_entities_ms if timing else 0.0), 3),
+            "draw_hud_debug_ms": round(float(timing.draw_hud_debug_ms if timing else 0.0), 3),
+            "draw_modals_overlays_ms": round(float(timing.draw_modals_overlays_ms if timing else 0.0), 3),
+            "flip_ms": round(float(timing.flip_ms if timing else 0.0), 3),
+            "throttle_ms": round(float(timing.throttle_ms if timing else 0.0), 3),
+            "update_ms": round(float(timing.update_ms if timing else 0.0), 3),
+            "draw_ms": round(float(timing.draw_ms if timing else 0.0), 3),
+            "debug_draw_ms": round(float(timing.debug_draw_ms if timing else 0.0), 3),
+            "total_frame_ms": round(float(timing.total_frame_ms if timing else frame_ms), 3),
+        },
+        "frame_pacing": {
+            "target_fps": int(target_fps) if target_fps is not None else None,
+            "tick_cap_fps": int(tick_cap_fps) if tick_cap_fps is not None else None,
+            "observed_fps": round(float(observed_fps), 3) if observed_fps else None,
+            "sim_tick_seconds": float(SIM_TICK_SECONDS),
+            "frame_cap_near_20fps": bool(frame_cap_near_20fps) if frame_cap_near_20fps is not None else False,
+            "render_coupled_to_sim_tick": bool(render_coupled_to_sim_tick) if render_coupled_to_sim_tick is not None else False,
+        },
     }
     sentinel.records.append(sample)
     del sentinel.records[:-PERF_SENTINEL_BUFFER_CAP]
@@ -2767,12 +2813,69 @@ def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: s
     report_path = out_dir / "LAG_CAPTURE_REPORT.md"
     metrics_path = out_dir / "lag_capture_metrics.json"
     profile_path = out_dir / "profile_snapshot.txt"
-    metrics_path.write_text(json.dumps({"reason": reason, "tick": int(sim.state.tick), "records": sentinel.records}, indent=2), encoding="utf-8")
+    def _series(key: str) -> list[float]:
+        out: list[float] = []
+        for row in sentinel.records:
+            value = row
+            for part in key.split("."):
+                if not isinstance(value, dict):
+                    value = None
+                    break
+                value = value.get(part)
+            if isinstance(value, (int, float)):
+                out.append(float(value))
+        return out
+
+    def _summary(values: list[float]) -> dict[str, float | None]:
+        if not values:
+            return {"avg": None, "p95": None, "max": None}
+        ordered = sorted(values)
+        idx = min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))
+        return {
+            "avg": round(sum(values) / len(values), 3),
+            "p95": round(ordered[idx], 3),
+            "max": round(max(values), 3),
+        }
+
+    frame_values = _series("frame_ms")
+    draw_values = _series("timing.draw_ms")
+    sim_values = _series("timing.simulation_advance_ms")
+    debug_values = _series("timing.debug_draw_ms")
+    flip_values = _series("timing.flip_ms")
+    throttle_values = _series("timing.throttle_ms")
+    avg_draw = _summary(draw_values)["avg"] or 0.0
+    avg_sim = _summary(sim_values)["avg"] or 0.0
+    avg_flip = _summary(flip_values)["avg"] or 0.0
+    avg_throttle = _summary(throttle_values)["avg"] or 0.0
+    compute_avg = avg_draw + avg_sim + avg_flip
+    pacing_diagnosis = "mostly_sleep_or_throttle" if avg_throttle > compute_avg else "mostly_compute"
+    payload = {
+        "reason": reason,
+        "tick": int(sim.state.tick),
+        "records": sentinel.records,
+        "summary": {
+            "frame_ms": _summary(frame_values),
+            "draw_ms": _summary(draw_values),
+            "simulation_advance_ms": _summary(sim_values),
+            "debug_draw_ms": _summary(debug_values),
+            "flip_ms": _summary(flip_values),
+            "throttle_ms": _summary(throttle_values),
+            "frame_time_diagnosis": pacing_diagnosis,
+        },
+    }
+    metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report_path.write_text(
         "# Lag Capture Report\n\n"
         f"- reason: `{reason}`\n"
         f"- simulation_tick: `{int(sim.state.tick)}`\n"
-        f"- samples: `{len(sentinel.records)}`\n",
+        f"- samples: `{len(sentinel.records)}`\n"
+        f"- frame_ms avg/p95/max: `{payload['summary']['frame_ms']['avg']}` / `{payload['summary']['frame_ms']['p95']}` / `{payload['summary']['frame_ms']['max']}`\n"
+        f"- draw_ms avg/p95/max: `{payload['summary']['draw_ms']['avg']}` / `{payload['summary']['draw_ms']['p95']}` / `{payload['summary']['draw_ms']['max']}`\n"
+        f"- simulation_advance_ms avg/p95/max: `{payload['summary']['simulation_advance_ms']['avg']}` / `{payload['summary']['simulation_advance_ms']['p95']}` / `{payload['summary']['simulation_advance_ms']['max']}`\n"
+        f"- debug_draw_ms avg/p95/max: `{payload['summary']['debug_draw_ms']['avg']}` / `{payload['summary']['debug_draw_ms']['p95']}` / `{payload['summary']['debug_draw_ms']['max']}`\n"
+        f"- flip_ms avg/p95/max: `{payload['summary']['flip_ms']['avg']}` / `{payload['summary']['flip_ms']['p95']}` / `{payload['summary']['flip_ms']['max']}`\n"
+        f"- throttle_ms avg/p95/max: `{payload['summary']['throttle_ms']['avg']}` / `{payload['summary']['throttle_ms']['p95']}` / `{payload['summary']['throttle_ms']['max']}`\n"
+        f"- diagnosis: `{pacing_diagnosis}`\n",
         encoding="utf-8",
     )
     if sentinel.profile_on_lag:
@@ -5778,10 +5881,13 @@ def run_pygame_viewer(
 
     while running:
         target_fps = 30 if runtime_state.paused else 60
+        frame_start_perf = time.perf_counter()
         dt = clock.tick(target_fps) / 1000.0
+        post_tick_perf = time.perf_counter()
         accumulator += dt
 
         offer_buttons: dict[str, pygame.Rect] = {}
+        event_start_perf = time.perf_counter()
         for event in pygame_module.event.get():
             if event.type == pygame_module.QUIT:
                 running = False
@@ -6540,14 +6646,19 @@ def run_pygame_viewer(
                     radius_px=12.0,
                 )
 
+        input_ms = (time.perf_counter() - event_start_perf) * 1000.0
+        update_start_perf = time.perf_counter()
         move_x, move_y = _current_input_vector()
         if not rumor_panel_state.request_pending:
             _refresh_rumor_query(controller, rumor_panel_state)
+        command_start_perf = time.perf_counter()
         if (move_x, move_y) != last_sent_move_vector:
             controller.set_move_vector(move_x, move_y)
             last_sent_move_vector = (move_x, move_y)
+        command_ms = (time.perf_counter() - command_start_perf) * 1000.0
 
         single_player_offer_pause = _single_player_offer_pause(sim)
+        sim_advance_start_perf = time.perf_counter()
         accumulator, ticks_advanced = _drain_sim_accumulator(
             accumulator,
             SIM_TICK_SECONDS,
@@ -6558,6 +6669,7 @@ def run_pygame_viewer(
             runtime_controller.advance_ticks(ticks_advanced)
             current_snapshot = extract_render_snapshot(sim)
             last_tick_time = pygame_module.time.get_ticks() / 1000.0
+        simulation_advance_ms = (time.perf_counter() - sim_advance_start_perf) * 1000.0
 
         now_seconds = pygame_module.time.get_ticks() / 1000.0
         _consume_rumor_outcome(sim, rumor_panel_state)
@@ -6658,6 +6770,8 @@ def run_pygame_viewer(
                     "right-click authored targets to move/delete (hotkeys are debug fallback)"
                 )
 
+        update_ms = (time.perf_counter() - update_start_perf) * 1000.0
+        draw_start_perf = time.perf_counter()
         screen.fill((17, 18, 25))
         inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons = _draw_frame_layers(
             screen=screen,
@@ -6697,7 +6811,12 @@ def run_pygame_viewer(
             remaining_frames=transition_overlay_frames,
         )
         transition_overlay_frames = max(0, transition_overlay_frames - 1)
+        draw_ms = (time.perf_counter() - draw_start_perf) * 1000.0
+        flip_start_perf = time.perf_counter()
         pygame_module.display.flip()
+        flip_ms = (time.perf_counter() - flip_start_perf) * 1000.0
+        total_frame_ms = (time.perf_counter() - frame_start_perf) * 1000.0
+        throttle_ms = max(0.0, (post_tick_perf - frame_start_perf) * 1000.0)
         tick_ms = float(ticks_advanced) * (SIM_TICK_SECONDS * 1000.0)
         try:
             debug_row_count = int(sum(int(count) for count in panel_section_counts.values())) if panel_section_counts else 0
@@ -6711,6 +6830,24 @@ def run_pygame_viewer(
             ticks_advanced=int(ticks_advanced),
             debug_rows_rendered=debug_row_count,
             debug_panel_active=bool(panel_section_counts),
+            timing=FrameTimingBreakdown(
+                input_ms=input_ms,
+                command_ms=command_ms,
+                simulation_advance_ms=simulation_advance_ms,
+                draw_hud_debug_ms=draw_ms,
+                draw_modals_overlays_ms=0.0,
+                debug_draw_ms=draw_ms,
+                draw_ms=draw_ms,
+                update_ms=update_ms,
+                flip_ms=flip_ms,
+                throttle_ms=throttle_ms,
+                total_frame_ms=total_frame_ms,
+            ),
+            target_fps=target_fps,
+            tick_cap_fps=target_fps,
+            observed_fps=(1000.0 / (float(dt) * 1000.0)) if dt > 0 else None,
+            frame_cap_near_20fps=(target_fps <= 20),
+            render_coupled_to_sim_tick=False,
         )
         if perf_sentinel_state.enabled:
             if (float(dt) * 1000.0) >= perf_sentinel_state.lag_frame_ms:
