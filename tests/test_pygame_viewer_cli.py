@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import hexcrawler.cli.pygame_viewer as viewer_module
@@ -1208,6 +1209,33 @@ def test_record_perf_sample_is_resilient_when_memory_sampler_unavailable(monkeyp
     assert len(sentinel.records) == 1
     assert sentinel.records[0]["memory_rss_kb"] is None
     assert sentinel.records[0]["memory_sampler"] == "unavailable"
+
+
+def test_record_perf_sample_debug_fields_are_safe_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    monkeypatch.setattr(viewer_module, "_sample_memory_rss_kb", lambda: (None, "unavailable"))
+
+    viewer_module._record_perf_sample(
+        sentinel,
+        sim=sim,
+        frame_ms=16.0,
+        tick_ms=1.0,
+        ticks_advanced=1,
+        debug_rows_rendered=None,
+        debug_panel_active=None,
+    )
+
+    assert len(sentinel.records) == 1
+    assert sentinel.records[0]["debug_rows_rendered"] == 0
+    assert sentinel.records[0]["debug_panel_active"] is False
+
+
+def test_perf_sentinel_sampling_does_not_reference_player_view_symbol() -> None:
+    source = inspect.getsource(viewer_module.run_pygame_viewer)
+
+    assert "debug_panel_active=not player_view" not in source
+    assert "debug_panel_active=bool(panel_section_counts)" in source
 
 
 def test_import_pygame_viewer_succeeds_when_resource_module_missing(tmp_path: Path) -> None:
