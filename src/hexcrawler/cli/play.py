@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Sequence
 
 from hexcrawler.cli.pygame_viewer import run_pygame_viewer
+from hexcrawler.cli.durability_audit import run_durability_audit
 from hexcrawler.cli.visual_audit import run_visual_audit, DEFAULT_SCRIPT, DEFAULT_OUT
 from hexcrawler.cli.runtime_profiles import CORE_PLAYABLE, DEFAULT_RUNTIME_PROFILE, RUNTIME_PROFILE_CHOICES, RuntimeProfile
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
@@ -108,6 +109,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-path", default=DEFAULT_MAP_PATH, help="Map path used if canonical save must be created.")
     parser.add_argument("--headless", action="store_true", help="Run startup path in headless mode.")
     parser.add_argument("--visual-audit", action="store_true", help="Run scripted visual audit and emit report artifacts.")
+    parser.add_argument("--durability-audit", action="store_true", help="Run deterministic long-run durability audit.")
+    parser.add_argument("--days", type=int, default=30, help="Durability audit in-game day count.")
     parser.add_argument("--script", default=DEFAULT_SCRIPT, help="Visual audit script id.")
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="Visual audit output directory.")
     parser.add_argument(
@@ -202,6 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.visual_audit:
         return run_visual_audit(map_path=args.map_path, out_dir=args.out, script=args.script, command="python play.py --visual-audit --script %s --out %s" % (args.script, args.out))
+    if args.durability_audit:
+        return run_durability_audit(days=args.days, out_dir=args.out)
 
     return run_pygame_viewer(
         map_path=args.map_path,
