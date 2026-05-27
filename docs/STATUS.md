@@ -1,3 +1,19 @@
+
+## What changed in this commit
+- Fixed visual-audit extraction sequencing to use the authoritative return seam correctly: move to local `return_exit_coord` first, then issue `end_local_encounter_intent`, and only mark `extraction_return` OK when both `local_encounter_return` evidence and campaign-role re-entry are present.
+- Added `extraction_probe` diagnostics in `audit_timeline.json` (active role/state, return affordance, distance to exit, command tick, recent return-event rows, and explicit failure reason).
+- Added focused `tests/test_visual_audit.py` coverage for local return-context discovery and extraction-distance probe helpers used by the audit return flow.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py tests/test_encounter_controller_smoke_slice.py tests/test_campaign_danger_contact_slice.py`
+- `python play.py --visual-audit`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Verify `core_playable_first_loop` visual audit now reaches authoritative extraction/return on local machine and confirm `extraction_return` beat is truthfully `ok/partial/failed` based on return evidence.
+
 ## What changed in this commit
 - Reworked `src/hexcrawler/cli/visual_audit.py` to drive the core playable loop through authoritative command seams (`set_move_vector` -> `accept_encounter_offer` -> local `attack_intent` -> `end_local_encounter_intent`) with bounded waits and explicit failure reasons.
 - Tightened visual-audit beat truth rules: `contact_modal` now requires a real pending offer, `local_entry` requires local-role/`in_local`, and `extraction_return` is no longer marked OK when local entry never happened.
