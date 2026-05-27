@@ -581,6 +581,9 @@ class ViewerRuntimeState:
     last_loaded_identity: str | None = None
     seen_combat_feedback_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
     presentation_effects: PresentationEffects = field(default_factory=PresentationEffects)
+    show_debug_overlay: bool = False
+    combat_presentation_cues: list["CombatPresentationCue"] = field(default_factory=list)
+    seen_combat_cue_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -593,6 +596,9 @@ class CombatPresentationCue:
     attacker_position: tuple[float, float]
     target_position: tuple[float, float]
     phase: str
+
+
+COMBAT_CUE_MAX = 18
 
 
 @dataclass
@@ -2436,11 +2442,14 @@ def _draw_frame_layers(
     alpha: float,
     visual_facing_by_entity: dict[str, float],
     player_view: bool = False,
-) -> tuple[pygame.Rect | None, int, dict[str, pygame.Rect], dict[str, int], dict[str, pygame.Rect]]:
+) -> tuple[pygame.Rect | None, int, dict[str, pygame.Rect], dict[str, int], dict[str, pygame.Rect], dict[str, float]]:
     # Explicit campaign render-layer ownership:
     # 1) map_base, 2) site_icons, 3) site_labels, 4) actors/moving groups,
     # 5) overlays/selection, 6) HUD/panels/modals.
+    timing: dict[str, float] = {}
+    t0 = time.perf_counter()
     _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale, player_view=player_view)
+    timing["draw_world_ms"] = (time.perf_counter() - t0) * 1000.0
     player = sim.state.entities.get(PLAYER_ID)
     if player is not None:
         active_space = sim.state.world.spaces.get(player.space_id)
@@ -2456,6 +2465,7 @@ def _draw_frame_layers(
             )
     pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
 
+    t1 = time.perf_counter()
     for entity_id in sorted(sim.state.entities):
         entity = sim.state.entities[entity_id]
         if not _is_in_current_space(_entity_space_id(entity), current_space_id):
@@ -2498,7 +2508,10 @@ def _draw_frame_layers(
         clip_rect=viewport_rect,
         seen_event_keys=runtime_state.seen_combat_feedback_keys,
     )
+    _refresh_combat_presentation_cues(sim, runtime_state)
+    _draw_combat_presentation_cues(screen, sim, runtime_state, world_center=world_center, zoom_scale=world_zoom_scale, clip_rect=viewport_rect)
     runtime_state.presentation_effects.draw(pygame, screen)
+    timing["draw_entities_ms"] = (time.perf_counter() - t1) * 1000.0
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
     if active_space is not None and str(getattr(active_space, "role", "")) == "campaign":
@@ -2511,6 +2524,7 @@ def _draw_frame_layers(
             zoom_scale=world_zoom_scale,
         )
 
+    t2 = time.perf_counter()
     if not player_view:
         _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
     if not player_view:
@@ -2534,6 +2548,8 @@ def _draw_frame_layers(
         world_center=world_center,
         world_zoom_scale=world_zoom_scale,
     )
+    timing["draw_hud_debug_ms"] = (time.perf_counter() - t2) * 1000.0
+    t3 = time.perf_counter()
     if show_local_arena_overlay:
         _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
     inspector_content_rect: pygame.Rect | None = None
@@ -2565,7 +2581,8 @@ def _draw_frame_layers(
     if home_panel_state.visible:
         _draw_home_panel(screen, sim, font, viewport_rect)
     _draw_title_card(screen, sim, marker_font, viewport_rect, player_view=player_view)
-    return inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons
+    timing["draw_modals_overlays_ms"] = (time.perf_counter() - t3) * 1000.0
+    return inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons, timing
 
 
 def _draw_entity(
@@ -3042,6 +3059,67 @@ def _last_combat_impact_tick_for_entity(sim: Simulation, *, entity_id: str) -> i
         if isinstance(tick, int):
             return tick
     return None
+
+
+def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRuntimeState) -> None:
+    for row in sim.get_event_trace()[-12:]:
+        if str(row.get("event_type")) != COMBAT_OUTCOME_EVENT_TYPE:
+            continue
+        tick = int(row.get("tick", -1))
+        attacker_id = str(row.get("attacker_id", ""))
+        target_id = str(row.get("target_id", ""))
+        reason = str(row.get("reason", "resolved"))
+        key = (tick, attacker_id, target_id, reason)
+        if key in runtime_state.seen_combat_cue_keys or not attacker_id or not target_id:
+            continue
+        attacker = sim.state.entities.get(attacker_id)
+        target = sim.state.entities.get(target_id)
+        if attacker is None or target is None:
+            continue
+        runtime_state.seen_combat_cue_keys.append(key)
+        if len(runtime_state.seen_combat_cue_keys) > COMBAT_CUE_MAX:
+            runtime_state.seen_combat_cue_keys = runtime_state.seen_combat_cue_keys[-COMBAT_CUE_MAX:]
+        runtime_state.combat_presentation_cues.append(
+            CombatPresentationCue(
+                attacker_id=attacker_id,
+                target_id=target_id,
+                start_tick=max(0, tick - 2),
+                impact_tick=tick,
+                outcome_label=_combat_reason_label(reason),
+                attacker_position=(float(attacker.position_x), float(attacker.position_y)),
+                target_position=(float(target.position_x), float(target.position_y)),
+                phase="impact",
+            )
+        )
+    if len(runtime_state.combat_presentation_cues) > COMBAT_CUE_MAX:
+        runtime_state.combat_presentation_cues = runtime_state.combat_presentation_cues[-COMBAT_CUE_MAX:]
+
+
+def _draw_combat_presentation_cues(
+    screen: pygame.Surface,
+    sim: Simulation,
+    runtime_state: ViewerRuntimeState,
+    *,
+    world_center: tuple[float, float],
+    zoom_scale: float,
+    clip_rect: pygame.Rect,
+) -> None:
+    old_clip = screen.get_clip()
+    screen.set_clip(clip_rect)
+    now_tick = sim.state.tick
+    survivors: list[CombatPresentationCue] = []
+    for cue in runtime_state.combat_presentation_cues:
+        age = now_tick - cue.impact_tick
+        if age > 8:
+            continue
+        survivors.append(cue)
+        ax, ay = _world_to_pixel(cue.attacker_position[0], cue.attacker_position[1], world_center, zoom_scale)
+        tx, ty = _world_to_pixel(cue.target_position[0], cue.target_position[1], world_center, zoom_scale)
+        pygame.draw.line(screen, (250, 220, 120), (int(ax), int(ay)), (int(tx), int(ty)), 2)
+        radius = 8 + min(14, age * 2)
+        pygame.draw.circle(screen, (255, 120, 88), (int(tx), int(ty)), radius, 2)
+    runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]
+    screen.set_clip(old_clip)
 
 
 def _combat_reason_label(reason: str) -> str:
@@ -3982,7 +4060,11 @@ def _draw_hud(
 ) -> None:
     entity = sim.state.entities[PLAYER_ID]
     lines = _player_facing_hud_lines(sim, entity=entity, runtime_state=runtime_state)
-    lines.append(f"follow={follow_state.status} | debug data in inspector/debug panel")
+    if runtime_state.show_debug_overlay:
+        lines.append(f"follow={follow_state.status} | debug data in inspector/debug panel")
+    else:
+        lines = lines[:1]
+        lines.append("hint: right-click to move/interact | F1 debug | F10 perf dump")
 
     if status_message:
         lines.append(f"status: {status_message}")
@@ -5915,6 +5997,9 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F2:
                 paused = runtime_controller.toggle_pause()
                 status_message = f"simulation {'paused' if paused else 'running'}"
+            elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F1:
+                runtime_state.show_debug_overlay = not runtime_state.show_debug_overlay
+                status_message = f"debug overlay {'on' if runtime_state.show_debug_overlay else 'off'}"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F4:
                 sim = runtime_controller.new_simulation(map_path=runtime_state.map_path, seed=runtime_state.sim.seed)
                 previous_snapshot = extract_render_snapshot(sim)
@@ -6773,7 +6858,7 @@ def run_pygame_viewer(
         update_ms = (time.perf_counter() - update_start_perf) * 1000.0
         draw_start_perf = time.perf_counter()
         screen.fill((17, 18, 25))
-        inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons = _draw_frame_layers(
+        inspector_content_rect, inspector_total_lines, panel_section_rects, panel_section_counts, offer_buttons, draw_layer_timing = _draw_frame_layers(
             screen=screen,
             sim=sim,
             world_center=world_center,
@@ -6802,6 +6887,7 @@ def run_pygame_viewer(
             current_space_id=current_space_id,
             alpha=alpha,
             visual_facing_by_entity=visual_facing_by_entity,
+            player_view=not runtime_state.show_debug_overlay,
         )
         _draw_transition_overlay(
             screen,
@@ -6834,9 +6920,11 @@ def run_pygame_viewer(
                 input_ms=input_ms,
                 command_ms=command_ms,
                 simulation_advance_ms=simulation_advance_ms,
-                draw_hud_debug_ms=draw_ms,
-                draw_modals_overlays_ms=0.0,
-                debug_draw_ms=draw_ms,
+                draw_world_ms=float(draw_layer_timing.get("draw_world_ms", 0.0)),
+                draw_entities_ms=float(draw_layer_timing.get("draw_entities_ms", 0.0)),
+                draw_hud_debug_ms=float(draw_layer_timing.get("draw_hud_debug_ms", 0.0)),
+                draw_modals_overlays_ms=float(draw_layer_timing.get("draw_modals_overlays_ms", 0.0)),
+                debug_draw_ms=float(draw_layer_timing.get("draw_hud_debug_ms", 0.0)),
                 draw_ms=draw_ms,
                 update_ms=update_ms,
                 flip_ms=flip_ms,

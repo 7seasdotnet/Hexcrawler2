@@ -1,4 +1,16 @@
 ## What changed in this commit
+- Added explicit player-view/debug separation in pygame viewer: default runtime hides inspector/debug overlays and keeps compact player HUD, with full debug panels behind `F1` toggle and perf dump on `F10` when sentinel is enabled.
+- Corrected draw timing attribution by measuring world/entity/hud+debug/modal overlay slices independently instead of attributing full draw time to debug fields.
+- Added bounded viewer-local CombatPresentationCue pass derived from authoritative combat outcome evidence, rendering procedural attack line + impact ring without touching canonical simulation state.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run the full viewer/audit test and runtime command suite with pygame installed, then review first_attack/combat_result beat readability and perf sentinel attribution output.
+
+## What changed in this commit
 - Moved volatile perf sentinel runtime outputs to ignored `docs/ai_playtest/perf/latest/` so local lag captures no longer modify tracked documentation files.
 - Kept stable tracked perf docs as templates (`LAG_CAPTURE_REPORT_TEMPLATE.md`, `lag_capture_metrics.template.json`) and documented the runtime output path for contributors.
 - Added narrow git hygiene rules for perf captures and removed legacy tracked capture artifacts from the index to prevent pull-blocking local overwrite conflicts.
