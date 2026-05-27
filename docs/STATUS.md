@@ -1,7 +1,7 @@
 ## What changed in this commit
-- Added a player-facing visual-audit capture path (`player_view=True`) so `render_viewer_frame_to_surface` can hide debug-heavy HUD/panels during audit thumbnails while keeping authoritative diagnostics in report/timeline data.
-- Improved presentation readability without simulation changes: brighter campaign/local terrain pass, reduced vignette crush for audit captures, larger player/hostile tokens, and a stronger CONTACT modal with larger typography/buttons.
-- Increased contact-sheet panel scale/layout in `visual_audit.py` so beat thumbnails are larger and easier to read.
+- Visual-audit/player-view presentation pass in `pygame_viewer.py`: reduced player-view debug/HUD clutter, brighter campaign/local map readability, and state-sensitive title-card behavior so gameplay beats are not dominated by persistent center overlay text.
+- Increased marker readability for player/hostile/site/extraction cues (larger radii and stronger icon/ring accents) and strengthened CONTACT modal contrast/button legibility without changing command routing.
+- Preserved deterministic authority and beat sequencing; compile + targeted audit/contact/return tests pass, while `python play.py --visual-audit` remains blocked in this environment because `pygame` is unavailable.
 
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
@@ -11,9 +11,7 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run `python play.py --visual-audit` in an environment with `pygame` installed to regenerate updated `AI_VISUAL_AUDIT_CONTACT_SHEET.png`, `AI_VISUAL_AUDIT_REPORT.md`, and `latest/audit_timeline.json` using the new player-facing presentation mode.
-
-
+- **Next action:** Re-run `python play.py --visual-audit` in an environment with `pygame` installed to regenerate `docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png`, `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md`, and `docs/ai_playtest/latest/audit_timeline.json`, then confirm all eight beats remain `ok`.
 ## What changed in this commit
 - Fixed visual-audit extraction movement to use canonical local cell semantics for return admissibility (`_entity_location_ref(...).coord == return_exit_coord`) and corrected return-exit world conversion helper so bounded movement can actually path toward the authoritative target cell.
 - Expanded `extraction_probe` diagnostics with before/after player position+cell, movement command/tick counts, command issuance state, and return evidence fields to make `not_at_return_exit_after_bounded_move` failures concrete and inspectable.
