@@ -121,7 +121,7 @@ def _coord_xy(sim: Any, space_id: str, coord: dict[str, Any] | None) -> dict[str
         return None
     try:
         from hexcrawler.sim.movement import square_grid_cell_to_world_xy
-        x, y = square_grid_cell_to_world_xy(int(coord.get("x")), int(coord.get("y")), space_id=space_id, world=sim.state.world)
+        x, y = square_grid_cell_to_world_xy(int(coord.get("x")), int(coord.get("y")))
         return {"x": float(x), "y": float(y)}
     except Exception:
         return None
@@ -136,6 +136,23 @@ def _distance_to_return_exit(sim: Any, player: Any, return_exit_coord: dict[str,
     dx = float(player.position_x) - float(target["x"])
     dy = float(player.position_y) - float(target["y"])
     return (dx * dx + dy * dy) ** 0.5
+
+
+def _player_local_coord(sim: Any, player: Any) -> dict[str, int] | None:
+    if player is None:
+        return None
+    try:
+        coord = sim._entity_location_ref(player).coord
+        if isinstance(coord, dict) and "x" in coord and "y" in coord:
+            return {"x": int(coord["x"]), "y": int(coord["y"])}
+    except Exception:
+        return None
+    return None
+
+
+def _at_return_exit(sim: Any, player: Any, return_exit_coord: dict[str, Any] | None) -> bool:
+    player_coord = _player_local_coord(sim, player)
+    return isinstance(return_exit_coord, dict) and player_coord == {"x": int(return_exit_coord.get("x")), "y": int(return_exit_coord.get("y"))}
 def _select_local_attack_targets(sim: Any, player: Any) -> list[dict[str, Any]]:
     if player is None:
         return []
@@ -353,22 +370,29 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         context = _find_local_return_context(sim, player)
         return_exit_coord = context.get("return_exit_coord") if isinstance(context, dict) else None
         target_xy = _coord_xy(sim, player.space_id, return_exit_coord) if player and isinstance(return_exit_coord, dict) else None
+        player_before = {"x": float(player.position_x), "y": float(player.position_y)} if player else None
+        player_before_cell = _player_local_coord(sim, player)
         extraction_probe = {
+            "active_local_space_id": player.space_id if player else None,
+            "encounter_control_state_before_movement": encounter_state(),
+            "player_position_before_movement": player_before,
+            "player_local_coord_before_movement": player_before_cell,
             "return_exit_coord": return_exit_coord,
             "return_exit_world_position": target_xy,
-            "distance_to_return_exit": _distance_to_return_exit(sim, player, return_exit_coord),
+            "distance_before_movement": _distance_to_return_exit(sim, player, return_exit_coord),
         }
         if player is None or context is None or not isinstance(return_exit_coord, dict):
             return_status = "failed"
             return_reason = "no return affordance found"
         else:
             # Move to return exit first (admissibility gate).
-            for _ in range(90):
+            movement_command_count = 0
+            movement_ticks_advanced = 0
+            for _ in range(240):
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is None:
                     break
-                actor_coord = sim._entity_location_ref(player).coord
-                if actor_coord == return_exit_coord:
+                if _at_return_exit(sim, player, return_exit_coord):
                     break
                 if target_xy is None:
                     break
@@ -376,13 +400,22 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
                 dy = float(target_xy["y"]) - float(player.position_y)
                 mag = (dx * dx + dy * dy) ** 0.5 or 1.0
                 sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type="set_move_vector", params={"x": dx / mag, "y": dy / mag}))
+                movement_command_count += 1
                 _advance_one_tick(sim)
+                movement_ticks_advanced += 1
             player = sim.state.entities.get(PLAYER_ID)
-            at_exit = bool(player is not None and sim._entity_location_ref(player).coord == return_exit_coord)
-            extraction_probe["distance_to_return_exit_before_command"] = _distance_to_return_exit(sim, player, return_exit_coord)
+            at_exit = _at_return_exit(sim, player, return_exit_coord)
+            extraction_probe["movement_command_count"] = movement_command_count
+            extraction_probe["movement_ticks_advanced"] = movement_ticks_advanced
+            extraction_probe["player_position_after_movement"] = {"x": float(player.position_x), "y": float(player.position_y)} if player else None
+            extraction_probe["player_local_coord_after_movement"] = _player_local_coord(sim, player)
+            extraction_probe["distance_after_movement"] = _distance_to_return_exit(sim, player, return_exit_coord)
+            extraction_probe["at_return_exit_before_command"] = at_exit
             if not at_exit:
                 return_status = "failed"
                 return_reason = "not_at_return_exit_after_bounded_move"
+                extraction_probe["hostile_pinning_blocked"] = "unknown"
+                extraction_probe["return_command_issued"] = False
             else:
                 sim.append_command(SimCommand(tick=sim.state.tick,entity_id=PLAYER_ID,command_type=END_LOCAL_ENCOUNTER_INTENT,params={"intent": END_LOCAL_ENCOUNTER_INTENT, "entity_id": PLAYER_ID, "tags": ["visual_audit"]}))
                 return_cmd=END_LOCAL_ENCOUNTER_INTENT
@@ -395,10 +428,13 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
                         break
                     _advance_one_tick(sim)
                 extraction_probe["command_tick"] = command_tick
+                extraction_probe["return_command_issued"] = True
                 extraction_probe["return_event_count"] = len(_events(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE))
                 extraction_probe["return_event_rows"] = _events(sim, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE)[-3:]
+                extraction_probe["campaign_role_reentry"] = bool(player is not None and _get_space_role(sim, player.space_id) == CAMPAIGN_SPACE_ROLE)
                 if return_ok:
                     return_status = "ok"
+                    extraction_probe["hostile_pinning_blocked"] = False
                 else:
                     return_status = "partial"
                     return_reason = "return command issued but no authoritative return evidence within bounded wait"

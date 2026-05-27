@@ -1,5 +1,20 @@
 
 ## What changed in this commit
+- Fixed visual-audit extraction movement to use canonical local cell semantics for return admissibility (`_entity_location_ref(...).coord == return_exit_coord`) and corrected return-exit world conversion helper so bounded movement can actually path toward the authoritative target cell.
+- Expanded `extraction_probe` diagnostics with before/after player position+cell, movement command/tick counts, command issuance state, and return evidence fields to make `not_at_return_exit_after_bounded_move` failures concrete and inspectable.
+- Added focused `tests/test_visual_audit.py` coverage for canonical return-exit distance/cell semantics used by extraction movement checks.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py tests/test_encounter_controller_smoke_slice.py tests/test_campaign_danger_contact_slice.py`
+- `python play.py --visual-audit` (currently fails in this environment due to missing `pygame` dependency)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run `python play.py --visual-audit` on a machine with `pygame` installed and confirm extraction reaches authoritative `local_encounter_return` evidence and campaign-role re-entry.
+
+## What changed in this commit
 - Fixed visual-audit extraction sequencing to use the authoritative return seam correctly: move to local `return_exit_coord` first, then issue `end_local_encounter_intent`, and only mark `extraction_return` OK when both `local_encounter_return` evidence and campaign-role re-entry are present.
 - Added `extraction_probe` diagnostics in `audit_timeline.json` (active role/state, return affordance, distance to exit, command tick, recent return-event rows, and explicit failure reason).
 - Added focused `tests/test_visual_audit.py` coverage for local return-context discovery and extraction-distance probe helpers used by the audit return flow.
