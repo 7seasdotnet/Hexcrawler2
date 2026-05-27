@@ -1,3 +1,18 @@
+## What changed in this commit
+- Added a player-facing visual-audit capture path (`player_view=True`) so `render_viewer_frame_to_surface` can hide debug-heavy HUD/panels during audit thumbnails while keeping authoritative diagnostics in report/timeline data.
+- Improved presentation readability without simulation changes: brighter campaign/local terrain pass, reduced vignette crush for audit captures, larger player/hostile tokens, and a stronger CONTACT modal with larger typography/buttons.
+- Increased contact-sheet panel scale/layout in `visual_audit.py` so beat thumbnails are larger and easier to read.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/visual_audit.py src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/runtime_profiles.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_local_encounter_return.py tests/test_encounter_controller_smoke_slice.py tests/test_campaign_danger_contact_slice.py`
+- `python play.py --visual-audit` (**fails in this environment: `ModuleNotFoundError: No module named pygame`**)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run `python play.py --visual-audit` in an environment with `pygame` installed to regenerate updated `AI_VISUAL_AUDIT_CONTACT_SHEET.png`, `AI_VISUAL_AUDIT_REPORT.md`, and `latest/audit_timeline.json` using the new player-facing presentation mode.
+
 
 ## What changed in this commit
 - Fixed visual-audit extraction movement to use canonical local cell semantics for return admissibility (`_entity_location_ref(...).coord == return_exit_coord`) and corrected return-exit world conversion helper so bounded movement can actually path toward the authoritative target cell.
