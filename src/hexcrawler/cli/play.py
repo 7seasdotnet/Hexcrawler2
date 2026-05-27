@@ -119,6 +119,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_RUNTIME_PROFILE,
         help="Runtime module composition profile for viewer startup.",
     )
+    parser.add_argument("--perf-sentinel", action="store_true", help="Enable lightweight runtime lag sentinel capture.")
+    parser.add_argument("--profile-on-lag", action="store_true", help="Write a lightweight profile snapshot when lag dump triggers.")
+    parser.add_argument("--lag-frame-ms", type=float, default=50.0, help="Lag sentinel frame threshold in milliseconds.")
     return parser
 
 
@@ -214,6 +217,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         headless=args.headless,
         load_save=args.load_save,
         save_path=args.load_save,
+        perf_sentinel=args.perf_sentinel,
+        profile_on_lag=args.profile_on_lag,
+        lag_frame_ms=args.lag_frame_ms,
     )
 
 

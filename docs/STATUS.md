@@ -1,4 +1,17 @@
 ## What changed in this commit
+- Added viewer-local lag sentinel toggles (`--perf-sentinel`, `--profile-on-lag`, `--lag-frame-ms`) with bounded ring-buffer sampling and deterministic-safe report dumps under `docs/ai_playtest/perf/`.
+- Added first `CombatPresentationCue` viewer seam model (non-authoritative, non-serialized) for attack presentation scaffolding without combat outcome authority changes.
+- Added hot-path audit notes and lag capture report templates for long-session runtime diagnosis.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_durability_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit` (fails in this environment when pygame is not installed)
+- `python play.py --headless --perf-sentinel --lag-frame-ms 0` (requires pygame install before launcher can enter viewer path)
+
+## What changed in this commit
 - Visual-audit/player-view presentation pass in `pygame_viewer.py`: reduced player-view debug/HUD clutter, brighter campaign/local map readability, and state-sensitive title-card behavior so gameplay beats are not dominated by persistent center overlay text.
 - Increased marker readability for player/hostile/site/extraction cues (larger radii and stronger icon/ring accents) and strengthened CONTACT modal contrast/button legibility without changing command routing.
 - Preserved deterministic authority and beat sequencing; compile + targeted audit/contact/return tests pass, while `python play.py --visual-audit` remains blocked in this environment because `pygame` is unavailable.

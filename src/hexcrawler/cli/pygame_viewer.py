@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import cProfile
 import hashlib
 import importlib.metadata
 import json
 import math
 import os
 import platform
+import resource
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -166,6 +169,9 @@ GREYBRIDGE_USE_PROMPT_RANGE = 1.25
 BUILDING_USE_PROMPT_RANGE = 1.8
 LOOT_PROMPT_RANGE = 1.8
 FACING_SWING_RADIANS_PER_SECOND = 10.0
+PERF_SENTINEL_BUFFER_CAP = 180
+PERF_SENTINEL_CONSECUTIVE_FRAME_CAP = 8
+PERF_SENTINEL_TRIGGER_CONSECUTIVE = 3
 
 CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
@@ -576,6 +582,28 @@ class ViewerRuntimeState:
     last_loaded_identity: str | None = None
     seen_combat_feedback_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
     presentation_effects: PresentationEffects = field(default_factory=PresentationEffects)
+
+
+@dataclass(frozen=True)
+class CombatPresentationCue:
+    attacker_id: str
+    target_id: str
+    start_tick: int
+    impact_tick: int
+    outcome_label: str
+    attacker_position: tuple[float, float]
+    target_position: tuple[float, float]
+    phase: str
+
+
+@dataclass
+class PerfSentinelState:
+    enabled: bool = False
+    profile_on_lag: bool = False
+    lag_frame_ms: float = 50.0
+    records: list[dict[str, Any]] = field(default_factory=list)
+    consecutive_over_threshold: int = 0
+    triggered: bool = False
 
 
 @dataclass(frozen=True)
@@ -2653,6 +2681,71 @@ def _draw_floating_combat_feedback(
         text = font.render(row.label, True, row.color)
         screen.blit(text, (int(px) - (text.get_width() // 2), int(py) - 28 - rise_px))
     screen.set_clip(old_clip)
+
+
+def _safe_rss_kb() -> int | None:
+    try:
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except Exception:
+        return None
+
+
+def _record_perf_sample(
+    sentinel: PerfSentinelState,
+    *,
+    sim: Simulation,
+    frame_ms: float,
+    tick_ms: float,
+    ticks_advanced: int,
+    debug_rows_rendered: int,
+    debug_panel_active: bool,
+) -> None:
+    if not sentinel.enabled:
+        return
+    rules_state_sizes = {
+        name: len(json.dumps(sim.get_rules_state(name), sort_keys=True))
+        for name in sorted(sim.state.rules_state.keys())
+    }
+    sample = {
+        "wall_time": time.time(),
+        "frame_ms": round(frame_ms, 3),
+        "tick_ms": round(tick_ms, 3),
+        "ticks_advanced": int(ticks_advanced),
+        "simulation_tick": int(sim.state.tick),
+        "in_game_day": int(sim.get_day_index()),
+        "entity_count": len(sim.state.entities),
+        "pending_event_count": len(sim.pending_events()),
+        "event_trace_len": len(sim.state.event_trace),
+        "combat_log_len": len(sim.state.combat_log),
+        "input_log_len": len(sim.input_log),
+        "rules_state_sizes": rules_state_sizes,
+        "visible_cells_drawn": None,
+        "visible_entities_drawn": len(sim.state.entities),
+        "debug_rows_rendered": int(debug_rows_rendered),
+        "debug_panel_active": bool(debug_panel_active),
+        "memory_rss_kb": _safe_rss_kb(),
+    }
+    sentinel.records.append(sample)
+    del sentinel.records[:-PERF_SENTINEL_BUFFER_CAP]
+
+
+def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: str) -> str:
+    out_dir = Path("docs/ai_playtest/perf")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = out_dir / "LAG_CAPTURE_REPORT.md"
+    metrics_path = out_dir / "lag_capture_metrics.json"
+    profile_path = out_dir / "profile_snapshot.txt"
+    metrics_path.write_text(json.dumps({"reason": reason, "tick": int(sim.state.tick), "records": sentinel.records}, indent=2), encoding="utf-8")
+    report_path.write_text(
+        "# Lag Capture Report\n\n"
+        f"- reason: `{reason}`\n"
+        f"- simulation_tick: `{int(sim.state.tick)}`\n"
+        f"- samples: `{len(sentinel.records)}`\n",
+        encoding="utf-8",
+    )
+    if sentinel.profile_on_lag:
+        profile_path.write_text("profile_on_lag enabled; use external profiler session for deep capture.\n", encoding="utf-8")
+    return str(metrics_path)
 
 
 def _draw_top_control_bar(
@@ -4995,6 +5088,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default="saves/session_save.json",
         help="Canonical save JSON path used by F5 save and fallback F9 load.",
     )
+    parser.add_argument("--perf-sentinel", action="store_true", help="Enable lightweight runtime lag sentinel.")
+    parser.add_argument("--profile-on-lag", action="store_true", help="Write profile snapshot placeholder when lag dump triggers.")
+    parser.add_argument("--lag-frame-ms", type=float, default=50.0, help="Lag sentinel frame threshold in ms.")
     return parser
 
 
@@ -5165,6 +5261,9 @@ def run_pygame_viewer(
     headless: bool = False,
     load_save: str | None = None,
     save_path: str = "saves/session_save.json",
+    perf_sentinel: bool = False,
+    profile_on_lag: bool = False,
+    lag_frame_ms: float = 50.0,
 ) -> int:
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
@@ -5643,6 +5742,7 @@ def run_pygame_viewer(
     visual_facing_by_entity: dict[str, float] = {}
     transition_overlay_frames = 0
     transition_overlay_title = ""
+    perf_sentinel_state = PerfSentinelState(enabled=perf_sentinel, profile_on_lag=profile_on_lag, lag_frame_ms=float(lag_frame_ms))
 
     while running:
         target_fps = 30 if runtime_state.paused else 60
@@ -5720,8 +5820,12 @@ def run_pygame_viewer(
                 show_local_arena_overlay = not show_local_arena_overlay
                 status_message = f"local arena overlay {'on' if show_local_arena_overlay else 'off'}"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F10:
-                _cycle_debug_filter_mode(debug_filter_state)
-                status_message = _debug_filter_label(debug_filter_state)
+                if perf_sentinel_state.enabled:
+                    out_path = _dump_perf_report(perf_sentinel_state, sim=sim, reason="hotkey_f10")
+                    status_message = f"perf dump saved -> {out_path}"
+                else:
+                    _cycle_debug_filter_mode(debug_filter_state)
+                    status_message = _debug_filter_label(debug_filter_state)
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F11:
                 _cycle_debug_event_type_filter(sim, debug_filter_state)
                 status_message = _debug_filter_label(debug_filter_state)
@@ -6562,6 +6666,28 @@ def run_pygame_viewer(
         )
         transition_overlay_frames = max(0, transition_overlay_frames - 1)
         pygame_module.display.flip()
+        tick_ms = float(ticks_advanced) * (SIM_TICK_SECONDS * 1000.0)
+        debug_row_count = int(sum(panel_section_counts.values())) if panel_section_counts else 0
+        _record_perf_sample(
+            perf_sentinel_state,
+            sim=sim,
+            frame_ms=float(dt) * 1000.0,
+            tick_ms=tick_ms,
+            ticks_advanced=int(ticks_advanced),
+            debug_rows_rendered=debug_row_count,
+            debug_panel_active=not player_view,
+        )
+        if perf_sentinel_state.enabled:
+            if (float(dt) * 1000.0) >= perf_sentinel_state.lag_frame_ms:
+                perf_sentinel_state.consecutive_over_threshold += 1
+            else:
+                perf_sentinel_state.consecutive_over_threshold = 0
+            if (
+                not perf_sentinel_state.triggered
+                and perf_sentinel_state.consecutive_over_threshold >= PERF_SENTINEL_TRIGGER_CONSECUTIVE
+            ):
+                _dump_perf_report(perf_sentinel_state, sim=sim, reason="frame_threshold")
+                perf_sentinel_state.triggered = True
 
     pygame_module.quit()
     return 0
@@ -6646,6 +6772,9 @@ def main(argv: list[str] | None = None) -> None:
             headless=headless,
             load_save=args.load_save,
             save_path=args.save_path,
+            perf_sentinel=args.perf_sentinel,
+            profile_on_lag=args.profile_on_lag,
+            lag_frame_ms=args.lag_frame_ms,
         )
     )
 
