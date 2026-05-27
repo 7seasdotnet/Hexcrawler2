@@ -8,7 +8,6 @@ import json
 import math
 import os
 import platform
-import resource
 import sys
 import time
 from dataclasses import dataclass, field
@@ -2683,11 +2682,37 @@ def _draw_floating_combat_feedback(
     screen.set_clip(old_clip)
 
 
-def _safe_rss_kb() -> int | None:
+def _sample_memory_rss_kb() -> tuple[int | None, str]:
+    """Best-effort viewer-local RSS sampler; never raises."""
+
     try:
-        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        import resource as _resource  # Unix-only; optional
+
+        rss_kb = int(_resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss)
+        if platform.system().lower().startswith("darwin"):
+            rss_kb //= 1024
+        return rss_kb, "resource"
     except Exception:
-        return None
+        pass
+
+    try:
+        import psutil  # type: ignore
+
+        rss_bytes = int(psutil.Process().memory_info().rss)
+        return rss_bytes // 1024, "psutil"
+    except Exception:
+        pass
+
+    try:
+        import tracemalloc
+
+        if tracemalloc.is_tracing():
+            _current, peak = tracemalloc.get_traced_memory()
+            return int(peak // 1024), "tracemalloc"
+    except Exception:
+        pass
+
+    return None, "unavailable"
 
 
 def _record_perf_sample(
@@ -2706,6 +2731,7 @@ def _record_perf_sample(
         name: len(json.dumps(sim.get_rules_state(name), sort_keys=True))
         for name in sorted(sim.state.rules_state.keys())
     }
+    memory_rss_kb, memory_sampler = _sample_memory_rss_kb()
     sample = {
         "wall_time": time.time(),
         "frame_ms": round(frame_ms, 3),
@@ -2723,7 +2749,8 @@ def _record_perf_sample(
         "visible_entities_drawn": len(sim.state.entities),
         "debug_rows_rendered": int(debug_rows_rendered),
         "debug_panel_active": bool(debug_panel_active),
-        "memory_rss_kb": _safe_rss_kb(),
+        "memory_rss_kb": memory_rss_kb,
+        "memory_sampler": memory_sampler,
     }
     sentinel.records.append(sample)
     del sentinel.records[:-PERF_SENTINEL_BUFFER_CAP]
