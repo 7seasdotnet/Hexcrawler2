@@ -4,6 +4,8 @@ from hexcrawler.cli.visual_audit import (
     DEFAULT_OUT,
     _advance_one_tick,
     _build_local_entity_probe,
+    _find_local_return_context,
+    _distance_to_return_exit,
     _get_space_role,
     _select_local_attack_targets,
     _write_report,
@@ -142,3 +144,38 @@ def test_local_entity_probe_records_rejection_reasons() -> None:
     assert "player_self" in by_id["scout"]["target_selection_reasons"]
     assert "not_hostile_marker" in by_id["neutral"]["target_selection_reasons"]
     assert "incapacitated" in by_id["hostile_dead"]["target_selection_reasons"]
+
+
+def test_find_local_return_context_reads_existing_active_context() -> None:
+    class _Sim:
+        class _State:
+            class _Entities(dict):
+                pass
+            entities = {"scout": EntityState(entity_id="scout", position_x=0.0, position_y=0.0, space_id="local:a")}
+        state = _State()
+
+        def get_rules_state(self, name: str):
+            assert name == "local_encounter_instance"
+            return {"active_by_local_space": {"local:a": {"return_exit_coord": {"x": 1, "y": 2}}}}
+
+    sim = _Sim()
+    player = sim.state.entities["scout"]
+    context = _find_local_return_context(sim, player)
+    assert context is not None
+    assert context["return_exit_coord"] == {"x": 1, "y": 2}
+
+
+def test_distance_to_return_exit_returns_none_without_coord() -> None:
+    class _State:
+        entities = {"scout": EntityState(entity_id="scout", position_x=0.0, position_y=0.0, space_id="local:a")}
+        class _World:
+            spaces = {}
+        world = _World()
+
+    class _Sim:
+        state = _State()
+
+    sim = _Sim()
+    player = sim.state.entities["scout"]
+    assert _distance_to_return_exit(sim, player, None) is None
+
