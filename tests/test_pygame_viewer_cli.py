@@ -1265,6 +1265,7 @@ def test_perf_sentinel_sampling_does_not_reference_player_view_symbol() -> None:
 
     assert "debug_panel_active=not player_view" not in source
     assert "debug_panel_active=bool(panel_section_counts)" in source
+    assert "K_F1" in source
 
 
 def test_import_pygame_viewer_succeeds_when_resource_module_missing(tmp_path: Path) -> None:
@@ -2019,6 +2020,31 @@ def test_player_feedback_lines_include_enemy_loop_line_in_local_space() -> None:
     lines = _player_feedback_lines(sim, entity=scout)
 
     assert any("enemy_loop=approach enemy=hostile:nearby distance=2.00" in line for line in lines)
+
+
+def test_runtime_state_defaults_to_player_view_debug_hidden() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    state = viewer_module.ViewerRuntimeState(
+        sim=sim,
+        map_path="content/examples/basic_map.json",
+        with_encounters=False,
+        current_save_path="saves/test.json",
+    )
+    assert state.show_debug_overlay is False
+
+
+def test_combat_presentation_cues_are_bounded_and_viewer_local() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    target = EntityState(entity_id="hostile:cue", position_x=1.0, position_y=0.0, space_id=player.space_id)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    for idx in range(viewer_module.COMBAT_CUE_MAX + 4):
+        sim.schedule_event_at(sim.state.tick, "combat_outcome", {"tick": sim.state.tick, "attacker_id": PLAYER_ID, "target_id": target.entity_id, "reason": f"r{idx}"})
+        sim.advance_ticks(1)
+        viewer_module._refresh_combat_presentation_cues(sim, state)
+    assert len(state.combat_presentation_cues) <= viewer_module.COMBAT_CUE_MAX
+    assert all(cue.attacker_id == PLAYER_ID for cue in state.combat_presentation_cues)
 
 
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:
