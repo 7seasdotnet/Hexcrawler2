@@ -237,7 +237,13 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
 
     def capture(name: str, status: str, reason: str = "", issued_command: str | None = None, extra: dict[str, Any] | None = None) -> None:
         i=len(beats)
-        render_meta=render_viewer_frame_to_surface(screen=screen,sim=sim,runtime_state=runtime_state,status_message=f"audit beat: {name}")
+        render_meta=render_viewer_frame_to_surface(
+            screen=screen,
+            sim=sim,
+            runtime_state=runtime_state,
+            status_message=f"audit beat: {name}",
+            player_view=True,
+        )
         sanity=_visual_sanity(pg,screen)
         path=out/f"{i:02d}_{name}.png"; pg.image.save(screen,str(path))
         player=sim.state.entities.get(PLAYER_ID)
@@ -442,13 +448,13 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
 
     result="success" if all(b.status=="ok" for b in beats) else "partial"
     if any(b.status=="failed" for b in beats): result="failed"
-    sheet=pg.Surface((1600,1200)); sheet.fill((16,16,20)); sfont=pg.font.Font(None,24)
+    sheet=pg.Surface((1800,1180)); sheet.fill((16,16,20)); sfont=pg.font.Font(None,28)
     for i,b in enumerate(beats):
         raw=pg.image.load(b.file)
         viewport = (b.diagnostics or {}).get("viewer_viewport_rect", [0, 0, 0, 0])
         vx, vy, vw, vh = [int(v) for v in viewport]
         view = raw.subsurface(pg.Rect(vx, vy, vw, vh)).copy() if vw > 0 and vh > 0 else raw
-        img=pg.transform.smoothscale(view,(360,200)); x=30+(i%4)*380; y=110+(i//4)*290
+        img=pg.transform.smoothscale(view,(420,236)); x=26+(i%4)*444; y=88+(i//4)*292
         sheet.blit(img,(x,y)); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+214));
         if b.notes: sheet.blit(sfont.render(b.notes[:44],True,(240,180,180)),(x,y+238))
     pg.image.save(sheet,str(CONTACT_SHEET_PATH))

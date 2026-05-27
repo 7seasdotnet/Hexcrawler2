@@ -2240,6 +2240,7 @@ def _draw_world(
     *,
     clip_rect: pygame.Rect,
     zoom_scale: float = 1.0,
+    player_view: bool = False,
 ) -> None:
     player = sim.state.entities.get(PLAYER_ID)
     active_space = sim.state.world.spaces.get(player.space_id) if player is not None else None
@@ -2255,8 +2256,8 @@ def _draw_world(
             pixel_x = center[0] + world_x * cell_size
             pixel_y = center[1] + world_y * cell_size
             rect = pygame.Rect(int(pixel_x - cell_size / 2), int(pixel_y - cell_size / 2), int(cell_size), int(cell_size))
-            pygame.draw.rect(screen, (46, 40, 36), rect)
-            pygame.draw.rect(screen, (76, 68, 62), rect, 1)
+            pygame.draw.rect(screen, (58, 50, 44), rect)
+            pygame.draw.rect(screen, (98, 88, 78), rect, 1)
         _draw_local_structure_overlay_bounds(screen, active_space=active_space, center=center, zoom_scale=zoom_scale)
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
         screen.set_clip(old_clip)
@@ -2275,16 +2276,18 @@ def _draw_world(
         record = sim.state.world.get_hex_record(coord)
         terrain_type = record.terrain_type if record else "void"
         terrain_color = TERRAIN_COLORS.get(terrain_type, (90, 90, 96))
-        terrain_color = tuple(max(0, int(channel * 0.72)) for channel in terrain_color)
+        terrain_scale = 0.88 if player_view else 0.72
+        terrain_color = tuple(max(0, int(channel * terrain_scale)) for channel in terrain_color)
         pygame.draw.polygon(screen, terrain_color, points)
-        pygame.draw.polygon(screen, (62, 58, 52), points, 1)
+        edge_color = (92, 88, 80) if player_view else (62, 58, 52)
+        pygame.draw.polygon(screen, edge_color, points, 1)
 
     if active_space is None or active_space.topology_type == OVERWORLD_HEX_TOPOLOGY:
         _draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)
     if active_space is not None and str(getattr(active_space, "role", "")) == CAMPAIGN_SPACE_ROLE:
-        presentation_theme.draw_vignette(screen, clip_rect, 0.34)
+        presentation_theme.draw_vignette(screen, clip_rect, 0.20 if player_view else 0.34)
     if active_space is not None and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE:
-        presentation_theme.draw_vignette(screen, clip_rect, 0.52)
+        presentation_theme.draw_vignette(screen, clip_rect, 0.32 if player_view else 0.52)
     screen.set_clip(old_clip)
 
 
@@ -2373,11 +2376,12 @@ def _draw_frame_layers(
     current_space_id: str,
     alpha: float,
     visual_facing_by_entity: dict[str, float],
+    player_view: bool = False,
 ) -> tuple[pygame.Rect | None, int, dict[str, pygame.Rect], dict[str, int], dict[str, pygame.Rect]]:
     # Explicit campaign render-layer ownership:
     # 1) map_base, 2) site_icons, 3) site_labels, 4) actors/moving groups,
     # 5) overlays/selection, 6) HUD/panels/modals.
-    _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale)
+    _draw_world(screen, sim, world_center, marker_font, clip_rect=viewport_rect, zoom_scale=world_zoom_scale, player_view=player_view)
     player = sim.state.entities.get(PLAYER_ID)
     if player is not None:
         active_space = sim.state.world.spaces.get(player.space_id)
@@ -2448,7 +2452,8 @@ def _draw_frame_layers(
             zoom_scale=world_zoom_scale,
         )
 
-    _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
+    if not player_view:
+        _draw_top_control_bar(screen, sim, font, runtime_state, layout.control_bar, follow_state)
     _draw_world_affordance_prompts(
         screen,
         sim,
@@ -2461,7 +2466,7 @@ def _draw_frame_layers(
         screen,
         sim,
         font,
-        status_message,
+        "" if player_view else status_message,
         hover_message,
         runtime_state,
         layout.world_view,
@@ -2471,15 +2476,20 @@ def _draw_frame_layers(
     )
     if show_local_arena_overlay:
         _draw_local_arena_overlay(screen, sim, world_center, marker_font, world_zoom_scale, clip_rect=viewport_rect)
-    inspector_content_rect, inspector_total_lines = _draw_inspector_panel(
+    inspector_content_rect: pygame.Rect | None = None
+    inspector_total_lines = 0
+    panel_section_rects: dict[str, pygame.Rect] = {}
+    panel_section_counts: dict[str, int] = {}
+    if not player_view:
+        inspector_content_rect, inspector_total_lines = _draw_inspector_panel(
         screen,
         sim,
         debug_font,
         layout.inspector_panel,
         inspector_scroll,
         follow_state,
-    )
-    panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
+        )
+        panel_section_rects, panel_section_counts = _draw_encounter_debug_panel(
         screen,
         sim,
         debug_font,
@@ -2489,9 +2499,9 @@ def _draw_frame_layers(
         debug_filter_state,
         layout.debug_panel,
         debug_panel_cache,
-    )
+        )
     _draw_context_menu(screen, font, context_menu, viewport_rect)
-    offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect)
+    offer_buttons = _draw_encounter_offer_modal(screen, sim, marker_font, viewport_rect, player_view=player_view)
     if home_panel_state.visible:
         _draw_home_panel(screen, sim, font, viewport_rect)
     _draw_title_card(screen, sim, marker_font, viewport_rect)
@@ -2515,13 +2525,13 @@ def _draw_entity(
     size = HEX_SIZE * zoom_scale
     x = int(center[0] + world_x * size)
     y = int(center[1] + world_y * size)
-    pygame.draw.circle(screen, (255, 242, 122), (x, y), 12)
-    pygame.draw.circle(screen, (120, 32, 28), (x, y), 16, 2)
-    pygame.draw.circle(screen, (18, 18, 18), (x, y), 10, 2)
+    pygame.draw.circle(screen, (255, 242, 122), (x, y), 14)
+    pygame.draw.circle(screen, (120, 32, 28), (x, y), 19, 3)
+    pygame.draw.circle(screen, (18, 18, 18), (x, y), 12, 2)
     if str(entity.space_id).startswith("local_site:"):
         cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
         ring_color = (132, 220, 146) if cooldown_remaining == 0 else (229, 182, 84)
-        pygame.draw.circle(screen, ring_color, (x, y), 12, 2)
+        pygame.draw.circle(screen, ring_color, (x, y), 14, 3)
     _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(52, 44, 14), angle_override=facing_angle)
     screen.set_clip(old_clip)
 
@@ -2546,13 +2556,13 @@ def _draw_spawned_entity(
     x = int(center[0] + world_x * size)
     y = int(center[1] + world_y * size)
     marker_color = (140, 225, 255)
-    marker_radius = 6
+    marker_radius = 8
     ring_color: tuple[int, int, int] | None = None
     ring_radius = marker_radius + 5
     ring_width = 2
     if str(entity.template_id or "") == "encounter_hostile_v1":
         marker_color = (214, 104, 98)
-        marker_radius = 7
+        marker_radius = 10
         hostile_event = _last_combat_outcome_for_entity(sim, entity_id=entity.entity_id)
         if hostile_event is not None and hostile_event.get("attacker_id") == entity.entity_id:
             event_tick = hostile_event.get("tick")
@@ -2566,7 +2576,7 @@ def _draw_spawned_entity(
             ring_color = (118, 182, 236)
         if is_incapacitated_from_wounds(entity.wounds, threshold=WOUND_INCAPACITATE_SEVERITY):
             marker_color = (122, 124, 130)
-            marker_radius = 8
+            marker_radius = 9
             ring_color = None
     pygame.draw.circle(screen, marker_color, (x, y), marker_radius)
     pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
@@ -3786,13 +3796,15 @@ def _draw_encounter_offer_modal(
     sim: Simulation,
     font: pygame.font.Font,
     viewport_rect: pygame.Rect,
+    *,
+    player_view: bool = False,
 ) -> dict[str, pygame.Rect]:
     offer = _pending_encounter_offer(sim)
     if offer is None:
         return {}
 
-    width = min(380, max(280, viewport_rect.width // 2))
-    height = 146
+    width = min(560, max(360, int(viewport_rect.width * 0.58))) if player_view else min(380, max(280, viewport_rect.width // 2))
+    height = 210 if player_view else 146
     panel = pygame.Rect(
         viewport_rect.centerx - (width // 2),
         viewport_rect.y + 20,
@@ -3800,23 +3812,25 @@ def _draw_encounter_offer_modal(
         height,
     )
     shade = pygame.Surface((viewport_rect.width, viewport_rect.height), pygame.SRCALPHA)
-    shade.fill((16, 8, 8, 110))
+    shade.fill((16, 8, 8, 170 if player_view else 110))
     screen.blit(shade, (viewport_rect.x, viewport_rect.y))
     presentation_theme.draw_panel(screen, panel, "", font)
 
     label = str(offer.get("encounter_label", "Encounter"))
-    title = _truncate_text_to_pixel_width(f"CONTACT: {label}", font, panel.width - 18)
+    title = _truncate_text_to_pixel_width(f"CONTACT", font, panel.width - 18)
     screen.blit(font.render(title, True, (245, 235, 190)), (panel.x + 9, panel.y + 10))
+    subtitle = _truncate_text_to_pixel_width(label, font, panel.width - 18)
+    screen.blit(font.render(subtitle, True, (240, 160, 146)), (panel.x + 9, panel.y + 38))
     source_label = str(offer.get("source_label", "contact source"))
     hint = _truncate_text_to_pixel_width(f"{source_label}: hostile movement closes in.", font, panel.width - 18)
-    screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 38))
+    screen.blit(font.render(hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 66))
     action_hint = _truncate_text_to_pixel_width("Choose now: Fight [F] or Flee [X]", font, panel.width - 18)
-    screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 58))
+    screen.blit(font.render(action_hint, True, (220, 222, 230)), (panel.x + 9, panel.y + 92))
     waiting_hint = _truncate_text_to_pixel_width("Commit or break contact now.", font, panel.width - 18)
-    screen.blit(font.render(waiting_hint, True, (236, 166, 150)), (panel.x + 9, panel.y + 78))
+    screen.blit(font.render(waiting_hint, True, (236, 166, 150)), (panel.x + 9, panel.y + 118))
 
-    button_w = 110
-    button_h = 34
+    button_w = 160 if player_view else 110
+    button_h = 42 if player_view else 34
     fight_rect = pygame.Rect(panel.x + 24, panel.bottom - button_h - 14, button_w, button_h)
     flee_rect = pygame.Rect(panel.right - button_w - 24, panel.bottom - button_h - 14, button_w, button_h)
     for rect, text, color in (
@@ -3825,7 +3839,8 @@ def _draw_encounter_offer_modal(
     ):
         pygame.draw.rect(screen, color, rect)
         pygame.draw.rect(screen, (16, 18, 22), rect, 1)
-        screen.blit(font.render(text, True, (15, 15, 15)), (rect.x + 30, rect.y + 8))
+        label_surface = font.render(text, True, (15, 15, 15))
+        screen.blit(label_surface, (rect.centerx - label_surface.get_width() // 2, rect.centery - label_surface.get_height() // 2))
     return {"fight": fight_rect, "flee": flee_rect}
 
 
@@ -6518,6 +6533,7 @@ def render_viewer_frame_to_surface(
     runtime_state: ViewerRuntimeState,
     status_message: str = "",
     follow_state: FollowSelectionState | None = None,
+    player_view: bool = False,
 ) -> dict[str, Any]:
     """Render a single viewer frame through the canonical pygame viewer draw path."""
     layout = _compute_viewer_layout(screen.get_size())
@@ -6568,11 +6584,13 @@ def render_viewer_frame_to_surface(
         current_space_id=sim.state.entities.get(PLAYER_ID).space_id if sim.state.entities.get(PLAYER_ID) is not None else None,
         alpha=1.0,
         visual_facing_by_entity={},
+        player_view=player_view,
     )[-1]
     return {
         "render_path": "pygame_viewer._draw_frame_layers",
         "offer_buttons": tuple(offer_buttons.keys()),
         "viewport": [viewport_rect.x, viewport_rect.y, viewport_rect.w, viewport_rect.h],
+        "player_view": bool(player_view),
     }
 
 
