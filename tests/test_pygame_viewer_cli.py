@@ -1229,6 +1229,35 @@ def test_record_perf_sample_debug_fields_are_safe_when_unavailable(monkeypatch: 
     assert len(sentinel.records) == 1
     assert sentinel.records[0]["debug_rows_rendered"] == 0
     assert sentinel.records[0]["debug_panel_active"] is False
+    assert sentinel.records[0]["timing"]["draw_ms"] == 0.0
+    assert sentinel.records[0]["frame_pacing"]["target_fps"] is None
+
+
+def test_record_perf_sample_includes_frame_pacing_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    monkeypatch.setattr(viewer_module, "_sample_memory_rss_kb", lambda: (None, "unavailable"))
+
+    viewer_module._record_perf_sample(
+        sentinel,
+        sim=sim,
+        frame_ms=50.0,
+        tick_ms=0.0,
+        ticks_advanced=0,
+        debug_rows_rendered=12,
+        debug_panel_active=True,
+        target_fps=60,
+        tick_cap_fps=60,
+        observed_fps=20.0,
+        frame_cap_near_20fps=False,
+        render_coupled_to_sim_tick=False,
+    )
+
+    pacing = sentinel.records[0]["frame_pacing"]
+    assert pacing["target_fps"] == 60
+    assert pacing["tick_cap_fps"] == 60
+    assert pacing["sim_tick_seconds"] == viewer_module.SIM_TICK_SECONDS
+    assert pacing["render_coupled_to_sim_tick"] is False
 
 
 def test_perf_sentinel_sampling_does_not_reference_player_view_symbol() -> None:
