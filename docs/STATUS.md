@@ -1,4 +1,22 @@
 ## What changed in this commit
+- Fixed the `run_pygame_viewer` perf sentinel crash by removing the invalid normal-runtime reference to visual-audit-only `player_view`; perf sampling now derives panel activity from runtime debug panel section counts.
+- Hardened perf sentinel sample recording so missing/invalid debug diagnostics degrade safely (`debug_rows_rendered=0`, `debug_panel_active=False`) without crashing viewer runtime.
+- Added pygame viewer tests asserting sentinel debug fields are safe when unavailable and guarding against reintroducing the `debug_panel_active=not player_view` regression.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_durability_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "perf or memory_sampler or resource_module_missing"`
+- `python play.py --visual-audit` (fails in this environment if `pygame` is not installed)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (fails in this environment if `pygame` is not installed)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Validate the two `play.py` viewer commands on Windows with `pygame` installed to confirm perf sentinel lag metrics dump in normal runtime after display initialization.
+
+## What changed in this commit
 - Fixed Windows portability regression in `pygame_viewer` by removing the unconditional Unix-only `resource` import and moving memory sampling to a guarded cross-platform helper.
 - Perf sentinel now records `memory_sampler` (`resource`/`psutil`/`tracemalloc`/`unavailable`) and keeps dumping metrics when RSS sampling is unavailable (`memory_rss_kb: null`).
 - Added viewer tests proving import and perf sample capture remain safe when `resource` is unavailable.

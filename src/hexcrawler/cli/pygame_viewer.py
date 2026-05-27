@@ -2722,8 +2722,8 @@ def _record_perf_sample(
     frame_ms: float,
     tick_ms: float,
     ticks_advanced: int,
-    debug_rows_rendered: int,
-    debug_panel_active: bool,
+    debug_rows_rendered: int | None,
+    debug_panel_active: bool | None,
 ) -> None:
     if not sentinel.enabled:
         return
@@ -2732,6 +2732,11 @@ def _record_perf_sample(
         for name in sorted(sim.state.rules_state.keys())
     }
     memory_rss_kb, memory_sampler = _sample_memory_rss_kb()
+    try:
+        safe_debug_rows = int(debug_rows_rendered) if debug_rows_rendered is not None else 0
+    except Exception:
+        safe_debug_rows = 0
+    safe_debug_panel_active = bool(debug_panel_active) if debug_panel_active is not None else False
     sample = {
         "wall_time": time.time(),
         "frame_ms": round(frame_ms, 3),
@@ -2747,8 +2752,8 @@ def _record_perf_sample(
         "rules_state_sizes": rules_state_sizes,
         "visible_cells_drawn": None,
         "visible_entities_drawn": len(sim.state.entities),
-        "debug_rows_rendered": int(debug_rows_rendered),
-        "debug_panel_active": bool(debug_panel_active),
+        "debug_rows_rendered": safe_debug_rows,
+        "debug_panel_active": safe_debug_panel_active,
         "memory_rss_kb": memory_rss_kb,
         "memory_sampler": memory_sampler,
     }
@@ -6694,7 +6699,10 @@ def run_pygame_viewer(
         transition_overlay_frames = max(0, transition_overlay_frames - 1)
         pygame_module.display.flip()
         tick_ms = float(ticks_advanced) * (SIM_TICK_SECONDS * 1000.0)
-        debug_row_count = int(sum(panel_section_counts.values())) if panel_section_counts else 0
+        try:
+            debug_row_count = int(sum(int(count) for count in panel_section_counts.values())) if panel_section_counts else 0
+        except Exception:
+            debug_row_count = 0
         _record_perf_sample(
             perf_sentinel_state,
             sim=sim,
@@ -6702,7 +6710,7 @@ def run_pygame_viewer(
             tick_ms=tick_ms,
             ticks_advanced=int(ticks_advanced),
             debug_rows_rendered=debug_row_count,
-            debug_panel_active=not player_view,
+            debug_panel_active=bool(panel_section_counts),
         )
         if perf_sentinel_state.enabled:
             if (float(dt) * 1000.0) >= perf_sentinel_state.lag_frame_ms:
