@@ -584,6 +584,8 @@ class ViewerRuntimeState:
     show_debug_overlay: bool = False
     combat_presentation_cues: list["CombatPresentationCue"] = field(default_factory=list)
     seen_combat_cue_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
+    audit_cue_phase_override: str | None = None
+    last_combat_cue_render_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -3117,18 +3119,22 @@ def _draw_combat_presentation_cues(
     world_center: tuple[float, float],
     zoom_scale: float,
     clip_rect: pygame.Rect,
-) -> None:
+) -> dict[str, Any]:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
     now_tick = sim.state.tick
     survivors: list[CombatPresentationCue] = []
+    rendered_rows: list[dict[str, Any]] = []
+    phase_override = runtime_state.audit_cue_phase_override
     for cue in runtime_state.combat_presentation_cues:
         if now_tick < cue.start_tick:
             continue
         total_age = now_tick - cue.start_tick
         if total_age > 14:
             continue
-        if now_tick < cue.impact_tick:
+        if phase_override in {"windup", "impact", "arc", "recovery"}:
+            phase = phase_override
+        elif now_tick < cue.impact_tick:
             phase = "windup"
         elif now_tick == cue.impact_tick:
             phase = "impact"
@@ -3150,27 +3156,48 @@ def _draw_combat_presentation_cues(
         ax, ay = _world_to_pixel(cue.attacker_position[0], cue.attacker_position[1], world_center, zoom_scale)
         tx, ty = _world_to_pixel(cue.target_position[0], cue.target_position[1], world_center, zoom_scale)
         if cue.phase == "windup":
-            pygame.draw.line(screen, (246, 210, 130), (int(ax), int(ay)), (int(tx), int(ty)), 3)
-            pygame.draw.circle(screen, (255, 236, 150), (int(ax), int(ay)), 8, 2)
+            pygame.draw.line(screen, (255, 220, 96), (int(ax), int(ay)), (int(tx), int(ty)), 7)
+            pygame.draw.arc(screen, (255, 194, 120), (int(ax) - 26, int(ay) - 26, 52, 52), -0.95, 1.25, 5)
+            pygame.draw.circle(screen, (255, 255, 184), (int(ax), int(ay)), 14, 4)
         else:
             midpoint = (int((ax + tx) * 0.5), int((ay + ty) * 0.5))
-            pygame.draw.line(screen, (255, 156, 96), (int(ax), int(ay)), midpoint, 4)
-            pygame.draw.line(screen, (255, 216, 138), midpoint, (int(tx), int(ty)), 3)
-            pygame.draw.circle(screen, (255, 236, 150), (int(ax), int(ay)), 7, 2)
+            pygame.draw.line(screen, (255, 120, 72), (int(ax), int(ay)), midpoint, 9)
+            pygame.draw.line(screen, (255, 214, 120), midpoint, (int(tx), int(ty)), 7)
+            pygame.draw.circle(screen, (255, 255, 184), (int(ax), int(ay)), 13, 4)
         if cue.phase in {"impact", "arc", "recovery"}:
             impact_age = max(0, now_tick - cue.impact_tick)
-            radius = 10 + min(16, impact_age * 3)
-            pygame.draw.circle(screen, (255, 120, 88), (int(tx), int(ty)), radius, 3)
-            flash_radius = 6 + min(8, impact_age * 2)
-            pygame.draw.circle(screen, (255, 210, 140), (int(tx), int(ty)), flash_radius, 0)
+            radius = 14 + min(24, impact_age * 5)
+            pygame.draw.circle(screen, (255, 98, 72), (int(tx), int(ty)), radius, 5)
+            flash_radius = 9 + min(14, impact_age * 3)
+            pygame.draw.circle(screen, (255, 236, 160), (int(tx), int(ty)), flash_radius, 0)
             badge = marker_font.render(cue.outcome_label.upper(), True, (255, 248, 232))
-            badge_rect = badge.get_rect(center=(int(tx), int(ty - radius - 12)))
-            bg_rect = badge_rect.inflate(10, 6)
+            badge_rect = badge.get_rect(center=(int(tx), int(ty - radius - 20)))
+            bg_rect = badge_rect.inflate(18, 12)
             pygame.draw.rect(screen, (54, 24, 24), bg_rect, border_radius=5)
-            pygame.draw.rect(screen, (255, 156, 96), bg_rect, 1, border_radius=5)
+            pygame.draw.rect(screen, (255, 156, 96), bg_rect, 2, border_radius=5)
             screen.blit(badge, badge_rect)
+        rendered_rows.append(
+            {
+                "cue_id": f"{cue.impact_tick}:{cue.attacker_id}:{cue.target_id}",
+                "phase": cue.phase,
+                "age_ticks": max(0, now_tick - cue.start_tick),
+                "attacker_id": cue.attacker_id,
+                "target_id": cue.target_id,
+                "outcome_label": cue.outcome_label,
+                "attacker_screen_pos": {"x": int(ax), "y": int(ay)},
+                "target_screen_pos": {"x": int(tx), "y": int(ty)},
+                "rendered": True,
+            }
+        )
     runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]
+    runtime_state.last_combat_cue_render_diagnostics = {
+        "cue_count": len(runtime_state.combat_presentation_cues),
+        "active_cue_ids": [f"{cue.impact_tick}:{cue.attacker_id}:{cue.target_id}" for cue in runtime_state.combat_presentation_cues],
+        "rendered_cues": rendered_rows,
+        "phase_override": phase_override,
+    }
     screen.set_clip(old_clip)
+    return runtime_state.last_combat_cue_render_diagnostics
 
 
 def _combat_reason_label(reason: str) -> str:
@@ -7012,6 +7039,7 @@ def render_viewer_frame_to_surface(
     status_message: str = "",
     follow_state: FollowSelectionState | None = None,
     player_view: bool = False,
+    combat_cue_phase_override: str | None = None,
 ) -> dict[str, Any]:
     """Render a single viewer frame through the canonical pygame viewer draw path."""
     layout = _compute_viewer_layout(screen.get_size())
@@ -7033,6 +7061,7 @@ def render_viewer_frame_to_surface(
     if follow_center is not None:
         world_center = follow_center
     screen.fill((17, 18, 25))
+    runtime_state.audit_cue_phase_override = combat_cue_phase_override
     offer_buttons = _draw_frame_layers(
         screen=screen,
         sim=sim,
@@ -7069,6 +7098,7 @@ def render_viewer_frame_to_surface(
         "offer_buttons": tuple(offer_buttons.keys()),
         "viewport": [viewport_rect.x, viewport_rect.y, viewport_rect.w, viewport_rect.h],
         "player_view": bool(player_view),
+        "combat_cue_diagnostics": dict(runtime_state.last_combat_cue_render_diagnostics),
     }
 
 

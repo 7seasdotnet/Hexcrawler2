@@ -1,4 +1,20 @@
 ## What changed in this commit
+- Updated local-space combat presentation capture/rendering so visual audit can force viewer-local cue phases (`windup` vs `impact`) on the same authoritative simulation tick, with no simulation mutation.
+- Amplified local combat cue visibility at contact-sheet scale (thicker intent/slash lines, larger attacker ring, brighter impact flash/ring, higher-contrast outcome badge from authoritative combat evidence).
+- Added cue timeline diagnostics in visual audit metadata (cue count/ids, phase, age, attacker/target ids, outcome label, screen positions, rendered flag) and added a test covering phase-distinct cue diagnostics.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or player_view or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Review the regenerated contact sheet to verify `first_attack` and `combat_result` are now phase-distinct at audit scale and tune only remaining readability outliers.
+
+## What changed in this commit
 - Extended local-role `CombatPresentationCue` rendering to show windup-to-impact phases with readable attacker/target distinction, arc/slash lines, impact ring+flash, and authoritative outcome badges derived from combat outcome evidence only.
 - Hardened cue extraction to consume canonical combat outcome payloads (`params`) while preserving bounded queue/seen-key suppression and viewer-only state (no simulation mutation).
 - Added focused viewer tests for duplicate cue suppression and hash/input-log immutability during cue generation.
