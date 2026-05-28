@@ -231,6 +231,11 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
         "attacker_id": row.get("attacker_id"),
         "target_id": row.get("target_id"),
         "outcome_label": row.get("outcome_label"),
+        "evidence_source": row.get("evidence_source"),
+        "evidence_reason": row.get("evidence_reason"),
+        "evidence_applied": row.get("evidence_applied"),
+        "weapon_profile_id": row.get("weapon_profile_id"),
+        "motion_family": row.get("motion_family"),
         "attacker_screen_pos": row.get("attacker_screen_pos"),
         "target_screen_pos": row.get("target_screen_pos"),
         "arc_bbox": row.get("arc_bbox"),
@@ -238,6 +243,7 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
         "badge_text": row.get("badge_text"),
         "badge_screen_pos": row.get("badge_screen_pos"),
         "render_layer_used": row.get("render_layer_used"),
+        "refresh_diagnostics": diag.get("refresh_diagnostics") if isinstance(diag, dict) else None,
     }
 
 def _draw_combat_inset(pg: Any, sheet: Any, view: Any, beat: BeatResult, x: int, y: int) -> None:

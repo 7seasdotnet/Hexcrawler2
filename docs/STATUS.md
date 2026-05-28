@@ -1,5 +1,29 @@
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or projection or weapon or player_view or camera"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
+- `python play.py` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Re-run `python play.py --visual-audit` and `python play.py` on a workstation with `pygame` installed to regenerate `docs/ai_playtest/latest/audit_timeline.json`, `docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png`, and `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md`; verify first_attack and combat_result now report `cue_rendered=true` with combat-log-backed cue diagnostics.
+
+## What exists (folders/entry points)
+- Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
+- Viewer-local camera, render snapshots, interpolation helpers, combat cue presentation state, weapon motion profiles, projection adapters, and F1/F10 diagnostics live in `src/hexcrawler/cli/pygame_viewer.py`; regression coverage lives in `tests/test_pygame_viewer_cli.py`.
+- Visual audit capture/report helpers live in `src/hexcrawler/cli/visual_audit.py`; audit tests live in `tests/test_visual_audit.py`. Runtime audit artifacts are written under `docs/ai_playtest/latest/` plus `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md` and `docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png` when pygame is available.
+
+## What changed in this commit
+- Fixed combat cue starvation by deriving viewer-local `CombatPresentationCue` rows from authoritative `combat_log` evidence in addition to `combat_outcome` event-trace rows, with bounded cursors and duplicate suppression that do not affect hashes, input logs, save/load, or replay.
+- Expanded combat cue diagnostics for visual audit with cue counts, active cue ids, phases/ages, attacker/target ids, outcome labels, screen positions, bboxes, badge data, render layer, failure reason, refresh evidence counts, and weapon profile/motion family.
+- Preserved projection-safe presentation seams and added data-level weapon motion profiles/mappings for thrust, slash, chop, bash, and stab without changing simulation combat mechanics or camera/zoom/pan/recenter behavior.
+
+---
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera_gate2 or follow_player_camera_target or follow_player_render_frames or camera_interpolation_state or zoom_target_from_wheel or smooth_zoom or camera_transform_round_trip or zoom_ratio_scales_pairwise or reported_campaign_zoom_fixture or terrain_sites_entities_and_labels or camera_diagnostics_include"`
 - `PYTHONPATH=src pytest -q tests/test_render_interpolation.py`
 - `PYTHONPATH=src pytest -q tests/test_visual_audit.py`

@@ -11,6 +11,7 @@ from hexcrawler.cli.visual_audit import (
     _get_space_role,
     _select_local_attack_targets,
     _write_report,
+    _extract_cue_timeline,
 )
 from hexcrawler.sim.core import EntityState
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, SpaceState
@@ -24,6 +25,47 @@ class _SimAdvanceRecorder:
     def advance_ticks(self, ticks: int) -> None:
         self.calls.append(ticks)
 
+
+
+def test_visual_audit_cue_timeline_preserves_render_failure_and_weapon_diagnostics() -> None:
+    diag = {
+        "cue_count": 1,
+        "active_cue_ids": ["52:scout:hostile"],
+        "cue_rendered": True,
+        "cue_render_failure_reason": None,
+        "refresh_diagnostics": {"authoritative_evidence_count": 1, "generated_cue_count": 1},
+        "rendered_cues": [
+            {
+                "phase": "impact",
+                "age_ticks": 5,
+                "attacker_id": "scout",
+                "target_id": "hostile",
+                "outcome_label": "WOUNDED",
+                "evidence_source": "combat_log",
+                "evidence_reason": "resolved",
+                "evidence_applied": True,
+                "weapon_profile_id": "default_melee",
+                "motion_family": "slash",
+                "attacker_screen_pos": {"x": 10, "y": 11},
+                "target_screen_pos": {"x": 20, "y": 21},
+                "arc_bbox": {"x": 1, "y": 2, "w": 3, "h": 4},
+                "impact_bbox": {"x": 5, "y": 6, "w": 7, "h": 8},
+                "badge_text": "WOUNDED",
+                "badge_screen_pos": {"x": 20, "y": -10},
+                "render_layer_used": "combat_cues_overlay",
+            }
+        ],
+    }
+
+    timeline = _extract_cue_timeline(diag)
+
+    assert timeline["cue_rendered"] is True
+    assert timeline["cue_count"] == 1
+    assert timeline["evidence_source"] == "combat_log"
+    assert timeline["evidence_reason"] == "resolved"
+    assert timeline["weapon_profile_id"] == "default_melee"
+    assert timeline["motion_family"] == "slash"
+    assert timeline["refresh_diagnostics"]["authoritative_evidence_count"] == 1
 
 def test_visual_audit_default_out() -> None:
     parser = _build_parser()

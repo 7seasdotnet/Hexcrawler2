@@ -2384,7 +2384,102 @@ def test_combat_presentation_render_reports_phase_override_and_rendered_rows() -
     assert first_diag["cue_count"] >= 1
     assert result_diag["cue_count"] >= 1
     assert any(row.get("rendered") is True for row in result_diag.get("rendered_cues", []))
+    assert first_diag["rendered_cues"][0]["phase"] == "windup"
+    assert result_diag["rendered_cues"][0]["phase"] == "impact"
+    assert result_diag["rendered_cues"][0]["outcome_label"] != "WINDUP"
 
+
+def test_combat_presentation_cues_derive_from_authoritative_combat_log_when_event_trace_has_no_combat_outcome() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    target = EntityState(entity_id="hostile:combatlog", position_x=1.0, position_y=0.0, space_id=player.space_id)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    sim.state.combat_log.append({
+        "tick": sim.state.tick,
+        "intent": "attack_intent",
+        "action_uid": "audit:0",
+        "attacker_id": PLAYER_ID,
+        "target_id": target.entity_id,
+        "target_cell": None,
+        "mode": "melee",
+        "weapon_ref": "spear",
+        "called_region": "torso",
+        "region_hit": "torso",
+        "applied": True,
+        "reason": "resolved",
+        "strike_phase": "active",
+        "wound_deltas": [],
+        "roll_trace": [],
+        "tags": [],
+    })
+
+    viewer_module._refresh_combat_presentation_cues(sim, state)
+
+    assert state.last_combat_cue_refresh_diagnostics["authoritative_evidence_count"] == 1
+    assert state.last_combat_cue_refresh_diagnostics["generated_cue_count"] == 1
+    assert len(state.combat_presentation_cues) == 1
+    cue = state.combat_presentation_cues[0]
+    assert cue.evidence_source == "combat_log"
+    assert cue.evidence_reason == "resolved"
+    assert cue.outcome_label != "WINDUP"
+    assert cue.motion_family == "thrust"
+
+
+def test_combat_presentation_duplicate_suppression_does_not_suppress_first_combat_log_cue() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    target = EntityState(entity_id="hostile:first", position_x=1.0, position_y=0.0, space_id=player.space_id)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    entry = {
+        "tick": sim.state.tick,
+        "intent": "attack_intent",
+        "action_uid": "audit:first",
+        "attacker_id": PLAYER_ID,
+        "target_id": target.entity_id,
+        "target_cell": None,
+        "mode": "melee",
+        "weapon_ref": None,
+        "called_region": "torso",
+        "region_hit": None,
+        "applied": False,
+        "reason": "windup_started",
+        "strike_phase": "windup",
+        "wound_deltas": [],
+        "roll_trace": [],
+        "tags": [],
+    }
+    sim.state.combat_log.append(dict(entry))
+
+    viewer_module._refresh_combat_presentation_cues(sim, state)
+    viewer_module._refresh_combat_presentation_cues(sim, state)
+
+    assert len(state.combat_presentation_cues) == 1
+    assert state.combat_presentation_cues[0].evidence_reason == "windup_started"
+    assert state.last_combat_cue_refresh_diagnostics["generated_cue_count"] == 0
+
+
+def test_weapon_motion_profiles_distinguish_supported_motion_families() -> None:
+    families = viewer_module.WEAPON_MOTION_PROFILE_BY_FAMILY
+    assert families["thrust"].path_shape == "narrow_lunge"
+    assert families["slash"].path_shape == "curved_arc"
+    assert families["chop"].path_shape == "overhead_chop"
+    assert families["bash"].path_shape == "blunt_swing"
+    assert families["stab"].path_shape == "line"
+    assert viewer_module._weapon_motion_profile_for_weapon_ref("iron spear").motion_family == "thrust"
+    assert viewer_module._weapon_motion_profile_for_weapon_ref("wood axe").motion_family == "chop"
+    assert viewer_module._weapon_motion_profile_for_weapon_ref("short sword").motion_family == "slash"
+    assert viewer_module._weapon_motion_profile_for_weapon_ref("dagger").motion_family == "stab"
+    assert viewer_module._weapon_motion_profile_for_weapon_ref("war hammer").motion_family == "bash"
+    assert viewer_module._weapon_motion_profile_for_weapon_ref(None).profile_id == "default_melee"
+
+
+def test_combat_presentation_cue_model_stays_projection_agnostic() -> None:
+    field_names = set(viewer_module.CombatPresentationCue.__dataclass_fields__)
+    forbidden_fragments = ("screen", "pixel", "camera", "projection", "zoom", "bbox")
+    assert not any(fragment in name for name in field_names for fragment in forbidden_fragments)
+    assert {"attacker_position", "target_position", "attack_vector_local", "weapon_profile_id", "motion_family"} <= field_names
 
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:
     viewer_module._ensure_pygame_imported()

@@ -635,7 +635,9 @@ class ViewerRuntimeState:
     seen_combat_cue_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
     audit_cue_phase_override: str | None = None
     last_combat_cue_render_diagnostics: dict[str, Any] = field(default_factory=dict)
+    last_combat_cue_refresh_diagnostics: dict[str, Any] = field(default_factory=dict)
     combat_cue_event_trace_cursor: int = 0
+    combat_cue_combat_log_cursor: int = 0
     visual_audit_mode: bool = False
 
 
@@ -652,6 +654,9 @@ class CombatPresentationCue:
     motion_family: str
     weapon_profile_id: str
     phase: str
+    evidence_source: str = "event_trace"
+    evidence_reason: str = "resolved"
+    evidence_applied: bool = False
 
 
 COMBAT_CUE_MAX = 18
@@ -676,7 +681,22 @@ WEAPON_MOTION_PROFILE_BY_FAMILY: dict[str, WeaponMotionProfile] = {
     "stab": WeaponMotionProfile("dagger", "stab", "line", 0.7, 0.65, "close_coil", "quick_stab", "short_recover"),
     "bash": WeaponMotionProfile("mace_hammer", "bash", "blunt_swing", 0.95, 1.2, "hip_swing", "blunt_impact", "brace"),
 }
-DEFAULT_WEAPON_MOTION_PROFILE = WEAPON_MOTION_PROFILE_BY_FAMILY["slash"]
+DEFAULT_WEAPON_MOTION_PROFILE = WeaponMotionProfile("default_melee", "slash", "curved_arc", 0.9, 0.95, "ready", "generic_cut", "recover")
+WEAPON_MOTION_PROFILE_BY_WEAPON_KEYWORD: dict[str, WeaponMotionProfile] = {
+    "spear": WEAPON_MOTION_PROFILE_BY_FAMILY["thrust"],
+    "polearm": WEAPON_MOTION_PROFILE_BY_FAMILY["thrust"],
+    "pike": WEAPON_MOTION_PROFILE_BY_FAMILY["thrust"],
+    "lance": WEAPON_MOTION_PROFILE_BY_FAMILY["thrust"],
+    "axe": WEAPON_MOTION_PROFILE_BY_FAMILY["chop"],
+    "hatchet": WEAPON_MOTION_PROFILE_BY_FAMILY["chop"],
+    "sword": WEAPON_MOTION_PROFILE_BY_FAMILY["slash"],
+    "sabre": WEAPON_MOTION_PROFILE_BY_FAMILY["slash"],
+    "dagger": WEAPON_MOTION_PROFILE_BY_FAMILY["stab"],
+    "knife": WEAPON_MOTION_PROFILE_BY_FAMILY["stab"],
+    "mace": WEAPON_MOTION_PROFILE_BY_FAMILY["bash"],
+    "hammer": WEAPON_MOTION_PROFILE_BY_FAMILY["bash"],
+    "club": WEAPON_MOTION_PROFILE_BY_FAMILY["bash"],
+}
 
 
 @dataclass
@@ -3543,28 +3563,88 @@ def _last_combat_impact_tick_for_entity(sim: Simulation, *, entity_id: str) -> i
     return None
 
 
-def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRuntimeState) -> None:
+def _weapon_motion_profile_for_weapon_ref(weapon_ref: object) -> WeaponMotionProfile:
+    """Viewer-local weapon motion seam; never feeds simulation authority or hashes."""
+    if not isinstance(weapon_ref, str) or not weapon_ref.strip():
+        return DEFAULT_WEAPON_MOTION_PROFILE
+    normalized = weapon_ref.strip().lower()
+    for keyword, profile in WEAPON_MOTION_PROFILE_BY_WEAPON_KEYWORD.items():
+        if keyword in normalized:
+            return profile
+    return DEFAULT_WEAPON_MOTION_PROFILE
+
+
+def _combat_cue_evidence_from_event_trace(sim: Simulation, runtime_state: ViewerRuntimeState) -> list[dict[str, Any]]:
     trace = sim.get_event_trace()
     cursor = max(0, int(runtime_state.combat_cue_event_trace_cursor))
     if cursor > len(trace):
         cursor = 0
-    for row in trace[cursor:]:
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(trace[cursor:], start=cursor):
         if str(row.get("event_type")) != COMBAT_OUTCOME_EVENT_TYPE:
             continue
         params = row.get("params")
-        payload = params if isinstance(params, dict) else row
-        tick = int(payload.get("tick", row.get("tick", -1)))
+        payload = dict(params) if isinstance(params, dict) else dict(row)
+        payload.setdefault("tick", row.get("tick", payload.get("tick", -1)))
+        payload["evidence_source"] = "event_trace"
+        payload["evidence_index"] = index
+        rows.append(payload)
+    runtime_state.combat_cue_event_trace_cursor = len(trace)
+    return rows
+
+
+def _combat_cue_evidence_from_combat_log(sim: Simulation, runtime_state: ViewerRuntimeState) -> list[dict[str, Any]]:
+    log = sim.state.combat_log
+    cursor = max(0, int(runtime_state.combat_cue_combat_log_cursor))
+    if cursor > len(log):
+        cursor = 0
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(log[cursor:], start=cursor):
+        if not isinstance(row, dict):
+            continue
+        reason = str(row.get("reason", ""))
+        # Authoritative combat_log rows include both the accepted windup beat and the
+        # resolved outcome beat.  Presentation may consume either, but never invents
+        # outcomes outside this evidence.
+        if reason not in {"windup_started", "resolved", "target_incapacitated", "invalid_arc", "target_moved", "out_of_range", "cooldown_blocked", "ineligible"}:
+            continue
+        payload = dict(row)
+        payload["evidence_source"] = "combat_log"
+        payload["evidence_index"] = index
+        rows.append(payload)
+    runtime_state.combat_cue_combat_log_cursor = len(log)
+    return rows
+
+
+def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRuntimeState) -> None:
+    evidence_rows = _combat_cue_evidence_from_event_trace(sim, runtime_state)
+    evidence_rows.extend(_combat_cue_evidence_from_combat_log(sim, runtime_state))
+    generated = 0
+    duplicate_suppressed = 0
+    skipped_missing_actor = 0
+    skipped_invalid = 0
+    for payload in evidence_rows:
+        try:
+            tick = int(payload.get("tick", -1))
+        except (TypeError, ValueError):
+            tick = -1
         attacker_id = str(payload.get("attacker_id", ""))
         target_id = str(payload.get("target_id", ""))
         reason = str(payload.get("reason", "resolved"))
         applied = payload.get("applied") is True
         neutralized = payload.get("neutralized") is True
+        source = str(payload.get("evidence_source", "unknown"))
         key = (tick, attacker_id, target_id, reason)
-        if key in runtime_state.seen_combat_cue_keys or not attacker_id or not target_id:
+        if tick < 0 or not attacker_id or not target_id:
+            skipped_invalid += 1
+            continue
+        if key in runtime_state.seen_combat_cue_keys:
+            duplicate_suppressed += 1
             continue
         attacker = sim.state.entities.get(attacker_id)
         target = sim.state.entities.get(target_id)
         if attacker is None or target is None:
+            skipped_missing_actor += 1
             continue
         runtime_state.seen_combat_cue_keys.append(key)
         if len(runtime_state.seen_combat_cue_keys) > COMBAT_CUE_MAX:
@@ -3574,8 +3654,7 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         dy = float(target.position_y) - float(attacker.position_y)
         magnitude = math.hypot(dx, dy)
         vector = (dx / magnitude, dy / magnitude) if magnitude > 0.0001 else (1.0, 0.0)
-        motion_family = "slash"
-        profile_id = DEFAULT_WEAPON_MOTION_PROFILE.profile_id
+        profile = _weapon_motion_profile_for_weapon_ref(payload.get("weapon_ref"))
         runtime_state.combat_presentation_cues.append(
             CombatPresentationCue(
                 attacker_id=attacker_id,
@@ -3586,15 +3665,28 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
                 attacker_position=(float(attacker.position_x), float(attacker.position_y)),
                 target_position=(float(target.position_x), float(target.position_y)),
                 attack_vector_local=vector,
-                motion_family=motion_family,
-                weapon_profile_id=profile_id,
+                motion_family=profile.motion_family,
+                weapon_profile_id=profile.profile_id,
                 phase="windup",
+                evidence_source=source,
+                evidence_reason=reason,
+                evidence_applied=applied,
             )
         )
+        generated += 1
     if len(runtime_state.combat_presentation_cues) > COMBAT_CUE_MAX:
         runtime_state.combat_presentation_cues = runtime_state.combat_presentation_cues[-COMBAT_CUE_MAX:]
-    runtime_state.combat_cue_event_trace_cursor = len(trace)
-
+    runtime_state.last_combat_cue_refresh_diagnostics = {
+        "authoritative_evidence_count": len(evidence_rows),
+        "combat_log_len": len(sim.state.combat_log),
+        "event_trace_len": len(sim.get_event_trace()),
+        "combat_log_cursor": int(runtime_state.combat_cue_combat_log_cursor),
+        "event_trace_cursor": int(runtime_state.combat_cue_event_trace_cursor),
+        "generated_cue_count": generated,
+        "duplicate_suppressed_count": duplicate_suppressed,
+        "skipped_missing_actor_count": skipped_missing_actor,
+        "skipped_invalid_count": skipped_invalid,
+    }
 
 def _projection_local_to_screen(local_xy: tuple[float, float], world_center: tuple[float, float], zoom_scale: float) -> tuple[float, float]:
     return _world_to_pixel(local_xy[0], local_xy[1], world_center, zoom_scale)
@@ -3636,7 +3728,12 @@ def _draw_combat_presentation_cues(
     survivors: list[CombatPresentationCue] = []
     rendered_rows: list[dict[str, Any]] = []
     phase_override = runtime_state.audit_cue_phase_override
-    for cue in runtime_state.combat_presentation_cues:
+    ordered_cues = list(runtime_state.combat_presentation_cues)
+    if phase_override in {"impact", "arc", "recovery"}:
+        ordered_cues.sort(key=lambda cue: (cue.evidence_reason == "windup_started", cue.attacker_id != PLAYER_ID, cue.impact_tick))
+    elif phase_override == "windup":
+        ordered_cues.sort(key=lambda cue: (cue.attacker_id != PLAYER_ID, cue.evidence_reason != "windup_started", cue.impact_tick))
+    for cue in ordered_cues:
         if now_tick < cue.start_tick:
             continue
         total_age = now_tick - cue.start_tick
@@ -3664,6 +3761,9 @@ def _draw_combat_presentation_cues(
             motion_family=cue.motion_family,
             weapon_profile_id=cue.weapon_profile_id,
             phase=phase,
+            evidence_source=cue.evidence_source,
+            evidence_reason=cue.evidence_reason,
+            evidence_applied=cue.evidence_applied,
         )
         survivors.append(cue)
         ax, ay = _projection_local_to_screen(cue.attacker_position, world_center, zoom_scale)
@@ -3697,6 +3797,11 @@ def _draw_combat_presentation_cues(
                 "attacker_id": cue.attacker_id,
                 "target_id": cue.target_id,
                 "outcome_label": cue.outcome_label,
+                "evidence_source": cue.evidence_source,
+                "evidence_reason": cue.evidence_reason,
+                "evidence_applied": cue.evidence_applied,
+                "weapon_profile_id": cue.weapon_profile_id,
+                "motion_family": cue.motion_family,
                 "attacker_screen_pos": {"x": int(ax), "y": int(ay)},
                 "target_screen_pos": {"x": int(tx), "y": int(ty)},
                 "rendered": True,
@@ -3712,7 +3817,11 @@ def _draw_combat_presentation_cues(
     cue_render_failure_reason = None
     if not rendered_rows:
         if not runtime_state.combat_presentation_cues:
-            cue_render_failure_reason = "no_active_cues"
+            refresh_diag = runtime_state.last_combat_cue_refresh_diagnostics
+            if int(refresh_diag.get("authoritative_evidence_count", 0) or 0) > 0:
+                cue_render_failure_reason = "authoritative_evidence_present_but_no_active_cues"
+            else:
+                cue_render_failure_reason = "no_active_cues"
         elif phase_override not in {None, "windup", "impact", "arc", "recovery"}:
             cue_render_failure_reason = "invalid_phase_override"
         else:
@@ -3724,6 +3833,7 @@ def _draw_combat_presentation_cues(
         "phase_override": phase_override,
         "cue_rendered": bool(rendered_rows),
         "cue_render_failure_reason": cue_render_failure_reason,
+        "refresh_diagnostics": dict(runtime_state.last_combat_cue_refresh_diagnostics),
     }
     screen.set_clip(old_clip)
     return runtime_state.last_combat_cue_render_diagnostics
