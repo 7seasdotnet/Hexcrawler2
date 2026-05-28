@@ -1,4 +1,20 @@
 ## What changed in this commit
+- Fixed combat cue generation starvation by replacing the `event_trace[-12:]` scan with a viewer-local incremental event-trace cursor; cue extraction now consumes new authoritative `combat_outcome` evidence deterministically even when many non-combat events occur before audit capture.
+- Added explicit `cue_render_failure_reason` diagnostics (`no_active_cues`, `invalid_phase_override`, `all_cues_filtered_by_timing`) and surfaced `active_cue_ids` in visual-audit cue timeline extraction for first-attack/combat-result truth reporting.
+- Added/updated verification coverage for combat presentation and preserved determinism boundaries (viewer-only cue state; no simulation/world/input-log mutation).
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or player_view or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit` (fails in this environment: `ModuleNotFoundError: No module named 'pygame'`)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run `python play.py --visual-audit` on a pygame-enabled machine and confirm `first_attack`/`combat_result` are `ok` with `combat_cue_diagnostics.cue_rendered=true` and visible cue bboxes in the contact sheet.
+
+## What changed in this commit
 - Added explicit combat-cue render diagnostics for visual-audit beats, including render truth (`cue_rendered`), per-cue phase/age/IDs, screen positions, arc+impact bounding boxes, badge text/position, and render-layer metadata.
 - Tightened local-role player-view/audit framing with a viewer-local focus camera (player + hostile + extraction marker) and increased local zoom so combat actors read at contact-sheet scale without touching simulation coordinates or authority.
 - Added contact-sheet combat insets and cue-bbox sanity gating for `first_attack`/`combat_result` so cue visibility is validated from rendered pixels/viewport diagnostics, not just beat success state.
