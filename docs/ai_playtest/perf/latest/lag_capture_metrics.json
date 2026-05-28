@@ -1,0 +1,39 @@
+{
+  "reason": "environment_no_pygame",
+  "tick": null,
+  "records": [],
+  "summary": {
+    "frame_ms": {"avg": null, "p95": null, "max": null},
+    "draw_ms": {"avg": null, "p95": null, "max": null},
+    "simulation_advance_ms": {"avg": null, "p95": null, "max": null},
+    "debug_draw_ms": {"avg": null, "p95": null, "max": null},
+    "flip_ms": {"avg": null, "p95": null, "max": null},
+    "throttle_ms": {"avg": null, "p95": null, "max": null},
+    "frame_time_diagnosis": "unavailable"
+  },
+  "empty_records_reason": "pygame_not_installed_in_container",
+  "render_diagnostics": {},
+  "camera_diagnostics_schema": {
+    "active_space_id": "string|null",
+    "active_space_role": "campaign|local|null",
+    "player_entity_id": "string|null",
+    "player_simulation_position": {"x": "float", "y": "float"},
+    "player_interpolated_position": {"x": "float", "y": "float"},
+    "player_screen_position": {"x": "float", "y": "float"},
+    "camera_center_current": {"x": "float", "y": "float"},
+    "camera_target": {"x": "float", "y": "float"},
+    "camera_delta_per_frame": {"x": "float", "y": "float"},
+    "camera_zoom_current": "float",
+    "camera_zoom_target": "float",
+    "zoom_delta_per_frame": "float",
+    "camera_mode_focus_reason": "string",
+    "player_view": "bool",
+    "debug_overlay": "bool",
+    "interpolation_alpha": "float",
+    "ticks_advanced": "int",
+    "camera_target_changed_this_frame": "bool",
+    "zoom_target_changed_this_frame": "bool",
+    "camera_position_rounded_before_transform": "bool",
+    "camera_clamp_hysteresis_state": "object"
+  }
+}
