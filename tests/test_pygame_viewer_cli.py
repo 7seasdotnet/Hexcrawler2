@@ -3149,3 +3149,229 @@ def test_viewer_runtime_controller_load_uses_runtime_profile_bootstrap_parity(tm
     loaded = runtime.load_simulation(str(save_path))
 
     assert loaded.get_rule_module(EncounterCheckModule.name) is not None
+
+
+class _Gate2Viewport:
+    def __init__(self, x: int, y: int, width: int, height: int) -> None:
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.centerx = x + width // 2
+        self.centery = y + height // 2
+
+    def collidepoint(self, pos: tuple[int, int]) -> bool:
+        return self.x <= int(pos[0]) < self.x + self.width and self.y <= int(pos[1]) < self.y + self.height
+
+
+def _camera_gate2_local_sim() -> tuple[object, str]:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    local_space_id = "local:camera_gate2"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type="square_grid",
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 10, "height": 8, "origin": {"x": 0, "y": 0}, "blocked_cells": []},
+    )
+    player = sim.state.entities[PLAYER_ID]
+    player.space_id = local_space_id
+    player.position_x, player.position_y = square_grid_cell_to_world_xy(3, 3)
+    hostile_x, hostile_y = square_grid_cell_to_world_xy(5, 3)
+    sim.add_entity(
+        EntityState(
+            entity_id="hostile:camera_gate2",
+            position_x=hostile_x,
+            position_y=hostile_y,
+            space_id=local_space_id,
+            template_id=LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
+            stats={"faction_id": "hostile"},
+        )
+    )
+    return sim, local_space_id
+
+
+def test_camera_gate2_middle_pan_switches_to_free_pan_without_authoritative_mutation() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    caches: dict[str, viewer_module.LocalCameraCache] = {}
+    cache = viewer_module._active_space_camera_cache(sim, viewport, caches)
+    input_log_before = list(sim.input_log)
+    world_hash_before = world_hash(sim.state.world)
+    simulation_hash_before = simulation_hash(sim)
+    entity_positions_before = {entity_id: (entity.position_x, entity.position_y) for entity_id, entity in sim.state.entities.items()}
+
+    before_center = cache.center
+    viewer_module._pan_camera_cache(cache, (36.0, -14.0))
+
+    assert cache.mode == viewer_module.CAMERA_MODE_FREE_PAN
+    assert cache.center == pytest.approx((before_center[0] + 36.0, before_center[1] - 14.0))
+    assert {entity_id: (entity.position_x, entity.position_y) for entity_id, entity in sim.state.entities.items()} == entity_positions_before
+    assert list(sim.input_log) == input_log_before
+    assert world_hash(sim.state.world) == world_hash_before
+    assert simulation_hash(sim) == simulation_hash_before
+
+
+def test_camera_gate2_zoom_is_viewer_local_and_free_pan_does_not_recenter() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    cache = viewer_module._active_space_camera_cache(sim, viewport, {})
+    viewer_module._set_camera_mode(cache, viewer_module.CAMERA_MODE_FREE_PAN, focus_reason="test")
+    cache.center = (123.0, 87.0)
+    cache.zoom_scale = 1.0
+    cache.target_zoom_scale = 2.0
+    input_log_before = list(sim.input_log)
+    world_hash_before = world_hash(sim.state.world)
+    simulation_hash_before = simulation_hash(sim)
+    entity_vectors_before = {
+        entity_id: (entity.move_input_x, entity.move_input_y, entity.target_position)
+        for entity_id, entity in sim.state.entities.items()
+    }
+    player_screen_before = viewer_module._world_to_screen(
+        (sim.state.entities[PLAYER_ID].position_x, sim.state.entities[PLAYER_ID].position_y), cache.center, cache.zoom_scale
+    )
+
+    center_after, zoom_after = viewer_module._update_camera_zoom_and_follow(
+        sim, viewport, cache, 10.0, visual_audit_mode=False
+    )
+
+    assert zoom_after == pytest.approx(2.0)
+    assert center_after != pytest.approx(viewer_module._camera_center_for_entity(sim.state.entities[PLAYER_ID], viewport, zoom_scale=zoom_after))
+    assert cache.mode == viewer_module.CAMERA_MODE_FREE_PAN
+    assert viewer_module._world_to_screen(viewer_module._screen_to_world((viewport.centerx, viewport.centery), (123.0, 87.0), 1.0), center_after, zoom_after) == pytest.approx((viewport.centerx, viewport.centery))
+    assert viewer_module._world_to_screen((sim.state.entities[PLAYER_ID].position_x, sim.state.entities[PLAYER_ID].position_y), center_after, zoom_after) != pytest.approx(player_screen_before)
+    assert {
+        entity_id: (entity.move_input_x, entity.move_input_y, entity.target_position)
+        for entity_id, entity in sim.state.entities.items()
+    } == entity_vectors_before
+    assert list(sim.input_log) == input_log_before
+    assert world_hash(sim.state.world) == world_hash_before
+    assert simulation_hash(sim) == simulation_hash_before
+
+
+def test_camera_gate2_follow_player_zoom_keeps_player_stable_without_top_left_drift() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    cache = viewer_module._active_space_camera_cache(sim, viewport, {})
+    cache.zoom_scale = 1.0
+    cache.target_zoom_scale = 2.0
+    viewer_module._set_camera_mode(cache, viewer_module.CAMERA_MODE_FOLLOW_PLAYER, focus_reason="test_follow")
+    player = sim.state.entities[PLAYER_ID]
+    input_log_before = list(sim.input_log)
+    world_hash_before = world_hash(sim.state.world)
+    simulation_hash_before = simulation_hash(sim)
+    player_motion_before = (player.position_x, player.position_y, player.move_input_x, player.move_input_y, player.target_position)
+
+    center_after, zoom_after = viewer_module._update_camera_zoom_and_follow(sim, viewport, cache, 10.0, visual_audit_mode=False)
+
+    assert zoom_after == pytest.approx(2.0)
+    assert center_after == pytest.approx(viewer_module._camera_center_for_entity(player, viewport, zoom_scale=2.0))
+    assert viewer_module._world_to_screen((player.position_x, player.position_y), center_after, zoom_after) == pytest.approx(
+        (viewport.centerx, viewport.centery)
+    )
+    assert (player.position_x, player.position_y, player.move_input_x, player.move_input_y, player.target_position) == player_motion_before
+    assert list(sim.input_log) == input_log_before
+    assert world_hash(sim.state.world) == world_hash_before
+    assert simulation_hash(sim) == simulation_hash_before
+
+
+def test_camera_gate2_normal_runtime_does_not_use_visual_audit_focus_or_cursor_recenter() -> None:
+    source = inspect.getsource(viewer_module.run_pygame_viewer)
+
+    assert "_camera_center_for_cursor_zoom(" not in source
+    assert "cursor_anchor_zoom_active = False" in source
+    assert "runtime_state.visual_audit_mode and player_view" in source
+    assert "camera_mode = CAMERA_MODE_VISUAL_AUDIT_FOCUS" in source
+    assert source.index("runtime_state.visual_audit_mode and player_view") < source.index("camera_mode = CAMERA_MODE_VISUAL_AUDIT_FOCUS")
+
+
+def test_camera_gate2_local_runtime_draw_paths_use_canonical_transform() -> None:
+    assert "_world_to_screen((world_x, world_y), center, zoom_scale)" in inspect.getsource(viewer_module._draw_world)
+    assert "_draw_world_markers(screen, sim, center, marker_font, clip_rect=clip_rect, zoom_scale=zoom_scale)" in inspect.getsource(
+        viewer_module._draw_world
+    )
+    assert "_world_to_screen((world_x, world_y), center, zoom_scale)" in inspect.getsource(viewer_module._draw_entity)
+    assert "_world_to_screen((world_x, world_y), center, zoom_scale)" in inspect.getsource(viewer_module._draw_spawned_entity)
+    assert "return _world_to_screen((world_x, world_y), center, zoom_scale)" in inspect.getsource(viewer_module._marker_cell_center)
+    assert 'marker_kind="return_exit"' in inspect.getsource(viewer_module._collect_world_markers)
+    assert '_world_to_screen((float(anchor.coord["x"]) + 0.5' in inspect.getsource(viewer_module._draw_local_arena_overlay)
+    assert "_projection_local_to_screen(cue.attacker_position, world_center, zoom_scale)" in inspect.getsource(
+        viewer_module._draw_combat_presentation_cues
+    )
+    assert "return _world_to_screen((world_x, world_y), center, zoom_scale)" in inspect.getsource(viewer_module._world_to_pixel)
+
+
+def test_camera_gate2_follow_recenters_with_c_or_home_semantics_and_f1_is_camera_neutral() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    cache = viewer_module._active_space_camera_cache(sim, viewport, {})
+    cache.zoom_scale = 1.6
+    cache.target_zoom_scale = 1.6
+    viewer_module._set_camera_mode(cache, viewer_module.CAMERA_MODE_FREE_PAN, focus_reason="test_pan")
+    cache.center = (-200.0, -100.0)
+    before_f1_mode = cache.mode
+    before_f1_zoom = cache.zoom_scale
+
+    # F1 toggles debug overlay in the runtime loop only; it has no camera helper side effect.
+    assert cache.mode == before_f1_mode
+    assert cache.zoom_scale == before_f1_zoom
+    assert viewer_module._recenter_camera_on_player(sim, viewport, cache)
+
+    assert cache.mode == viewer_module.CAMERA_MODE_FOLLOW_PLAYER
+    assert cache.center == pytest.approx(viewer_module._camera_center_for_entity(sim.state.entities[PLAYER_ID], viewport, zoom_scale=1.6))
+
+
+def test_camera_gate2_local_cache_initializes_once_and_visual_audit_focus_is_opt_in() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    caches: dict[str, viewer_module.LocalCameraCache] = {}
+    cache = viewer_module._active_space_camera_cache(sim, viewport, caches)
+    cache.center = (222.0, 111.0)
+    cache.zoom_scale = 1.25
+    cache.target_zoom_scale = 1.25
+
+    same_cache = viewer_module._active_space_camera_cache(sim, viewport, caches)
+    assert same_cache is cache
+    assert same_cache.center == pytest.approx((222.0, 111.0))
+    assert same_cache.zoom_scale == pytest.approx(1.25)
+    assert same_cache.mode == viewer_module.CAMERA_MODE_FOLLOW_PLAYER
+    assert viewer_module.CAMERA_MODE_VISUAL_AUDIT_FOCUS in viewer_module.CAMERA_MODES
+
+    focused = viewer_module._audit_local_focus_camera(sim, viewport)
+    assert focused is not None
+    # Normal play uses the cached/follow/free-pan cache; the visual-audit focus helper is opt-in.
+    assert same_cache.mode != viewer_module.CAMERA_MODE_VISUAL_AUDIT_FOCUS
+
+
+def test_camera_gate2_local_grid_entity_and_extraction_transform_coherence_under_zoom() -> None:
+    sim, local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    cache = viewer_module._active_space_camera_cache(sim, viewport, {})
+    cache.center = (80.0, 60.0)
+    cache.zoom_scale = 2.0
+    player = sim.state.entities[PLAYER_ID]
+    hostile = sim.state.entities["hostile:camera_gate2"]
+    extraction = square_grid_cell_to_world_xy(1, 1)
+
+    grid_cell_center = (3.5, 3.5)
+    player_screen = viewer_module._world_to_screen((player.position_x, player.position_y), cache.center, cache.zoom_scale)
+    grid_screen = viewer_module._world_to_screen(grid_cell_center, cache.center, cache.zoom_scale)
+    hostile_screen = viewer_module._world_to_screen((hostile.position_x, hostile.position_y), cache.center, cache.zoom_scale)
+    extraction_screen = viewer_module._world_to_screen(extraction, cache.center, cache.zoom_scale)
+
+    assert player_screen == pytest.approx(grid_screen)
+    assert hostile_screen[0] - player_screen[0] == pytest.approx((hostile.position_x - player.position_x) * viewer_module.HEX_SIZE * cache.zoom_scale)
+    assert extraction_screen[0] - player_screen[0] == pytest.approx((extraction[0] - player.position_x) * viewer_module.HEX_SIZE * cache.zoom_scale)
+    assert sim.state.world.spaces[local_space_id].role == LOCAL_SPACE_ROLE
+
+
+def test_camera_gate2_visual_audit_still_runs() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+
+    focused = viewer_module._audit_local_focus_camera(sim, viewport)
+
+    assert focused is not None
+    center, zoom = focused
+    assert isinstance(center[0], float)
+    assert isinstance(center[1], float)
+    assert zoom >= 1.35

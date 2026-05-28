@@ -286,6 +286,21 @@ class EncounterPanelScrollState:
         self.offsets[section] = _clamp_scroll_offset(self.offset_for(section), delta, total_count, page_size)
 
 
+# Runtime camera-mode contract (viewer-local only; never serialized/hash-covered):
+# - Normal play starts in FOLLOW_PLAYER.
+# - Middle mouse drag switches to FREE_PAN.
+# - C/Home recenters on the player and returns to FOLLOW_PLAYER.
+# - VISUAL_AUDIT_FOCUS is legal only while runtime_state.visual_audit_mode is true;
+#   normal play must never use the visual-audit local-focus camera.
+# - F1 toggles debug overlay only; it must not reset camera mode or zoom.
+# - Wheel zoom updates viewer-local zoom targets only; it must not issue simulation
+#   commands or mutate authoritative simulation state.
+CAMERA_MODE_FOLLOW_PLAYER = "FOLLOW_PLAYER"
+CAMERA_MODE_FREE_PAN = "FREE_PAN"
+CAMERA_MODE_VISUAL_AUDIT_FOCUS = "VISUAL_AUDIT_FOCUS"
+CAMERA_MODES: tuple[str, ...] = (CAMERA_MODE_FOLLOW_PLAYER, CAMERA_MODE_FREE_PAN, CAMERA_MODE_VISUAL_AUDIT_FOCUS)
+
+
 @dataclass
 class LocalCameraCache:
     space_id: str | None = None
@@ -294,6 +309,14 @@ class LocalCameraCache:
     center: tuple[float, float] = (0.0, 0.0)
     zoom_scale: float = 1.0
     target_zoom_scale: float = 1.0
+    mode: str = CAMERA_MODE_FOLLOW_PLAYER
+    focus_reason: str = "follow_player"
+
+
+@dataclass
+class CameraPanState:
+    active: bool = False
+    last_pos: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -1364,6 +1387,94 @@ def _cached_camera_center_and_zoom(
         cache.center = center
         cache.zoom_scale = zoom_scale
         cache.target_zoom_scale = zoom_scale
+        cache.mode = CAMERA_MODE_FOLLOW_PLAYER
+        cache.focus_reason = "space_camera_initialized"
+    return cache.center, cache.zoom_scale
+
+
+def _active_space_camera_cache(
+    sim: Simulation,
+    viewport_rect: pygame.Rect,
+    caches_by_space_id: dict[str, LocalCameraCache],
+) -> LocalCameraCache:
+    player = sim.state.entities.get(PLAYER_ID)
+    active_space_id = _entity_space_id(player) if player is not None else "overworld"
+    if active_space_id is None:
+        active_space_id = "overworld"
+    cache = caches_by_space_id.get(active_space_id)
+    if cache is None:
+        cache = LocalCameraCache()
+        caches_by_space_id[active_space_id] = cache
+    _cached_camera_center_and_zoom(sim, viewport_rect, cache)
+    return cache
+
+
+def _set_camera_mode(cache: LocalCameraCache, mode: str, *, focus_reason: str) -> None:
+    if mode not in CAMERA_MODES:
+        raise ValueError(f"unknown camera mode: {mode}")
+    cache.mode = mode
+    cache.focus_reason = str(focus_reason)
+
+
+def _pan_camera_cache(cache: LocalCameraCache, pixel_delta: tuple[float, float]) -> None:
+    cache.center = (float(cache.center[0]) + float(pixel_delta[0]), float(cache.center[1]) + float(pixel_delta[1]))
+    _set_camera_mode(cache, CAMERA_MODE_FREE_PAN, focus_reason="middle_mouse_drag")
+
+
+def _follow_player_camera_center(
+    sim: Simulation,
+    viewport_rect: pygame.Rect,
+    *,
+    zoom_scale: float,
+) -> tuple[float, float] | None:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return None
+    return _camera_center_for_entity(player, viewport_rect, zoom_scale=zoom_scale)
+
+
+def _recenter_camera_on_player(sim: Simulation, viewport_rect: pygame.Rect, cache: LocalCameraCache) -> bool:
+    center = _follow_player_camera_center(sim, viewport_rect, zoom_scale=cache.zoom_scale)
+    if center is None:
+        return False
+    cache.center = center
+    _set_camera_mode(cache, CAMERA_MODE_FOLLOW_PLAYER, focus_reason="player_recenter")
+    return True
+
+
+def _update_camera_zoom_and_follow(
+    sim: Simulation,
+    viewport_rect: pygame.Rect,
+    cache: LocalCameraCache,
+    dt_seconds: float,
+    *,
+    visual_audit_mode: bool,
+) -> tuple[tuple[float, float], float]:
+    if visual_audit_mode:
+        return cache.center, cache.zoom_scale
+    prior_zoom = float(cache.zoom_scale)
+    next_zoom = _smooth_zoom_toward_target(prior_zoom, cache.target_zoom_scale, dt_seconds)
+    if abs(next_zoom - prior_zoom) > 1e-9:
+        if cache.mode == CAMERA_MODE_FOLLOW_PLAYER:
+            cache.zoom_scale = next_zoom
+            followed = _follow_player_camera_center(sim, viewport_rect, zoom_scale=next_zoom)
+            if followed is not None:
+                cache.center = followed
+                cache.focus_reason = "follow_player"
+        else:
+            cache.center = _camera_center_for_screen_anchor_zoom(
+                center=cache.center,
+                anchor_pos=(int(viewport_rect.centerx), int(viewport_rect.centery)),
+                from_zoom=prior_zoom,
+                to_zoom=next_zoom,
+            )
+            cache.zoom_scale = next_zoom
+            cache.focus_reason = "free_pan_viewport_anchor_zoom"
+    elif cache.mode == CAMERA_MODE_FOLLOW_PLAYER:
+        followed = _follow_player_camera_center(sim, viewport_rect, zoom_scale=cache.zoom_scale)
+        if followed is not None:
+            cache.center = followed
+            cache.focus_reason = "follow_player"
     return cache.center, cache.zoom_scale
 
 
@@ -1389,6 +1500,22 @@ def _smooth_zoom_toward_target(current_zoom: float, target_zoom: float, dt_secon
     return _clamp_zoom_scale(next_zoom)
 
 
+def _camera_center_for_screen_anchor_zoom(
+    *,
+    center: tuple[float, float],
+    anchor_pos: tuple[int, int],
+    from_zoom: float,
+    to_zoom: float,
+) -> tuple[float, float]:
+    if abs(float(to_zoom) - float(from_zoom)) <= 1e-9:
+        return center
+    world_x, world_y = _screen_to_world(anchor_pos, center, float(from_zoom))
+    return (
+        float(anchor_pos[0]) - (world_x * HEX_SIZE * float(to_zoom)),
+        float(anchor_pos[1]) - (world_y * HEX_SIZE * float(to_zoom)),
+    )
+
+
 def _camera_center_for_cursor_zoom(
     *,
     center: tuple[float, float],
@@ -1396,15 +1523,15 @@ def _camera_center_for_cursor_zoom(
     from_zoom: float,
     to_zoom: float,
 ) -> tuple[float, float]:
-    if abs(float(to_zoom) - float(from_zoom)) <= 1e-9:
-        return center
-    world_x, world_y = _screen_to_world(cursor_pos, center, float(from_zoom))
-    return (
-        float(cursor_pos[0]) - (world_x * HEX_SIZE * float(to_zoom)),
-        float(cursor_pos[1]) - (world_y * HEX_SIZE * float(to_zoom)),
-    )
+    return _camera_center_for_screen_anchor_zoom(center=center, anchor_pos=cursor_pos, from_zoom=from_zoom, to_zoom=to_zoom)
 
 
+# Canonical local/campaign object transform. Local floor/grid cells, player and
+# hostile markers, extraction/return markers, actor rings, local overlays, and
+# combat cue anchors must enter screen-space through this transform or through a
+# projection adapter/helper that delegates to it. Object labels are intentionally
+# screen-space offsets from already-transformed object anchors; HUD/debug panels
+# are screen-space UI and are not local object geometry.
 def _world_to_screen(
     world_xy: tuple[float, float],
     camera_center: tuple[float, float],
@@ -1814,6 +1941,19 @@ def _screen_position_dict(position: tuple[float, float]) -> dict[str, float]:
     return {"x": float(position[0]), "y": float(position[1])}
 
 
+def _is_hostile(sim: Simulation, source_entity_id: str, target_entity_id: str) -> bool:
+    target = sim.state.entities.get(target_entity_id)
+    if target is None:
+        return False
+    template_id = str(target.template_id or "")
+    if template_id in {"encounter_hostile_v1", "local_hostile_v1"}:
+        return True
+    stats = target.stats if isinstance(target.stats, dict) else {}
+    faction_id = stats.get("faction_id")
+    role = stats.get("role")
+    return str(faction_id) == "hostile" or str(role) == "hostile"
+
+
 def _camera_diagnostic_object_screens(
     sim: Simulation,
     *,
@@ -1850,6 +1990,34 @@ def _camera_diagnostic_object_screens(
             _world_to_screen((patrol_entity.position_x, patrol_entity.position_y), center, zoom_scale)
         )
         diagnostics["patrol_entity_id"] = patrol_entity.entity_id
+
+    hostile_entity: EntityState | None = None
+    if player is not None:
+        for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+            if entity.entity_id == PLAYER_ID or not _is_in_current_space(_entity_space_id(entity), current_space_id):
+                continue
+            if _is_hostile(sim, PLAYER_ID, entity.entity_id):
+                hostile_entity = entity
+                break
+    if hostile_entity is None:
+        diagnostics["local_hostile_screen_position"] = None
+    else:
+        diagnostics["local_hostile_screen_position"] = _screen_position_dict(
+            _world_to_screen((hostile_entity.position_x, hostile_entity.position_y), center, zoom_scale)
+        )
+        diagnostics["local_hostile_entity_id"] = hostile_entity.entity_id
+
+    extraction_screen_position = None
+    if player is not None and current_space_id is not None:
+        return_context = _get_return_context_for_space(sim, str(current_space_id))
+        if isinstance(return_context, dict):
+            exit_coord = return_context.get("return_exit_coord")
+            exit_xy = _coord_xy(sim, str(current_space_id), exit_coord) if isinstance(exit_coord, dict) else None
+            if isinstance(exit_xy, dict):
+                extraction_screen_position = _screen_position_dict(
+                    _world_to_screen((float(exit_xy["x"]), float(exit_xy["y"])), center, zoom_scale)
+                )
+    diagnostics["extraction_marker_screen_position"] = extraction_screen_position
     return diagnostics
 
 
@@ -4428,7 +4596,7 @@ def _draw_hud(
         lines.append(f"follow={follow_state.status} | debug data in inspector/debug panel")
     else:
         lines = lines[:1]
-        lines.append("hint: right-click move/interact | wheel zoom | F1 debug | F10 perf dump")
+        lines.append("hint: wheel zoom | middle-drag pan | C/Home follow | F1 debug | F10 perf")
 
     if status_message:
         lines.append(f"status: {status_message}")
@@ -5922,7 +6090,7 @@ def run_pygame_viewer(
         del recent_saves[RECENT_SAVES_LIMIT:]
 
     def load_simulation_from_path(path_value: str) -> bool:
-        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, campaign_move_state, campaign_path_edit_state, last_sent_move_vector, selected_site_id
+        nonlocal sim, context_menu, previous_snapshot, current_snapshot, last_tick_time, status_message, campaign_move_state, campaign_path_edit_state, last_sent_move_vector, selected_site_id, camera_caches_by_space_id, local_camera_cache, camera_pan_state
         try:
             sim = runtime_controller.load_simulation(path_value)
             previous_snapshot = extract_render_snapshot(sim)
@@ -5935,6 +6103,9 @@ def run_pygame_viewer(
             campaign_path_edit_state = None
             last_sent_move_vector = (0.0, 0.0)
             selected_site_id = None
+            camera_caches_by_space_id.clear()
+            local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+            camera_pan_state = CameraPanState()
             return True
         except Exception as exc:
             status_message = f"load failed: {exc}"
@@ -6283,7 +6454,9 @@ def run_pygame_viewer(
     viewport_rect = layout.world_view
     world_center = (float(viewport_rect.centerx), float(viewport_rect.centery))
     world_zoom_scale = 1.0
-    local_camera_cache = LocalCameraCache(center=world_center, zoom_scale=world_zoom_scale)
+    camera_caches_by_space_id: dict[str, LocalCameraCache] = {}
+    local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+    camera_pan_state = CameraPanState()
     panel_scroll = EncounterPanelScrollState()
     inspector_scroll = 0
     inspector_content_rect: pygame.Rect | None = None
@@ -6336,7 +6509,9 @@ def run_pygame_viewer(
                 screen = pygame_module.display.set_mode((event.w, event.h), pygame_module.RESIZABLE)
                 layout = _compute_viewer_layout(screen.get_size())
                 viewport_rect = layout.world_view
-                local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
+                camera_caches_by_space_id.clear()
+                local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+                camera_pan_state = CameraPanState()
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_ESCAPE:
                 if home_panel_state.visible:
                     home_panel_state.visible = False
@@ -6359,9 +6534,16 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F1:
                 runtime_state.show_debug_overlay = not runtime_state.show_debug_overlay
                 status_message = f"debug overlay {'on' if runtime_state.show_debug_overlay else 'off'}"
+            elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_c, pygame_module.K_HOME):
+                local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+                if _recenter_camera_on_player(sim, viewport_rect, local_camera_cache):
+                    status_message = "camera follow player"
+                else:
+                    status_message = "camera follow unavailable"
             elif event.type == pygame_module.MOUSEWHEEL:
                 if runtime_state.visual_audit_mode:
                     continue
+                local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
                 pre_zoom = float(local_camera_cache.target_zoom_scale)
                 target_zoom = _zoom_target_from_wheel(pre_zoom, int(getattr(event, "y", 0)))
                 if abs(target_zoom - pre_zoom) <= 1e-9:
@@ -6373,6 +6555,9 @@ def run_pygame_viewer(
                 previous_snapshot = extract_render_snapshot(sim)
                 current_snapshot = previous_snapshot
                 last_tick_time = pygame_module.time.get_ticks() / 1000.0
+                camera_caches_by_space_id.clear()
+                local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+                camera_pan_state = CameraPanState()
                 status_message = f"new simulation map={runtime_state.map_path} seed={sim.seed}"
                 last_sent_move_vector = (0.0, 0.0)
                 selected_site_id = None
@@ -6683,6 +6868,22 @@ def run_pygame_viewer(
                         rumor_panel_state.site_key_draft += event.unicode
                     else:
                         rumor_panel_state.group_id_draft += event.unicode
+            elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 2 and viewport_rect.collidepoint(event.pos):
+                local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+                _set_camera_mode(local_camera_cache, CAMERA_MODE_FREE_PAN, focus_reason="middle_mouse_drag_start")
+                camera_pan_state.active = True
+                camera_pan_state.last_pos = (int(event.pos[0]), int(event.pos[1]))
+                context_menu = None
+                status_message = "camera free pan"
+            elif event.type == pygame_module.MOUSEBUTTONUP and event.button == 2:
+                camera_pan_state.active = False
+                camera_pan_state.last_pos = None
+            elif event.type == pygame_module.MOUSEMOTION and camera_pan_state.active:
+                local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+                current_pos = (int(event.pos[0]), int(event.pos[1]))
+                previous_pos = camera_pan_state.last_pos or current_pos
+                _pan_camera_cache(local_camera_cache, (current_pos[0] - previous_pos[0], current_pos[1] - previous_pos[1]))
+                camera_pan_state.last_pos = current_pos
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 3:
                 context_menu = build_context_menu(event.pos)
             elif event.type == pygame_module.MOUSEBUTTONDOWN and event.button == 1 and context_menu is not None:
@@ -7138,7 +7339,8 @@ def run_pygame_viewer(
         if current_space_id != tracked_space_id:
             previous_space_id = tracked_space_id
             tracked_space_id = current_space_id
-            local_camera_cache = LocalCameraCache(center=(float(viewport_rect.centerx), float(viewport_rect.centery)), zoom_scale=1.0)
+            local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+            camera_pan_state = CameraPanState()
             previous_snapshot = current_snapshot
             transition_overlay_frames = TRANSITION_OVERLAY_FRAMES
             if str(previous_space_id).startswith("local_site:") and current_space_id == "overworld":
@@ -7147,13 +7349,15 @@ def run_pygame_viewer(
                 transition_overlay_title = "Entering Local Encounter"
             else:
                 transition_overlay_title = "Transition"
-        world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+        local_camera_cache = _active_space_camera_cache(sim, viewport_rect, camera_caches_by_space_id)
+        world_center, world_zoom_scale = _update_camera_zoom_and_follow(
+            sim,
+            viewport_rect,
+            local_camera_cache,
+            dt,
+            visual_audit_mode=runtime_state.visual_audit_mode,
+        )
         cursor_anchor_zoom_active = False
-        if not runtime_state.visual_audit_mode:
-            smoothed_zoom = _smooth_zoom_toward_target(world_zoom_scale, local_camera_cache.target_zoom_scale, dt)
-            if abs(smoothed_zoom - world_zoom_scale) > 1e-9:
-                world_zoom_scale = smoothed_zoom
-            local_camera_cache.zoom_scale = world_zoom_scale
         pre_focus_center = world_center
         pre_focus_zoom = world_zoom_scale
         player_view = not runtime_state.show_debug_overlay
@@ -7176,9 +7380,11 @@ def run_pygame_viewer(
             active_space = sim.state.world.spaces.get(player.space_id)
             sentinel_render_diag["active_space_role"] = str(getattr(active_space, "role", "")) if active_space is not None else None
         focused_camera = _audit_local_focus_camera(sim, viewport_rect) if (runtime_state.visual_audit_mode and player_view) else None
-        focus_reason = "cached_space_camera"
+        camera_mode = local_camera_cache.mode
+        focus_reason = local_camera_cache.focus_reason or "cached_space_camera"
         if focused_camera is not None:
             world_center, world_zoom_scale = focused_camera
+            camera_mode = CAMERA_MODE_VISUAL_AUDIT_FOCUS
             focus_reason = "visual_audit_local_focus"
         selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
         follow_center, follow_message = _apply_follow_selected_camera(
@@ -7222,6 +7428,8 @@ def run_pygame_viewer(
             "projection_id": projection_id,
             "transform_adapter": transform_adapter_id,
             "cursor_anchor_zoom_active": bool(cursor_anchor_zoom_active),
+            "free_pan_active": bool(camera_pan_state.active or camera_mode == CAMERA_MODE_FREE_PAN),
+            "camera_mode": camera_mode,
             "camera_mode_focus_reason": focus_reason,
             "focus_reason": focus_reason,
             "visual_audit_mode": bool(runtime_state.visual_audit_mode),
