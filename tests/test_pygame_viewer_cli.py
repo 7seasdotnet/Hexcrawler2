@@ -1288,6 +1288,48 @@ def test_perf_sentinel_sampling_does_not_reference_player_view_symbol() -> None:
     assert "K_F1" in source
 
 
+def test_zoom_target_from_wheel_is_directional_and_clamped() -> None:
+    base = 1.0
+    zoom_in = viewer_module._zoom_target_from_wheel(base, 1)
+    zoom_out = viewer_module._zoom_target_from_wheel(base, -1)
+    assert zoom_in > base
+    assert zoom_out < base
+    assert viewer_module._zoom_target_from_wheel(999.0, 1) == viewer_module.ZOOM_MAX_SCALE
+    assert viewer_module._zoom_target_from_wheel(0.0001, -1) == viewer_module.ZOOM_MIN_SCALE
+
+
+def test_smooth_zoom_moves_toward_target_without_overshoot() -> None:
+    current = 1.0
+    target = 2.0
+    next_zoom = viewer_module._smooth_zoom_toward_target(current, target, 1.0 / 60.0)
+    assert current < next_zoom < target
+    large_dt_zoom = viewer_module._smooth_zoom_toward_target(current, target, 10.0)
+    assert large_dt_zoom == target
+
+
+def test_cursor_zoom_reanchors_camera_without_simulation_mutation() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    input_log_before = list(sim.input_log)
+    world_before = world_hash(sim.state.world)
+    sim_before = simulation_hash(sim)
+    center_before = (240.0, 180.0)
+    center_after = viewer_module._camera_center_for_cursor_zoom(
+        center=center_before,
+        cursor_pos=(300, 180),
+        from_zoom=1.0,
+        to_zoom=1.5,
+    )
+    assert center_after != center_before
+    assert list(sim.input_log) == input_log_before
+    assert world_hash(sim.state.world) == world_before
+    assert simulation_hash(sim) == sim_before
+
+
+def test_hud_hint_contains_mouse_wheel_zoom() -> None:
+    source = inspect.getsource(viewer_module._draw_hud)
+    assert "wheel zoom" in source
+
+
 def test_dump_perf_report_with_records_sets_empty_reason_to_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
     sentinel = viewer_module.PerfSentinelState(enabled=True)

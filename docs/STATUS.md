@@ -1,3 +1,21 @@
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera or zoom or player_view or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py` (fails in this environment if `pygame` is not installed)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (fails in this environment if `pygame` is not installed)
+- `python play.py --visual-audit` (fails in this environment if `pygame` is not installed)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run the three `play.py` viewer commands on a machine with `pygame` installed and confirm mouse-wheel zoom remains stable through Greybridge approach/local transitions while perf sentinel records zoom diagnostics.
+
+## What changed in this commit
+- Added viewer-local smooth mouse-wheel zoom (target+current zoom, clamp bounds, smoothing) for normal play; zoom is non-authoritative camera math and does not touch simulation/input log/hash state.
+- Implemented cursor-anchored zoom re-centering and kept visual-audit framing isolated from normal runtime zoom behavior.
+- Extended camera diagnostics payload and compact player HUD hint (`wheel zoom | F1 debug | F10 perf dump`), plus focused pygame viewer tests for zoom behavior and non-mutation guarantees.
+
 ## What changed in this commit
 - Fixed player-facing HUD regression by restoring compact canonical line formats expected by gameplay HUD tests (`condition=...`, `melee_state=...`, compact `time ...`, inventory line), while keeping debug/projection diagnostics out of player view.
 - Added explicit player-facing campaign location line (`OUTSIDE Greybridge on campaign map`) for overworld HUD consistency, without reintroducing debug-heavy projection fields.
