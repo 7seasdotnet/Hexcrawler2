@@ -1476,6 +1476,26 @@ def test_normal_runtime_visual_audit_focus_camera_is_gated_to_visual_audit_mode(
     assert "_audit_local_focus_camera(sim, viewport_rect) if (runtime_state.visual_audit_mode and player_view) else None" in source
 
 
+def test_camera_diagnostics_include_follow_interpolation_fields() -> None:
+    source = inspect.getsource(viewer_module.run_pygame_viewer)
+
+    for field in (
+        '"camera_mode"',
+        '"camera_center"',
+        '"camera_target"',
+        '"camera_delta"',
+        '"camera_target_source"',
+        '"player_sim_position"',
+        '"player_render_position"',
+        '"player_screen_position"',
+        '"interpolation_alpha"',
+        '"ticks_advanced"',
+        '"camera_center_rounded"',
+    ):
+        assert field in source
+    assert 'camera_target_source if camera_mode == CAMERA_MODE_FOLLOW_PLAYER' in source
+
+
 def test_camera_diagnostics_include_reported_object_screen_positions() -> None:
     sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
     diagnostics = viewer_module._camera_diagnostic_object_screens(sim, center=(640.0, 360.0), zoom_scale=1.0)
@@ -3274,6 +3294,132 @@ def test_camera_gate2_follow_player_zoom_keeps_player_stable_without_top_left_dr
     assert simulation_hash(sim) == simulation_hash_before
 
 
+def test_follow_player_camera_target_uses_interpolated_render_position_not_raw_sim() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    cache = viewer_module._active_space_camera_cache(sim, viewport, {})
+    player = sim.state.entities[PLAYER_ID]
+    previous = {PLAYER_ID: viewer_module.RenderEntitySnapshot(x=1.0, y=1.0)}
+    current = {PLAYER_ID: viewer_module.RenderEntitySnapshot(x=3.0, y=1.0)}
+    player.position_x = 3.0
+    player.position_y = 1.0
+    cache.center = viewer_module._camera_center_for_world_position((1.0, 1.0), viewport, zoom_scale=1.0)
+    cache.zoom_scale = 1.0
+    cache.target_zoom_scale = 1.0
+    viewer_module._set_camera_mode(cache, viewer_module.CAMERA_MODE_FOLLOW_PLAYER, focus_reason="test_follow")
+
+    center_after, _zoom_after = viewer_module._update_camera_zoom_and_follow(
+        sim,
+        viewport,
+        cache,
+        10.0,
+        visual_audit_mode=False,
+        previous_snapshot=previous,
+        current_snapshot=current,
+        alpha=0.25,
+    )
+
+    interpolated_position = (1.5, 1.0)
+    assert cache.target_source == "interpolated_render_position"
+    assert cache.target_center == pytest.approx(
+        viewer_module._camera_center_for_world_position(interpolated_position, viewport, zoom_scale=1.0)
+    )
+    assert center_after == pytest.approx(cache.target_center)
+    assert center_after != pytest.approx(viewer_module._camera_center_for_entity(player, viewport, zoom_scale=1.0))
+
+
+def test_follow_player_render_frames_are_continuous_across_tick_boundary() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    player = sim.state.entities[PLAYER_ID]
+    previous = {PLAYER_ID: viewer_module.RenderEntitySnapshot(x=0.0, y=0.0)}
+    current = {PLAYER_ID: viewer_module.RenderEntitySnapshot(x=2.0, y=0.0)}
+    player.position_x = 2.0
+    player.position_y = 0.0
+    cache = viewer_module.LocalCameraCache(
+        center=viewer_module._camera_center_for_world_position((0.0, 0.0), viewport, zoom_scale=1.0),
+        zoom_scale=1.0,
+        target_zoom_scale=1.0,
+        mode=viewer_module.CAMERA_MODE_FOLLOW_PLAYER,
+    )
+
+    centers: list[tuple[float, float]] = []
+    player_screen_x: list[float] = []
+    for alpha in (0.0, 0.2, 0.4, 0.0, 0.2, 0.4):
+        # The repeated 0.0 represents the render frame immediately after a fixed tick advances.
+        center, zoom = viewer_module._update_camera_zoom_and_follow(
+            sim,
+            viewport,
+            cache,
+            1.0 / 60.0,
+            visual_audit_mode=False,
+            previous_snapshot=previous,
+            current_snapshot=current,
+            alpha=alpha,
+        )
+        render_pos = viewer_module.get_entity_render_position(PLAYER_ID, previous, current, alpha)
+        assert render_pos is not None
+        centers.append(center)
+        player_screen_x.append(viewer_module._world_to_screen(render_pos, center, zoom)[0])
+
+    deltas = [abs(centers[index + 1][0] - centers[index][0]) for index in range(len(centers) - 1)]
+    assert max(deltas) < viewer_module.HEX_SIZE * 2.0
+    assert max(abs(player_screen_x[index + 1] - player_screen_x[index]) for index in range(len(player_screen_x) - 1)) < 42.0
+
+
+def test_camera_interpolation_state_is_viewer_local_and_free_pan_visual_audit_unchanged() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    viewport = _Gate2Viewport(0, 0, 800, 600)
+    cache = viewer_module._active_space_camera_cache(sim, viewport, {})
+    previous = viewer_module.extract_render_snapshot(sim)
+    player = sim.state.entities[PLAYER_ID]
+    current = {**previous, PLAYER_ID: viewer_module.RenderEntitySnapshot(x=player.position_x + 2.0, y=player.position_y)}
+    input_log_before = list(sim.input_log)
+    world_hash_before = world_hash(sim.state.world)
+    simulation_hash_before = simulation_hash(sim)
+
+    viewer_module._update_camera_zoom_and_follow(
+        sim,
+        viewport,
+        cache,
+        1.0 / 60.0,
+        visual_audit_mode=False,
+        previous_snapshot=previous,
+        current_snapshot=current,
+        alpha=0.5,
+    )
+    center_after_follow = cache.center
+    viewer_module._set_camera_mode(cache, viewer_module.CAMERA_MODE_FREE_PAN, focus_reason="test_free_pan")
+    viewer_module._update_camera_zoom_and_follow(
+        sim,
+        viewport,
+        cache,
+        1.0 / 60.0,
+        visual_audit_mode=False,
+        previous_snapshot=previous,
+        current_snapshot=current,
+        alpha=1.0,
+    )
+    assert cache.center == pytest.approx(center_after_follow)
+    visual_audit_center = cache.center
+    viewer_module._set_camera_mode(cache, viewer_module.CAMERA_MODE_FOLLOW_PLAYER, focus_reason="test_follow")
+    viewer_module._update_camera_zoom_and_follow(
+        sim,
+        viewport,
+        cache,
+        1.0,
+        visual_audit_mode=True,
+        previous_snapshot=previous,
+        current_snapshot=current,
+        alpha=1.0,
+    )
+
+    assert cache.center == pytest.approx(visual_audit_center)
+    assert list(sim.input_log) == input_log_before
+    assert world_hash(sim.state.world) == world_hash_before
+    assert simulation_hash(sim) == simulation_hash_before
+
+
 def test_camera_gate2_normal_runtime_does_not_use_visual_audit_focus_or_cursor_recenter() -> None:
     source = inspect.getsource(viewer_module.run_pygame_viewer)
 
@@ -3317,7 +3463,8 @@ def test_camera_gate2_follow_recenters_with_c_or_home_semantics_and_f1_is_camera
     assert viewer_module._recenter_camera_on_player(sim, viewport, cache)
 
     assert cache.mode == viewer_module.CAMERA_MODE_FOLLOW_PLAYER
-    assert cache.center == pytest.approx(viewer_module._camera_center_for_entity(sim.state.entities[PLAYER_ID], viewport, zoom_scale=1.6))
+    assert cache.center == pytest.approx((-200.0, -100.0))
+    assert cache.target_center == pytest.approx(viewer_module._camera_center_for_entity(sim.state.entities[PLAYER_ID], viewport, zoom_scale=1.6))
 
 
 def test_camera_gate2_local_cache_initializes_once_and_visual_audit_focus_is_opt_in() -> None:

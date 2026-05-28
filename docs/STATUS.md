@@ -1,6 +1,9 @@
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
-- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera_gate2 or zoom_target_from_wheel or smooth_zoom or camera_transform_round_trip or zoom_ratio_scales_pairwise or reported_campaign_zoom_fixture or terrain_sites_entities_and_labels or camera_diagnostics_include"`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera_gate2 or follow_player_camera_target or follow_player_render_frames or camera_interpolation_state or zoom_target_from_wheel or smooth_zoom or camera_transform_round_trip or zoom_ratio_scales_pairwise or reported_campaign_zoom_fixture or terrain_sites_entities_and_labels or camera_diagnostics_include"`
+- `PYTHONPATH=src pytest -q tests/test_render_interpolation.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py` (blocked in this container for pygame-import tests: `ModuleNotFoundError: No module named 'pygame'`)
 - `python -m pip install -r requirements.txt` (blocked in this container by package-index tunnel `403 Forbidden` for `pygame`)
 - `python play.py` (manual verification required on a machine with `pygame`; blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
@@ -9,37 +12,38 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run the pygame-dependent manual camera checks on a workstation with `pygame` installed: verify campaign zoom remains stable; enter a local encounter and verify wheel zoom no longer drifts top-left; middle-drag pans; C/Home follows; F1 preserves camera state; F10 writes camera diagnostics; then run `python play.py --visual-audit`. `cue_rendered_false` remains the next separate visual-audit blocker.
+- **Next action:** Run the pygame-dependent manual camera checks on a workstation with `pygame` installed: verify `python play.py` renders normally; FOLLOW_PLAYER movement is smooth instead of fixed-tick-jumpy; zoom while following remains stable; middle-drag FREE_PAN remains manual; C/Home returns to FOLLOW_PLAYER without an immediate snap; F1 preserves camera state; F10 writes perf samples with the new interpolation camera diagnostics; then verify `python play.py --visual-audit` still runs. `cue_rendered_false` remains the next separate visual-audit blocker.
 
 ## What exists (folders/entry points)
 - Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
-- Camera state and transforms are viewer-local in `src/hexcrawler/cli/pygame_viewer.py`; regression tests live in `tests/test_pygame_viewer_cli.py`.
+- Viewer-local camera state, render snapshots, interpolation helpers, camera transforms, and F10 diagnostics are in `src/hexcrawler/cli/pygame_viewer.py`; regression tests live in `tests/test_pygame_viewer_cli.py` and `tests/test_render_interpolation.py`.
 - Visual audit, campaign danger, local hostile behavior, and local encounter return tests remain in `tests/test_visual_audit.py`, `tests/test_campaign_danger_contact_slice.py`, `tests/test_local_hostile_behavior_slice.py`, and `tests/test_local_encounter_return.py`.
 
 ## Runtime camera-mode rules
-- Normal play starts in `FOLLOW_PLAYER`; middle mouse drag switches to `FREE_PAN`; C/Home recenters on the player and returns to `FOLLOW_PLAYER`.
+- Normal play starts in `FOLLOW_PLAYER`; middle mouse drag switches to `FREE_PAN`; C/Home recenters by returning to `FOLLOW_PLAYER` and setting a viewer-local follow target instead of mutating simulation state.
 - `VISUAL_AUDIT_FOCUS` is legal only when `runtime_state.visual_audit_mode` is true; normal play must never use visual-audit local focus.
-- F1 toggles debug overlay only and must not reset camera mode or zoom; wheel zoom changes viewer-local zoom targets only and must not issue commands or mutate simulation state.
+- F1 toggles debug overlay only and must not reset camera mode, smoothing, or zoom; wheel zoom changes viewer-local zoom targets only and must not issue commands or mutate simulation state.
 
 ## Local runtime draw-path audit
 - Canonical object transform: `_world_to_screen` / projection adapters that delegate to it.
 - Confirmed routed through the canonical transform: local floor/grid, local player marker, local hostile marker, extraction/return marker, local object labels as offsets from transformed anchors, local arena overlays, actor/selection rings, and local combat cue anchors.
+- FOLLOW_PLAYER camera targets now use the same viewer-local interpolated render position as actor drawing; authoritative simulation positions remain authoritative and hash-covered, while interpolation/camera state remains viewer-local.
 - HUD/debug panels remain intentionally screen-space. Live pygame verification is still required because this container cannot import `pygame`.
 
 ## Manual verification checklist (pygame workstation required)
-- Run `python play.py`.
-- Campaign zoom: Greybridge, Old Stair, patrols, and terrain stay glued together.
-- Local zoom: no top-left drift.
-- Middle-drag pan works.
-- C/Home recenters and follows player.
+- Run `python play.py` and confirm it renders normally.
+- FOLLOW_PLAYER movement: centered camera follows smoothly instead of fixed-tick jumping.
+- Zoom while following: no jitter and no top-left drift.
+- Middle-drag pan works and stays in `FREE_PAN`.
+- C/Home returns to `FOLLOW_PLAYER` and recenters smoothly.
 - F1 does not reset or destabilize camera.
-- F10 still writes perf samples.
-- Run `python play.py --visual-audit`; known next blocker remains `first_attack: cue_rendered_false` and `combat_result: cue_rendered_false`.
+- F10 still writes perf samples with camera interpolation diagnostics.
+- Run `python play.py --visual-audit` and confirm it still runs; known next blocker remains `first_attack: cue_rendered_false` and `combat_result: cue_rendered_false`.
 
 ## What changed in this commit
-- Added explicit viewer-local camera modes (`FOLLOW_PLAYER`, `FREE_PAN`, `VISUAL_AUDIT_FOCUS`), per-space camera caches, C/Home player follow recentering, and middle-mouse drag free pan without simulation commands or canonical save/hash participation.
-- Fixed local zoom drift by anchoring free-pan zoom around the viewport center and reapplying follow-player center only in follow mode; normal play no longer enters the visual-audit local-focus camera.
-- Extended F10 camera diagnostics and tests for camera modes, non-authoritative pan/zoom, normal-runtime drift prevention, local draw-path transform coherence, F1 camera neutrality, C/Home follow semantics, and visual-audit focus gating.
+- Fixed FOLLOW_PLAYER jitter by adding a viewer-local `get_entity_render_position` helper and targeting the follow camera from the same interpolated player presentation position used by entity rendering.
+- Kept camera center/target as floats, added dt-based exponential camera smoothing, and expanded F10 diagnostics with camera mode/center/target/delta, target source, sim/render/player screen positions, rounded-state, ticks, and interpolation alpha.
+- Added regression coverage for interpolated target source, render-frame continuity across tick boundaries, viewer-local hash/input-log isolation, FREE_PAN stability, F1/C/Home semantics, diagnostics fields, and visual-audit gating; FREE_PAN still does not follow the player and visual_audit_mode does not affect normal FOLLOW_PLAYER/FREE_PAN.
 
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
