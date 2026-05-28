@@ -1262,6 +1262,24 @@ def test_record_perf_sample_includes_frame_pacing_config(monkeypatch: pytest.Mon
     assert pacing["render_coupled_to_sim_tick"] is False
 
 
+def test_record_perf_sample_includes_camera_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    monkeypatch.setattr(viewer_module, "_sample_memory_rss_kb", lambda: (None, "unavailable"))
+    camera_diag = {"camera_mode_focus_reason": "cached_space_camera", "zoom_delta_per_frame": 0.0}
+    viewer_module._record_perf_sample(
+        sentinel,
+        sim=sim,
+        frame_ms=16.0,
+        tick_ms=0.0,
+        ticks_advanced=0,
+        debug_rows_rendered=0,
+        debug_panel_active=False,
+        camera_diag=camera_diag,
+    )
+    assert sentinel.records[0]["camera_diagnostics"] == camera_diag
+
+
 def test_perf_sentinel_sampling_does_not_reference_player_view_symbol() -> None:
     source = inspect.getsource(viewer_module.run_pygame_viewer)
 
@@ -2075,6 +2093,7 @@ def test_runtime_state_defaults_to_player_view_debug_hidden() -> None:
         current_save_path="saves/test.json",
     )
     assert state.show_debug_overlay is False
+    assert state.visual_audit_mode is False
 
 
 def test_combat_presentation_cues_are_bounded_and_viewer_local() -> None:

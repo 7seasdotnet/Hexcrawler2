@@ -585,3 +585,21 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 # Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
 - **Next action:** Validate `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` on a pygame-enabled Windows machine and press `F10` to confirm `lag_capture_metrics.json` always writes with either sampled records or explicit `empty_records_reason`.
+
+# What changed in this commit
+- Fixed Greybridge normal-play camera jitter by preventing visual-audit-only local focus camera override from running in regular player view; local focus now applies only when `visual_audit_mode=True`.
+- Added per-sample camera/motion diagnostics to perf sentinel records (`camera_diagnostics`) including space role/id, camera center/target deltas, zoom target deltas, player positions, focus reason, interpolation/tick info, and clamp/hysteresis metadata.
+- Marked visual-audit runtime construction with `visual_audit_mode=True` so audit framing remains available without leaking into normal play camera behavior.
+
+# Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera or player_view or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py`
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50`
+- `python play.py --visual-audit`
+
+# Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Re-run live pygame playthrough into Greybridge with perf sentinel enabled and verify camera diagnostics remain stable (no camera/zoom target oscillation) while visual audit may still report `cue_rendered_false` until combat cue visibility work is addressed.

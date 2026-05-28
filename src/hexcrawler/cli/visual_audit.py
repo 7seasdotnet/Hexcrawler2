@@ -264,7 +264,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
     sim=_build_viewer_simulation(map_path,runtime_profile=CORE_PLAYABLE)
     initial_world_hash=world_hash(sim.state.world); initial_sim_hash=simulation_hash(sim)
     pg=_ensure_pygame_imported(); pg.init(); screen=pg.Surface((1440,900))
-    runtime_state=ViewerRuntimeState(sim=sim,map_path=map_path,with_encounters=False,current_save_path="")
+    runtime_state=ViewerRuntimeState(sim=sim,map_path=map_path,with_encounters=False,current_save_path="", visual_audit_mode=True)
     beats=[]; blockers=[]
     local_entered=False
 

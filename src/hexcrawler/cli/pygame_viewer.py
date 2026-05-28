@@ -587,6 +587,7 @@ class ViewerRuntimeState:
     audit_cue_phase_override: str | None = None
     last_combat_cue_render_diagnostics: dict[str, Any] = field(default_factory=dict)
     combat_cue_event_trace_cursor: int = 0
+    visual_audit_mode: bool = False
 
 
 @dataclass(frozen=True)
@@ -2834,6 +2835,7 @@ def _record_perf_sample(
     observed_fps: float | None = None,
     frame_cap_near_20fps: bool | None = None,
     render_coupled_to_sim_tick: bool | None = None,
+    camera_diag: dict[str, Any] | None = None,
 ) -> None:
     if not sentinel.enabled:
         sentinel.last_sample_failure_reason = "perf_sentinel_disabled"
@@ -2890,6 +2892,7 @@ def _record_perf_sample(
             "frame_cap_near_20fps": bool(frame_cap_near_20fps) if frame_cap_near_20fps is not None else False,
             "render_coupled_to_sim_tick": bool(render_coupled_to_sim_tick) if render_coupled_to_sim_tick is not None else False,
         },
+        "camera_diagnostics": camera_diag if isinstance(camera_diag, dict) else {},
     }
     sentinel.records.append(sample)
     sentinel.last_sample_failure_reason = None
@@ -6991,6 +6994,8 @@ def run_pygame_viewer(
             else:
                 transition_overlay_title = "Transition"
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+        pre_focus_center = world_center
+        pre_focus_zoom = world_zoom_scale
         player_view = not runtime_state.show_debug_overlay
         sentinel_render_diag: dict[str, Any] = {
             "draw_path_entered": False,
@@ -7010,9 +7015,11 @@ def run_pygame_viewer(
             sentinel_render_diag["player_position"] = {"x": float(player.position_x), "y": float(player.position_y)}
             active_space = sim.state.world.spaces.get(player.space_id)
             sentinel_render_diag["active_space_role"] = str(getattr(active_space, "role", "")) if active_space is not None else None
-        focused_camera = _audit_local_focus_camera(sim, viewport_rect) if player_view else None
+        focused_camera = _audit_local_focus_camera(sim, viewport_rect) if (runtime_state.visual_audit_mode and player_view) else None
+        focus_reason = "cached_space_camera"
         if focused_camera is not None:
             world_center, world_zoom_scale = focused_camera
+            focus_reason = "visual_audit_local_focus"
         selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
         follow_center, follow_message = _apply_follow_selected_camera(
             sim,
@@ -7024,8 +7031,36 @@ def run_pygame_viewer(
         if follow_center is not None:
             world_center = follow_center
             local_camera_cache.center = follow_center
+            focus_reason = "follow_selected"
         if follow_message is not None:
             status_message = follow_message
+        player_screen_position: dict[str, float] | None = None
+        if player is not None:
+            player_px, player_py = _world_to_pixel(player.position_x, player.position_y, world_center, world_zoom_scale)
+            player_screen_position = {"x": float(player_px), "y": float(player_py)}
+        camera_diag = {
+            "active_space_id": current_space_id,
+            "active_space_role": sentinel_render_diag.get("active_space_role"),
+            "player_entity_id": PLAYER_ID if player is not None else None,
+            "player_simulation_position": sentinel_render_diag.get("player_position"),
+            "player_interpolated_position": sentinel_render_diag.get("player_position"),
+            "player_screen_position": player_screen_position,
+            "camera_center_current": {"x": float(world_center[0]), "y": float(world_center[1])},
+            "camera_target": {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])},
+            "camera_delta_per_frame": {"x": float(world_center[0] - pre_focus_center[0]), "y": float(world_center[1] - pre_focus_center[1])},
+            "camera_zoom_current": float(world_zoom_scale),
+            "camera_zoom_target": float(local_camera_cache.zoom_scale),
+            "zoom_delta_per_frame": float(world_zoom_scale - pre_focus_zoom),
+            "camera_mode_focus_reason": focus_reason,
+            "player_view": bool(player_view),
+            "debug_overlay": bool(runtime_state.show_debug_overlay),
+            "interpolation_alpha": float(alpha),
+            "ticks_advanced": int(ticks_advanced),
+            "camera_target_changed_this_frame": bool(abs(local_camera_cache.center[0] - pre_focus_center[0]) > 1e-9 or abs(local_camera_cache.center[1] - pre_focus_center[1]) > 1e-9),
+            "zoom_target_changed_this_frame": bool(abs(local_camera_cache.zoom_scale - pre_focus_zoom) > 1e-9),
+            "camera_position_rounded_before_transform": False,
+            "camera_clamp_hysteresis_state": {"local_cache_space_id": local_camera_cache.space_id, "visual_audit_mode": bool(runtime_state.visual_audit_mode)},
+        }
 
         hover_message: str | None = None
         mouse_pos = pygame_module.mouse.get_pos()
@@ -7177,6 +7212,7 @@ def run_pygame_viewer(
             observed_fps=(1000.0 / (float(dt) * 1000.0)) if dt > 0 else None,
             frame_cap_near_20fps=(target_fps <= 20),
             render_coupled_to_sim_tick=False,
+            camera_diag=camera_diag,
         )
         if perf_sentinel_state.enabled:
             if (float(dt) * 1000.0) >= perf_sentinel_state.lag_frame_ms:
