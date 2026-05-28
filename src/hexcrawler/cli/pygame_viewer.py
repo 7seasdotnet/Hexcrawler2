@@ -1368,6 +1368,45 @@ def _topology_params_signature(active_space: Any) -> str | None:
     return json.dumps(params, sort_keys=True)
 
 
+def _local_exit_coord_world_position_for_diagnostics(
+    sim: Simulation,
+    space_id: str,
+    coord: Any,
+) -> tuple[tuple[float, float] | None, str | None]:
+    """Best-effort viewer-only conversion for local extraction marker diagnostics.
+
+    The return marker renderer slots square-grid cell markers through
+    ``_marker_cell_center``; this helper mirrors that render-local contract by
+    using ``square_grid_cell_to_world_xy`` before the normal camera transform.
+    It never mutates authoritative simulation state and never serializes camera
+    or diagnostic state.
+    """
+
+    if not isinstance(coord, dict):
+        return None, "missing_or_non_object_return_exit_coord"
+    sim_state = getattr(sim, "state", None)
+    world = getattr(sim_state, "world", None)
+    spaces = getattr(world, "spaces", None)
+    active_space = spaces.get(space_id) if isinstance(spaces, dict) else None
+    if active_space is None:
+        return None, "unknown_return_exit_space"
+    if str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
+        return None, "return_exit_space_not_local_role"
+    if getattr(active_space, "topology_type", None) != SQUARE_GRID_TOPOLOGY:
+        return None, "return_exit_space_not_square_grid"
+    try:
+        cell = {"x": int(coord.get("x")), "y": int(coord.get("y"))}
+    except (TypeError, ValueError):
+        return None, "return_exit_coord_not_integer_cell"
+    try:
+        if hasattr(active_space, "is_valid_cell") and not active_space.is_valid_cell(cell):
+            return None, "return_exit_coord_outside_space"
+    except Exception:
+        return None, "return_exit_coord_validation_failed"
+    try:
+        return square_grid_cell_to_world_xy(cell["x"], cell["y"]), None
+    except Exception:
+        return None, "return_exit_coord_conversion_failed"
 
 
 def _audit_local_focus_camera(sim: Simulation, viewport_rect: pygame.Rect) -> tuple[tuple[float, float], float] | None:
@@ -1387,9 +1426,9 @@ def _audit_local_focus_camera(sim: Simulation, viewport_rect: pygame.Rect) -> tu
     return_context = _get_return_context_for_space(sim, player.space_id)
     if isinstance(return_context, dict):
         exit_coord = return_context.get("return_exit_coord")
-        exit_xy = _coord_xy(sim, player.space_id, exit_coord) if isinstance(exit_coord, dict) else None
-        if isinstance(exit_xy, dict):
-            points.append((float(exit_xy["x"]), float(exit_xy["y"])))
+        exit_xy, _exit_reason = _local_exit_coord_world_position_for_diagnostics(sim, player.space_id, exit_coord)
+        if exit_xy is not None:
+            points.append((float(exit_xy[0]), float(exit_xy[1])))
     min_x=min(x for x,_ in points); max_x=max(x for x,_ in points)
     min_y=min(y for _,y in points); max_y=max(y for _,y in points)
     span_x=max(3.0, (max_x-min_x)+3.5)
@@ -2062,66 +2101,114 @@ def _camera_diagnostic_object_screens(
     center: tuple[float, float],
     zoom_scale: float,
 ) -> dict[str, Any]:
-    diagnostics: dict[str, Any] = {}
+    """Best-effort viewer diagnostics for notable object screen positions.
+
+    Diagnostics are optional render/runtime observability. They must never
+    mutate authoritative simulation state and must never be able to crash normal
+    play if a marker, space, site, or coordinate is missing or malformed.
+    """
+
+    diagnostics: dict[str, Any] = {
+        "greybridge_screen_position": None,
+        "old_stair_screen_position": None,
+        "patrol_screen_position": None,
+        "local_hostile_screen_position": None,
+        "extraction_marker_screen_position": None,
+        "extraction_marker_failure_reason": None,
+    }
+    failure_reasons: list[str] = []
+
+    def note_failure(reason: str) -> None:
+        failure_reasons.append(reason)
+
     for diagnostic_key, site_id in (("greybridge_screen_position", "home_greybridge"), ("old_stair_screen_position", "demo_dungeon_entrance")):
-        site = sim.state.world.sites.get(site_id)
-        if site is None:
-            diagnostics[diagnostic_key] = None
-            continue
-        world_position, _anchor_source = _site_world_position(site)
-        if world_position is None:
-            diagnostics[diagnostic_key] = None
-            continue
-        diagnostics[diagnostic_key] = _screen_position_dict(_world_to_screen(world_position, center, zoom_scale))
-
-    player = sim.state.entities.get(PLAYER_ID)
-    current_space_id = _entity_space_id(player) if player is not None else "overworld"
-    patrol_entity: EntityState | None = None
-    for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
-        if entity.entity_id == PLAYER_ID:
-            continue
-        if not _is_in_current_space(_entity_space_id(entity), current_space_id):
-            continue
-        if str(entity.template_id or "") == "campaign_danger_patrol" or "patrol" in entity.entity_id:
-            patrol_entity = entity
-            break
-    if patrol_entity is None:
-        diagnostics["patrol_screen_position"] = None
-    else:
-        diagnostics["patrol_screen_position"] = _screen_position_dict(
-            _world_to_screen((patrol_entity.position_x, patrol_entity.position_y), center, zoom_scale)
-        )
-        diagnostics["patrol_entity_id"] = patrol_entity.entity_id
-
-    hostile_entity: EntityState | None = None
-    if player is not None:
-        for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
-            if entity.entity_id == PLAYER_ID or not _is_in_current_space(_entity_space_id(entity), current_space_id):
+        try:
+            site = sim.state.world.sites.get(site_id)
+            if site is None:
+                note_failure(f"{site_id}:site_missing")
                 continue
-            if _is_hostile(sim, PLAYER_ID, entity.entity_id):
-                hostile_entity = entity
+            world_position, _anchor_source = _site_world_position(site)
+            if world_position is None:
+                note_failure(f"{site_id}:world_position_unknown")
+                continue
+            diagnostics[diagnostic_key] = _screen_position_dict(_world_to_screen(world_position, center, zoom_scale))
+        except Exception as exc:
+            note_failure(f"{site_id}:diagnostic_failed:{type(exc).__name__}")
+
+    try:
+        player = sim.state.entities.get(PLAYER_ID)
+    except Exception as exc:
+        player = None
+        note_failure(f"player_lookup_failed:{type(exc).__name__}")
+    try:
+        current_space_id = _entity_space_id(player) if player is not None else "overworld"
+    except Exception as exc:
+        current_space_id = "overworld"
+        note_failure(f"active_space_lookup_failed:{type(exc).__name__}")
+
+    try:
+        patrol_entity: EntityState | None = None
+        for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+            if entity.entity_id == PLAYER_ID:
+                continue
+            if not _is_in_current_space(_entity_space_id(entity), current_space_id):
+                continue
+            if str(entity.template_id or "") == "campaign_danger_patrol" or "patrol" in entity.entity_id:
+                patrol_entity = entity
                 break
-    if hostile_entity is None:
-        diagnostics["local_hostile_screen_position"] = None
-    else:
-        diagnostics["local_hostile_screen_position"] = _screen_position_dict(
-            _world_to_screen((hostile_entity.position_x, hostile_entity.position_y), center, zoom_scale)
-        )
-        diagnostics["local_hostile_entity_id"] = hostile_entity.entity_id
+        if patrol_entity is None:
+            note_failure("patrol:not_found")
+        else:
+            diagnostics["patrol_screen_position"] = _screen_position_dict(
+                _world_to_screen((patrol_entity.position_x, patrol_entity.position_y), center, zoom_scale)
+            )
+            diagnostics["patrol_entity_id"] = patrol_entity.entity_id
+    except Exception as exc:
+        note_failure(f"patrol:diagnostic_failed:{type(exc).__name__}")
 
-    extraction_screen_position = None
-    if player is not None and current_space_id is not None:
-        return_context = _get_return_context_for_space(sim, str(current_space_id))
-        if isinstance(return_context, dict):
-            exit_coord = return_context.get("return_exit_coord")
-            exit_xy = _coord_xy(sim, str(current_space_id), exit_coord) if isinstance(exit_coord, dict) else None
-            if isinstance(exit_xy, dict):
-                extraction_screen_position = _screen_position_dict(
-                    _world_to_screen((float(exit_xy["x"]), float(exit_xy["y"])), center, zoom_scale)
-                )
-    diagnostics["extraction_marker_screen_position"] = extraction_screen_position
+    try:
+        hostile_entity: EntityState | None = None
+        if player is not None:
+            for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+                if entity.entity_id == PLAYER_ID or not _is_in_current_space(_entity_space_id(entity), current_space_id):
+                    continue
+                if _is_hostile(sim, PLAYER_ID, entity.entity_id):
+                    hostile_entity = entity
+                    break
+        if hostile_entity is None:
+            note_failure("local_hostile:not_found")
+        else:
+            diagnostics["local_hostile_screen_position"] = _screen_position_dict(
+                _world_to_screen((hostile_entity.position_x, hostile_entity.position_y), center, zoom_scale)
+            )
+            diagnostics["local_hostile_entity_id"] = hostile_entity.entity_id
+    except Exception as exc:
+        note_failure(f"local_hostile:diagnostic_failed:{type(exc).__name__}")
+
+    try:
+        if player is not None and current_space_id is not None:
+            return_context = _get_return_context_for_space(sim, str(current_space_id))
+            if isinstance(return_context, dict):
+                exit_coord = return_context.get("return_exit_coord")
+                exit_xy, exit_reason = _local_exit_coord_world_position_for_diagnostics(sim, str(current_space_id), exit_coord)
+                if exit_xy is not None:
+                    diagnostics["extraction_marker_screen_position"] = _screen_position_dict(_world_to_screen(exit_xy, center, zoom_scale))
+                else:
+                    diagnostics["extraction_marker_failure_reason"] = exit_reason
+                    if exit_reason is not None:
+                        note_failure(f"extraction_marker:{exit_reason}")
+            else:
+                diagnostics["extraction_marker_failure_reason"] = "no_active_return_context"
+                note_failure("extraction_marker:no_active_return_context")
+        else:
+            diagnostics["extraction_marker_failure_reason"] = "player_or_space_missing"
+            note_failure("extraction_marker:player_or_space_missing")
+    except Exception as exc:
+        diagnostics["extraction_marker_failure_reason"] = f"diagnostic_failed:{type(exc).__name__}"
+        note_failure(f"extraction_marker:diagnostic_failed:{type(exc).__name__}")
+
+    diagnostics["camera_diagnostic_failure_reasons"] = failure_reasons
     return diagnostics
-
 
 def _major_site_visibility_diagnostic_rows(
     sim: Simulation,
