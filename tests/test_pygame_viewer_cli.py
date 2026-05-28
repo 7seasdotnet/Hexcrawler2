@@ -76,6 +76,7 @@ from hexcrawler.cli.pygame_viewer import (
     _supported_viewer_topology,
     _viewer_topology_diagnostic,
     _world_marker_placements,
+    render_viewer_frame_to_surface,
 )
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE
 from hexcrawler.sim.core import EntityState, SimCommand
@@ -2076,6 +2077,29 @@ def test_combat_presentation_cues_do_not_mutate_hash_or_input_log() -> None:
     assert simulation_hash(sim) == sim_hash_before
     assert world_hash(sim.state.world) == world_hash_before
     assert list(sim.input_log) == input_log_before
+
+
+def test_combat_presentation_render_reports_phase_override_and_rendered_rows() -> None:
+    pytest.importorskip("pygame")
+    viewer_module._ensure_pygame_imported()
+    viewer_module.pygame.font.init()
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    target = EntityState(entity_id="hostile:render", position_x=1.0, position_y=0.0, space_id=player.space_id)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    sim.schedule_event_at(sim.state.tick, "combat_outcome", {"tick": sim.state.tick, "attacker_id": PLAYER_ID, "target_id": target.entity_id, "reason": "resolved", "applied": True})
+    sim.advance_ticks(1)
+    screen = viewer_module.pygame.Surface((1024, 768))
+    meta_first = render_viewer_frame_to_surface(screen=screen, sim=sim, runtime_state=state, status_message="audit", player_view=True, combat_cue_phase_override="windup")
+    meta_result = render_viewer_frame_to_surface(screen=screen, sim=sim, runtime_state=state, status_message="audit", player_view=True, combat_cue_phase_override="impact")
+    first_diag = meta_first["combat_cue_diagnostics"]
+    result_diag = meta_result["combat_cue_diagnostics"]
+    assert first_diag["phase_override"] == "windup"
+    assert result_diag["phase_override"] == "impact"
+    assert first_diag["cue_count"] >= 1
+    assert result_diag["cue_count"] >= 1
+    assert any(row.get("rendered") is True for row in result_diag.get("rendered_cues", []))
 
 
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:

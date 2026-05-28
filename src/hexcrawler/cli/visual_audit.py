@@ -235,7 +235,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         row = control.get(PLAYER_ID) if isinstance(control, dict) else None
         return str(row.get("state", "none")) if isinstance(row, dict) else "none"
 
-    def capture(name: str, status: str, reason: str = "", issued_command: str | None = None, extra: dict[str, Any] | None = None) -> None:
+    def capture(name: str, status: str, reason: str = "", issued_command: str | None = None, extra: dict[str, Any] | None = None, cue_phase_override: str | None = None) -> None:
         i=len(beats)
         render_meta=render_viewer_frame_to_surface(
             screen=screen,
@@ -243,6 +243,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             runtime_state=runtime_state,
             status_message=f"audit beat: {name}",
             player_view=True,
+            combat_cue_phase_override=cue_phase_override,
         )
         sanity=_visual_sanity(pg,screen)
         path=out/f"{i:02d}_{name}.png"; pg.image.save(screen,str(path))
@@ -261,6 +262,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             "last_event_trace": _last_events(sim),
             "viewer_render_path": render_meta["render_path"],
             "viewer_viewport_rect": render_meta.get("viewport", [0, 0, 0, 0]),
+            "combat_cue_diagnostics": render_meta.get("combat_cue_diagnostics", {}),
             "rendered_from_actual_viewer_path": True,
             "visual_sanity": sanity,
             **(extra or {}),
@@ -357,10 +359,10 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
     attack_result.event_types_after_attack = sorted(str(t) for t in event_types_seen if t)
     first_attack_note = "" if attack_result.first_attack_status == "ok" else (attack_result.outcome_reason or "first attack not observed")
     player_first = sim.state.entities.get(PLAYER_ID)
-    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_first, selected_target_id=attack_result.target_id)})
+    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_first, selected_target_id=attack_result.target_id)}, cue_phase_override="windup")
     combat_note = "" if attack_result.combat_result_status == "ok" else (attack_result.outcome_reason or "combat outcome not observed")
     player_combat = sim.state.entities.get(PLAYER_ID)
-    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_combat, selected_target_id=attack_result.target_id)})
+    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_combat, selected_target_id=attack_result.target_id)}, cue_phase_override="impact")
 
     # return only valid after local entry and only when admissible at extraction exit
     return_ok=False
