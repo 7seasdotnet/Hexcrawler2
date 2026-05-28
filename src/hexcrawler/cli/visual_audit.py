@@ -224,6 +224,8 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
     return {
         "cue_count": int(diag.get("cue_count", 0)) if isinstance(diag, dict) else 0,
         "cue_rendered": bool(diag.get("cue_rendered", False)) if isinstance(diag, dict) else False,
+        "active_cue_ids": list(diag.get("active_cue_ids", [])) if isinstance(diag, dict) else [],
+        "cue_render_failure_reason": diag.get("cue_render_failure_reason") if isinstance(diag, dict) else "missing_diag",
         "cue_phase": row.get("phase"),
         "cue_age": row.get("age_ticks"),
         "attacker_id": row.get("attacker_id"),

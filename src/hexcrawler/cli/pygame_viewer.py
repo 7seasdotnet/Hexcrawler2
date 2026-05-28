@@ -586,6 +586,7 @@ class ViewerRuntimeState:
     seen_combat_cue_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
     audit_cue_phase_override: str | None = None
     last_combat_cue_render_diagnostics: dict[str, Any] = field(default_factory=dict)
+    combat_cue_event_trace_cursor: int = 0
 
 
 @dataclass(frozen=True)
@@ -3104,7 +3105,11 @@ def _last_combat_impact_tick_for_entity(sim: Simulation, *, entity_id: str) -> i
 
 
 def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRuntimeState) -> None:
-    for row in sim.get_event_trace()[-12:]:
+    trace = sim.get_event_trace()
+    cursor = max(0, int(runtime_state.combat_cue_event_trace_cursor))
+    if cursor > len(trace):
+        cursor = 0
+    for row in trace[cursor:]:
         if str(row.get("event_type")) != COMBAT_OUTCOME_EVENT_TYPE:
             continue
         params = row.get("params")
@@ -3140,6 +3145,7 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         )
     if len(runtime_state.combat_presentation_cues) > COMBAT_CUE_MAX:
         runtime_state.combat_presentation_cues = runtime_state.combat_presentation_cues[-COMBAT_CUE_MAX:]
+    runtime_state.combat_cue_event_trace_cursor = len(trace)
 
 
 def _draw_combat_presentation_cues(
@@ -3228,12 +3234,21 @@ def _draw_combat_presentation_cues(
             }
         )
     runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]
+    cue_render_failure_reason = None
+    if not rendered_rows:
+        if not runtime_state.combat_presentation_cues:
+            cue_render_failure_reason = "no_active_cues"
+        elif phase_override not in {None, "windup", "impact", "arc", "recovery"}:
+            cue_render_failure_reason = "invalid_phase_override"
+        else:
+            cue_render_failure_reason = "all_cues_filtered_by_timing"
     runtime_state.last_combat_cue_render_diagnostics = {
         "cue_count": len(runtime_state.combat_presentation_cues),
         "active_cue_ids": [f"{cue.impact_tick}:{cue.attacker_id}:{cue.target_id}" for cue in runtime_state.combat_presentation_cues],
         "rendered_cues": rendered_rows,
         "phase_override": phase_override,
         "cue_rendered": bool(rendered_rows),
+        "cue_render_failure_reason": cue_render_failure_reason,
     }
     screen.set_clip(old_clip)
     return runtime_state.last_combat_cue_render_diagnostics
