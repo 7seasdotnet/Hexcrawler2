@@ -1,8 +1,11 @@
+import pytest
+
 from hexcrawler.content.io import load_world_json
 from hexcrawler.sim.combat import (
     ATTACK_INTENT_COMMAND_TYPE,
     TURN_INTENT_COMMAND_TYPE,
     TURN_OUTCOME_EVENT_TYPE,
+    WEAPON_MOTION_PROFILES,
     CombatExecutionModule,
 )
 from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_COMBAT_LOG, MAX_WOUNDS, EntityState, SimCommand, Simulation
@@ -153,18 +156,20 @@ def test_cell_only_targeting_without_occupant_is_rejected_and_omits_affected() -
     sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": -1}}))
     sim.advance_ticks(3)
 
-    outcome = sim.state.combat_log[0]
+    windup = sim.state.combat_log[0]
+    outcome = sim.state.combat_log[1]
+    assert windup["reason"] == "windup_started"
     assert outcome["applied"] is False
     assert outcome["reason"] == "no_target_in_cell"
     assert "affected" not in outcome
     assert sim.state.entities["target"].wounds == []
 
     restored = Simulation.from_simulation_payload(sim.simulation_payload())
-    assert restored.state.combat_log[0] == outcome
-    assert "affected" not in restored.state.combat_log[0]
+    assert restored.state.combat_log[1] == outcome
+    assert "affected" not in restored.state.combat_log[1]
 
 
-def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
+def test_not_ready_gate_blocks_repeat_attack_without_combat_log_spam() -> None:
     sim = _build_sim()
     sim.append_command(_attack_command(tick=0))
     sim.append_command(_attack_command(tick=0))
@@ -173,7 +178,189 @@ def test_cooldown_gate_blocks_repeat_attack_in_same_tick() -> None:
     sim.advance_ticks(8)
 
     reasons = [entry["reason"] for entry in sim.state.combat_log]
-    assert reasons == ["windup_started", "cooldown_blocked", "cooldown_blocked", "resolved"]
+    assert reasons == ["windup_started", "resolved"]
+    assert [entry["reason"] for entry in sim.get_command_outcomes()] == []
+
+
+def test_repeated_attack_intents_during_cadence_do_not_create_extra_combat_outcomes() -> None:
+    sim = _build_sim()
+    for tick in range(0, 7):
+        sim.append_command(_attack_command(tick=tick))
+
+    sim.advance_ticks(10)
+
+    outcome_reasons = [entry["reason"] for entry in sim.state.combat_log]
+    assert outcome_reasons == ["windup_started", "resolved"]
+    assert len([entry for entry in sim.state.combat_log if entry.get("applied") is True]) == 1
+    assert sim.state.entities["target"].wounds == [
+        {"region": "torso", "severity": 1, "tags": [], "inflicted_tick": 2, "source": "attacker"}
+    ]
+
+
+def test_attack_cadence_stores_committed_direction_and_normalized_weapon_profile() -> None:
+    sim = _build_sim()
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            command_type=ATTACK_INTENT_COMMAND_TYPE,
+            params={
+                "attacker_id": "attacker",
+                "target_id": "target",
+                "mode": "melee",
+                "weapon_profile_id": "thrust",
+                "committed_aim": {"space_id": LOCAL_SPACE_ID, "x": 0.0, "y": 1.0, "facing": 0},
+                "target_point": {"space_id": LOCAL_SPACE_ID, "x": 1.0, "y": 0.0},
+                "tags": ["test"],
+            },
+        )
+    )
+    # Retarget the actor's facing before impact; event resolution must use the captured
+    # facing/aim from acceptance, not cursor/facing drift afterward.
+    sim.append_command(_turn_command(tick=1, facing=3))
+
+    sim.advance_ticks(7)
+
+    windup = _first_outcome_with_reason(sim, "windup_started")
+    impact = _first_applied_outcome(sim)
+    assert windup["committed_aim"] == {"space_id": LOCAL_SPACE_ID, "x": 0.0, "y": 1.0, "facing": 0}
+    assert impact["committed_aim"] == windup["committed_aim"]
+    assert impact["weapon_profile_id"] == "default_melee"
+    assert impact["weapon_profile"] == {"profile_id": "default_melee", "motion_family": "slash", "windup_ticks": 2, "impact_tick": 2, "recovery_ticks": 5}
+    assert sim.state.entities["target"].wounds[0]["inflicted_tick"] == 2
+
+
+def test_spoofed_weapon_profile_id_is_normalized_and_cannot_change_timing() -> None:
+    sim = _build_sim()
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            command_type=ATTACK_INTENT_COMMAND_TYPE,
+            params={
+                "attacker_id": "attacker",
+                "target_id": "target",
+                "mode": "melee",
+                "weapon_profile_id": "chop",
+                "weapon_ref": "war axe",
+                "tags": ["test"],
+            },
+        )
+    )
+
+    sim.advance_ticks(4)
+
+    windup = _first_outcome_with_reason(sim, "windup_started")
+    impact = _first_applied_outcome(sim)
+    assert windup["weapon_profile_id"] == "default_melee"
+    assert windup["impact_tick"] == 2
+    assert windup["recovery_until_tick"] == 8
+    assert impact["tick"] == 2
+    assert impact["weapon_profile"]["motion_family"] == "slash"
+
+
+def test_weapon_motion_profile_seam_distinguishes_gate_one_families() -> None:
+    assert set(WEAPON_MOTION_PROFILES) >= {"default_melee", "slash", "thrust", "chop", "stab", "bash"}
+    assert WEAPON_MOTION_PROFILES["slash"].motion_family == "slash"
+    assert WEAPON_MOTION_PROFILES["thrust"].reach > WEAPON_MOTION_PROFILES["stab"].reach
+    assert WEAPON_MOTION_PROFILES["chop"].windup_ticks > WEAPON_MOTION_PROFILES["stab"].windup_ticks
+    assert WEAPON_MOTION_PROFILES["bash"].arc_degrees != WEAPON_MOTION_PROFILES["thrust"].arc_degrees
+
+
+def test_empty_space_directional_attack_accepts_cadence_and_whiffs_cleanly() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0, target_id=None, target_cell={"space_id": LOCAL_SPACE_ID, "coord": {"q": 1, "r": -1}}))
+
+    sim.advance_ticks(4)
+
+    assert [entry["reason"] for entry in sim.state.combat_log] == ["windup_started", "no_target_in_cell"]
+    assert sim.state.combat_log[0]["cadence_state"] == "WINDUP"
+    assert sim.state.combat_log[1]["cadence_state"] == "IMPACT_MISS"
+    assert sim.state.combat_log[1]["applied"] is False
+    assert "affected" not in sim.state.combat_log[1]
+    assert sim.state.entities["target"].wounds == []
+
+
+def test_cadence_boundary_ready_resumes_on_exact_cooldown_until_tick() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0))
+    sim.append_command(_attack_command(tick=7))
+    sim.append_command(_attack_command(tick=8))
+
+    sim.advance_ticks(12)
+
+    # default_melee: windup ticks 0-1, impact at acceptance+2, recovery ticks 3-7, READY at tick 8.
+    assert [entry["tick"] for entry in sim.state.combat_log if entry["reason"] == "windup_started"] == [0, 8]
+    assert [entry["tick"] for entry in sim.state.combat_log if entry["applied"] is True] == [2, 10]
+    assert sim.state.entities["attacker"].cooldown_until_tick == 16
+
+
+def test_save_load_during_windup_emits_exactly_one_impact() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0))
+    sim.advance_ticks(1)
+    assert [entry["reason"] for entry in sim.state.combat_log] == ["windup_started"]
+
+    loaded = Simulation.from_simulation_payload(sim.simulation_payload())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.advance_ticks(4)
+
+    applied = [entry for entry in loaded.state.combat_log if entry.get("applied") is True]
+    assert len(applied) == 1
+    assert applied[0]["tick"] == 2
+    assert [entry["reason"] for entry in loaded.state.combat_log] == ["windup_started", "resolved"]
+
+
+def test_save_load_during_recovery_preserves_not_ready_until_boundary() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0))
+    sim.advance_ticks(3)
+    assert sim.state.tick == 3
+    assert sim.state.entities["attacker"].cooldown_until_tick == 8
+
+    loaded = Simulation.from_simulation_payload(sim.simulation_payload())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.append_command(_attack_command(tick=3))
+    loaded.append_command(_attack_command(tick=8))
+    loaded.advance_ticks(9)
+
+    assert [entry["tick"] for entry in loaded.state.combat_log if entry["reason"] == "windup_started"] == [0, 8]
+    assert [entry["tick"] for entry in loaded.state.combat_log if entry.get("applied") is True] == [2, 10]
+
+
+def test_save_load_continuation_matches_fresh_run_hash_and_no_duplicate_impact() -> None:
+    commands = [_attack_command(tick=0), _attack_command(tick=8)]
+    baseline = _build_sim()
+    for command in commands:
+        baseline.append_command(command)
+    baseline.advance_ticks(12)
+
+    interrupted = _build_sim()
+    for command in commands:
+        interrupted.append_command(command)
+    interrupted.advance_ticks(1)
+    loaded = Simulation.from_simulation_payload(interrupted.simulation_payload())
+    loaded.register_rule_module(CombatExecutionModule())
+    loaded.advance_ticks(11)
+
+    assert loaded.state.combat_log == baseline.state.combat_log
+    assert simulation_hash(loaded) == simulation_hash(baseline)
+    assert len([entry for entry in loaded.state.combat_log if entry.get("applied") is True]) == 2
+
+
+def test_combat_save_payload_rejects_presentation_only_metadata() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0))
+    sim.advance_ticks(3)
+    payload = sim.simulation_payload()
+    forbidden_fragments = ("screen", "pixel", "camera", "zoom", "interpolation", "render", "bbox", "cursor", "arc_geometry", "presentation")
+    serialized = str(payload).lower()
+    assert not any(fragment in serialized for fragment in forbidden_fragments)
+    assert "reach" not in payload["combat_log"][0]["weapon_profile"]
+    assert "arc_degrees" not in payload["combat_log"][0]["weapon_profile"]
+
+    poisoned = sim.simulation_payload()
+    poisoned["combat_log"][0]["screen_x"] = 12
+    with pytest.raises(ValueError, match="presentation-only"):
+        Simulation.from_simulation_payload(poisoned)
 
 
 def test_combat_state_round_trip_and_hash_is_stable() -> None:
@@ -201,9 +388,9 @@ def test_combat_state_round_trip_and_hash_is_stable() -> None:
 
 def test_combat_log_is_bounded_with_deterministic_fifo_eviction() -> None:
     sim = _build_sim()
-    for tick in range(MAX_COMBAT_LOG + 3):
-        sim.append_command(_attack_command(tick=tick))
-    sim.advance_ticks(MAX_COMBAT_LOG + 4)
+    for index in range(MAX_COMBAT_LOG + 3):
+        sim.append_command(_attack_command(tick=index * 8))
+    sim.advance_ticks((MAX_COMBAT_LOG + 3) * 8 + 4)
 
     assert len(sim.state.combat_log) == MAX_COMBAT_LOG
     assert sim.state.combat_log[0]["tick"] >= 2

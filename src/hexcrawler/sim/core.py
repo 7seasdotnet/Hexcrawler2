@@ -225,10 +225,51 @@ def _normalize_combat_log_entry(entry: Any) -> dict[str, Any]:
             raise ValueError("combat_log.target_cell.coord must be an object")
         _validate_json_value(coord, field_name="combat_log.target_cell.coord")
         normalized["target_cell"] = {"space_id": space_id, "coord": copy.deepcopy(coord)}
+    _reject_presentation_only_keys(normalized, field_name="combat_log")
+    committed_aim = normalized.get("committed_aim")
+    if committed_aim is not None:
+        if not isinstance(committed_aim, dict):
+            raise ValueError("combat_log.committed_aim must be an object or null")
+        _validate_json_value(committed_aim, field_name="combat_log.committed_aim")
+    weapon_profile = normalized.get("weapon_profile")
+    if weapon_profile is not None:
+        if not isinstance(weapon_profile, dict):
+            raise ValueError("combat_log.weapon_profile must be an object or null")
+        _validate_json_value(weapon_profile, field_name="combat_log.weapon_profile")
+    target_point = normalized.get("target_point")
+    if target_point is not None:
+        if not isinstance(target_point, dict):
+            raise ValueError("combat_log.target_point must be an object or null")
+        _validate_json_value(target_point, field_name="combat_log.target_point")
     if "affected" in normalized:
         normalized["affected"] = _normalize_combat_affected_list(normalized["affected"])
     _validate_json_value(normalized, field_name="combat_log")
     return normalized
+
+PRESENTATION_ONLY_FIELD_FRAGMENTS = (
+    "screen",
+    "pixel",
+    "camera",
+    "zoom",
+    "interpolation",
+    "render",
+    "bbox",
+    "cursor",
+    "arc_geometry",
+    "presentation",
+)
+
+
+def _reject_presentation_only_keys(value: Any, *, field_name: str) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            lowered = str(key).lower()
+            if any(fragment in lowered for fragment in PRESENTATION_ONLY_FIELD_FRAGMENTS):
+                raise ValueError(f"{field_name} contains presentation-only field: {key}")
+            _reject_presentation_only_keys(nested, field_name=field_name)
+    elif isinstance(value, list):
+        for nested in value:
+            _reject_presentation_only_keys(nested, field_name=field_name)
 
 
 def apply_stat_patch(stats: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:

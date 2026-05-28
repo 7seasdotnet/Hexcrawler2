@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from hexcrawler.sim.core import MAX_AFFECTED_PER_ACTION, MAX_WOUNDS, SimCommand, SimEvent, Simulation, _normalize_facing_token
 from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
-from hexcrawler.sim.movement import world_xy_to_axial, world_xy_to_square_grid_cell
+from hexcrawler.sim.movement import axial_to_world_xy, world_xy_to_axial, world_xy_to_square_grid_cell
 from hexcrawler.sim.rules import RuleModule
 from hexcrawler.sim.signals import distance_between_locations
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE
@@ -22,6 +23,30 @@ MELEE_ACTIVE_WINDOW_TICKS = 1
 MELEE_RECOVERY_TICKS = 5
 MELEE_TOTAL_COMMIT_TICKS = MELEE_WINDUP_TICKS + MELEE_ACTIVE_WINDOW_TICKS + MELEE_RECOVERY_TICKS
 DEFAULT_WOUND_SEVERITY = 1
+
+
+@dataclass(frozen=True)
+class WeaponMotionProfile:
+    profile_id: str
+    motion_family: str
+    windup_ticks: int
+    impact_tick: int
+    recovery_ticks: int
+    reach: float
+    arc_degrees: float
+    visual_weight: float
+    tracking_degrees: float
+
+
+WEAPON_MOTION_PROFILES: dict[str, WeaponMotionProfile] = {
+    "default_melee": WeaponMotionProfile("default_melee", "slash", 2, 2, 5, 1.0, 90.0, 1.0, 0.0),
+    "slash": WeaponMotionProfile("slash", "slash", 2, 2, 5, 1.05, 105.0, 1.0, 0.0),
+    "thrust": WeaponMotionProfile("thrust", "thrust", 2, 2, 4, 1.35, 35.0, 0.85, 0.0),
+    "chop": WeaponMotionProfile("chop", "chop", 3, 3, 6, 1.0, 70.0, 1.35, 0.0),
+    "stab": WeaponMotionProfile("stab", "stab", 1, 1, 3, 0.8, 30.0, 0.65, 0.0),
+    "bash": WeaponMotionProfile("bash", "bash", 2, 2, 5, 0.9, 80.0, 1.25, 0.0),
+}
+DEFAULT_WEAPON_PROFILE_ID = "default_melee"
 
 
 def _is_json_primitive(value: Any) -> bool:
@@ -57,6 +82,10 @@ class CombatExecutionModule(RuleModule):
         target_id = command.params.get("target_id")
         target_cell_payload = command.params.get("target_cell")
         weapon_ref = command.params.get("weapon_ref")
+        weapon_profile = self._authoritative_weapon_motion_profile_for_attack(sim=sim, attacker_id=attacker_id, supplied_profile_id=command.params.get("weapon_profile_id"), weapon_ref=weapon_ref)
+        weapon_profile_payload = self._weapon_profile_payload(weapon_profile)
+        committed_aim = self._parse_committed_aim(command.params.get("committed_aim"))
+        target_point = self._parse_target_point(command.params.get("target_point"))
         target_region_raw = command.params.get("target_region")
         tags = command.params.get("tags", [])
 
@@ -117,8 +146,6 @@ class CombatExecutionModule(RuleModule):
 
                         if reason == "resolved" and target_id_value is None and target_cell is not None:
                             resolved_target_id = self._entity_id_at_cell(sim, target_cell)
-                            if resolved_target_id is None:
-                                reason = "no_target_in_cell"
 
                         if reason == "resolved" and target_id_value is not None:
                             resolved_target_id = target_id_value
@@ -146,12 +173,14 @@ class CombatExecutionModule(RuleModule):
                                     reason = arc_reason
 
                         if reason == "resolved" and attacker.cooldown_until_tick > command.tick:
-                            reason = "cooldown_blocked"
+                            reason = "not_ready"
 
                         if reason == "resolved":
                             applied = True
-                            attacker.cooldown_until_tick = int(command.tick) + MELEE_TOTAL_COMMIT_TICKS
-                            resolve_tick = int(command.tick) + MELEE_WINDUP_TICKS
+                            attacker.cooldown_until_tick = int(command.tick) + weapon_profile.windup_ticks + 1 + weapon_profile.recovery_ticks
+                            resolve_tick = int(command.tick) + weapon_profile.impact_tick
+                            if committed_aim is None:
+                                committed_aim = self._aim_from_attacker_to_cell(sim=sim, attacker_id=attacker_id, target_cell=target_cell)
                             sim.append_combat_outcome(
                                 {
                                     "tick": int(command.tick),
@@ -162,12 +191,18 @@ class CombatExecutionModule(RuleModule):
                                     "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
                                     "mode": mode,
                                     "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+                                    "weapon_profile_id": weapon_profile.profile_id,
+                                    "weapon_profile": copy.deepcopy(weapon_profile_payload),
+                                    "committed_aim": copy.deepcopy(committed_aim),
+                                    "target_point": copy.deepcopy(target_point),
+                                    "cadence_state": "WINDUP",
                                     "called_region": called_region,
                                     "region_hit": None,
                                     "applied": False,
                                     "reason": "windup_started",
                                     "strike_phase": "windup",
                                     "resolve_tick": resolve_tick,
+                                    "impact_tick": resolve_tick,
                                     "recovery_until_tick": attacker.cooldown_until_tick,
                                     "wound_deltas": [],
                                     "roll_trace": [],
@@ -186,13 +221,27 @@ class CombatExecutionModule(RuleModule):
                                     "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
                                     "mode": mode,
                                     "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+                                    "weapon_profile_id": weapon_profile.profile_id,
+                                    "weapon_profile": copy.deepcopy(weapon_profile_payload),
+                                    "committed_aim": copy.deepcopy(committed_aim),
+                                    "target_point": copy.deepcopy(target_point),
+                                    "cadence_state": "IMPACT",
                                     "called_region": called_region,
                                     "tags": list(tags),
                                     "attacker_facing": int(attacker.facing),
                                 },
                             )
 
-        if not applied:
+        if not applied and reason == "not_ready":
+            sim.append_command_outcome({
+                "tick": int(command.tick),
+                "command_type": ATTACK_INTENT_COMMAND_TYPE,
+                "attacker_id": attacker_id if isinstance(attacker_id, str) else None,
+                "applied": False,
+                "reason": "not_ready",
+                "feedback": "RECOVERING",
+            })
+        elif not applied:
             outcome = {
                 "tick": int(command.tick),
                 "intent": ATTACK_INTENT_COMMAND_TYPE,
@@ -202,6 +251,11 @@ class CombatExecutionModule(RuleModule):
                 "target_cell": copy.deepcopy(target_cell) if target_cell is not None else None,
                 "mode": mode if isinstance(mode, str) else None,
                 "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+                "weapon_profile_id": weapon_profile.profile_id,
+                "weapon_profile": copy.deepcopy(weapon_profile_payload),
+                "committed_aim": copy.deepcopy(committed_aim),
+                "target_point": copy.deepcopy(target_point),
+                "cadence_state": "REJECTED",
                 "called_region": called_region,
                 "region_hit": None,
                 "applied": False,
@@ -224,6 +278,10 @@ class CombatExecutionModule(RuleModule):
         tags = event.params.get("tags")
         mode = event.params.get("mode")
         weapon_ref = event.params.get("weapon_ref")
+        weapon_profile = self._weapon_motion_profile_for_payload(event.params.get("weapon_profile_id"), weapon_ref=weapon_ref)
+        weapon_profile_payload = self._weapon_profile_payload(weapon_profile)
+        committed_aim = self._parse_committed_aim(event.params.get("committed_aim"))
+        target_point = self._parse_target_point(event.params.get("target_point"))
 
         reason = "resolved"
         applied = False
@@ -233,31 +291,38 @@ class CombatExecutionModule(RuleModule):
             reason = "invalid_attacker"
         elif not isinstance(target_cell, dict):
             reason = "invalid_target"
-        elif resolved_target_id is None or resolved_target_id not in sim.state.entities:
-            reason = "invalid_target"
         else:
             attacker = sim.state.entities[attacker_id]
             if self._is_campaign_space_entity(sim, attacker_id):
                 reason = "tactical_not_allowed_in_campaign_space"
+            elif attacker.space_id != str(target_cell.get("space_id", "")):
+                reason = "space_mismatch"
+            elif not self._mode_is_melee(str(mode)):
+                reason = "invalid_mode"
             else:
-                current_target_coord = self._entity_coord(sim, resolved_target_id)
-                if current_target_coord is None:
+                if resolved_target_id is None:
+                    resolved_target_id = self._entity_id_at_cell(sim, target_cell)
+                if resolved_target_id is None:
+                    reason = "no_target_in_cell"
+                elif resolved_target_id not in sim.state.entities:
                     reason = "invalid_target"
-                elif attacker.space_id != str(target_cell.get("space_id", "")):
-                    reason = "space_mismatch"
-                elif current_target_coord != target_cell.get("coord"):
-                    reason = "target_moved"
-                elif not self._mode_is_melee(str(mode)):
-                    reason = "invalid_mode"
                 else:
-                    arc_reason = self._validate_melee_arc_admissibility(
-                        sim=sim,
-                        attacker_id=attacker_id,
-                        target_id=resolved_target_id,
-                    )
-                    reason = arc_reason or "resolved"
-                    if reason == "resolved":
-                        applied = True
+                    current_target_coord = self._entity_coord(sim, resolved_target_id)
+                    if current_target_coord is None:
+                        reason = "invalid_target"
+                    elif current_target_coord != target_cell.get("coord"):
+                        reason = "target_moved"
+                    else:
+                        attacker_facing = event.params.get("attacker_facing")
+                        arc_reason = self._validate_melee_arc_admissibility(
+                            sim=sim,
+                            attacker_id=attacker_id,
+                            target_id=resolved_target_id,
+                            facing_override=attacker_facing if isinstance(attacker_facing, int) else None,
+                        )
+                        reason = arc_reason or "resolved"
+                        if reason == "resolved":
+                            applied = True
 
         if not isinstance(called_region, str) or not called_region:
             called_region = DEFAULT_CALLED_REGION
@@ -286,6 +351,11 @@ class CombatExecutionModule(RuleModule):
             "target_cell": copy.deepcopy(target_cell) if isinstance(target_cell, dict) else None,
             "mode": mode if isinstance(mode, str) else None,
             "weapon_ref": weapon_ref if isinstance(weapon_ref, str) else None,
+            "weapon_profile_id": weapon_profile.profile_id,
+            "weapon_profile": copy.deepcopy(weapon_profile_payload),
+            "committed_aim": copy.deepcopy(committed_aim),
+            "target_point": copy.deepcopy(target_point),
+            "cadence_state": "IMPACT" if applied else "IMPACT_MISS",
             "called_region": called_region,
             "region_hit": called_region if applied else None,
             "applied": applied,
@@ -451,6 +521,128 @@ class CombatExecutionModule(RuleModule):
             },
         )
 
+
+    @classmethod
+    def _authoritative_weapon_motion_profile_for_attack(
+        cls,
+        *,
+        sim: Simulation,
+        attacker_id: Any,
+        supplied_profile_id: Any,
+        weapon_ref: Any = None,
+    ) -> WeaponMotionProfile:
+        """Resolve combat timing from authoritative actor/equipment state.
+
+        Equipment identity is not implemented yet, so viewer-supplied profile IDs are
+        deliberately ignored and all melee normalizes to default_melee.  The ignored
+        arguments remain in the signature to make the future equipment validation seam
+        explicit without allowing input spoofing to change timing/reach/arc behavior.
+        """
+        _ = (sim, attacker_id, supplied_profile_id, weapon_ref)
+        return WEAPON_MOTION_PROFILES[DEFAULT_WEAPON_PROFILE_ID]
+
+    @classmethod
+    def _weapon_motion_profile_for_payload(cls, profile_id: Any, *, weapon_ref: Any = None) -> WeaponMotionProfile:
+        if isinstance(profile_id, str) and profile_id in WEAPON_MOTION_PROFILES:
+            return WEAPON_MOTION_PROFILES[profile_id]
+        if isinstance(profile_id, str):
+            normalized = profile_id.strip().lower()
+            if normalized in WEAPON_MOTION_PROFILES:
+                return WEAPON_MOTION_PROFILES[normalized]
+        if isinstance(weapon_ref, str):
+            normalized_ref = weapon_ref.strip().lower()
+            for keyword, mapped_id in {
+                "spear": "thrust",
+                "polearm": "thrust",
+                "pike": "thrust",
+                "lance": "thrust",
+                "axe": "chop",
+                "hatchet": "chop",
+                "sword": "slash",
+                "sabre": "slash",
+                "dagger": "stab",
+                "knife": "stab",
+                "mace": "bash",
+                "hammer": "bash",
+                "club": "bash",
+            }.items():
+                if keyword in normalized_ref:
+                    return WEAPON_MOTION_PROFILES[mapped_id]
+        return WEAPON_MOTION_PROFILES[DEFAULT_WEAPON_PROFILE_ID]
+
+    @staticmethod
+    def _weapon_profile_payload(profile: WeaponMotionProfile) -> dict[str, Any]:
+        return {
+            "profile_id": profile.profile_id,
+            "motion_family": profile.motion_family,
+            "windup_ticks": profile.windup_ticks,
+            "impact_tick": profile.impact_tick,
+            "recovery_ticks": profile.recovery_ticks,
+            # Forensic cadence evidence only.  Reach/arc/visual geometry are derived
+            # from the stable profile table at runtime rather than serialized here.
+        }
+
+    @staticmethod
+    def _parse_committed_aim(payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        x = payload.get("x")
+        y = payload.get("y")
+        if not isinstance(x, (int, float)) or isinstance(x, bool):
+            return None
+        if not isinstance(y, (int, float)) or isinstance(y, bool):
+            return None
+        magnitude = (float(x) * float(x) + float(y) * float(y)) ** 0.5
+        if magnitude <= 0.0001:
+            return None
+        result: dict[str, Any] = {"x": round(float(x) / magnitude, 6), "y": round(float(y) / magnitude, 6)}
+        space_id = payload.get("space_id")
+        if isinstance(space_id, str) and space_id:
+            result["space_id"] = space_id
+        facing = payload.get("facing")
+        if isinstance(facing, int) and not isinstance(facing, bool):
+            result["facing"] = int(facing)
+        return result
+
+    @staticmethod
+    def _parse_target_point(payload: Any) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        x = payload.get("x")
+        y = payload.get("y")
+        space_id = payload.get("space_id")
+        if not isinstance(x, (int, float)) or isinstance(x, bool):
+            return None
+        if not isinstance(y, (int, float)) or isinstance(y, bool):
+            return None
+        result: dict[str, Any] = {"x": round(float(x), 6), "y": round(float(y), 6)}
+        if isinstance(space_id, str) and space_id:
+            result["space_id"] = space_id
+        return result
+
+    @classmethod
+    def _aim_from_attacker_to_cell(cls, *, sim: Simulation, attacker_id: str, target_cell: dict[str, Any] | None) -> dict[str, Any] | None:
+        attacker = sim.state.entities.get(attacker_id)
+        if attacker is None or target_cell is None:
+            return None
+        space = sim.state.world.spaces.get(attacker.space_id)
+        if space is None:
+            return None
+        coord = target_cell.get("coord")
+        if space.topology_type == SQUARE_GRID_TOPOLOGY and isinstance(coord, dict):
+            target_x = float(coord.get("x", 0)) + 0.5
+            target_y = float(coord.get("y", 0)) + 0.5
+        else:
+            if not isinstance(coord, dict) or not isinstance(coord.get("q"), int) or not isinstance(coord.get("r"), int):
+                return None
+            target_x, target_y = axial_to_world_xy(type("_Coord", (), {"q": coord["q"], "r": coord["r"]})())
+        dx = target_x - float(attacker.position_x)
+        dy = target_y - float(attacker.position_y)
+        magnitude = (dx * dx + dy * dy) ** 0.5
+        if magnitude <= 0.0001:
+            return None
+        return {"space_id": attacker.space_id, "x": round(dx / magnitude, 6), "y": round(dy / magnitude, 6), "facing": int(attacker.facing)}
+
     @classmethod
     def _validate_melee_arc_admissibility(
         cls,
@@ -458,6 +650,7 @@ class CombatExecutionModule(RuleModule):
         sim: Simulation,
         attacker_id: str,
         target_id: str,
+        facing_override: int | None = None,
     ) -> str | None:
         attacker = sim.state.entities.get(attacker_id)
         target = sim.state.entities.get(target_id)
@@ -475,7 +668,7 @@ class CombatExecutionModule(RuleModule):
         direction = cls._hex_neighbor_direction(attacker_coord=attacker_coord, target_coord=target_coord)
         if direction is None:
             return "invalid_arc_coord"
-        facing = attacker.facing % 6
+        facing = (facing_override if facing_override is not None else attacker.facing) % 6
         allowed = {(facing - 1) % 6, facing, (facing + 1) % 6}
         if direction not in allowed:
             return "invalid_arc"
