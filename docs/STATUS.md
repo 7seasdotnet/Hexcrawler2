@@ -1,24 +1,25 @@
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera or diagnostics or zoom or player_view or perf or sentinel"`
 - `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
-- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or projection or weapon or player_view or camera"`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
-- `python play.py --visual-audit` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
-- `python play.py` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
+- `python play.py` (manual/runtime pygame verification; run where `pygame` and a display/video driver are available)
+- `python play.py --visual-audit` (manual/runtime pygame verification; run where `pygame` and a display/video driver are available)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (manual/runtime pygame verification; run where `pygame` and a display/video driver are available)
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Re-run `python play.py --visual-audit` and `python play.py` on a workstation with `pygame` installed to regenerate `docs/ai_playtest/latest/audit_timeline.json`, `docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png`, and `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md`; verify first_attack and combat_result now report `cue_rendered=true` with combat-log-backed cue diagnostics.
+- **Next action:** Re-run `python play.py`, `python play.py --visual-audit`, and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` in the pygame runtime to confirm the normal-play camera diagnostics no longer crash, visual audit still reports the full successful beat sequence, and F10 perf records include optional-safe camera/object diagnostics.
 
 ## What exists (folders/entry points)
 - Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
-- Viewer-local camera, render snapshots, interpolation helpers, combat cue presentation state, weapon motion profiles, projection adapters, and F1/F10 diagnostics live in `src/hexcrawler/cli/pygame_viewer.py`; regression coverage lives in `tests/test_pygame_viewer_cli.py`.
+- Viewer-local camera, render snapshots, interpolation helpers, projection adapters, local extraction marker rendering, and F1/F10 diagnostics live in `src/hexcrawler/cli/pygame_viewer.py`; regression coverage lives in `tests/test_pygame_viewer_cli.py`.
 - Visual audit capture/report helpers live in `src/hexcrawler/cli/visual_audit.py`; audit tests live in `tests/test_visual_audit.py`. Runtime audit artifacts are written under `docs/ai_playtest/latest/` plus `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md` and `docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png` when pygame is available.
 
 ## What changed in this commit
-- Fixed combat cue starvation by deriving viewer-local `CombatPresentationCue` rows from authoritative `combat_log` evidence in addition to `combat_outcome` event-trace rows, with bounded cursors and duplicate suppression that do not affect hashes, input logs, save/load, or replay.
-- Expanded combat cue diagnostics for visual audit with cue counts, active cue ids, phases/ages, attacker/target ids, outcome labels, screen positions, bboxes, badge data, render layer, failure reason, refresh evidence counts, and weapon profile/motion family.
-- Preserved projection-safe presentation seams and added data-level weapon motion profiles/mappings for thrust, slash, chop, bash, and stab without changing simulation combat mechanics or camera/zoom/pan/recenter behavior.
+- Fixed normal-play camera diagnostics by removing the undefined viewer `_coord_xy` call and converting local return-exit cells through the viewer-local square-grid-to-world marker convention before `_world_to_screen`.
+- Made `_camera_diagnostic_object_screens` best-effort: missing sites, patrols, hostiles, return contexts, unknown spaces, and malformed exit coordinates now produce `None` plus failure reasons instead of crashing play.
+- Added regression coverage proving diagnostics do not depend on visual-audit-only helpers, local extraction marker diagnostics stay optional-safe, and camera diagnostics remain read-only.
 
 ---
 

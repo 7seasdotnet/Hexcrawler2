@@ -88,6 +88,7 @@ from hexcrawler.sim.encounters import (
     LOCAL_ENCOUNTER_HOSTILE_TEMPLATE_ID,
     LOCAL_ENCOUNTER_REWARD_EVENT_TYPE,
     LOCAL_ENCOUNTER_RETURN_EVENT_TYPE,
+    LocalEncounterInstanceModule,
     EncounterActionExecutionModule,
     EncounterActionModule,
     EncounterCheckModule,
@@ -1504,6 +1505,74 @@ def test_camera_diagnostics_include_reported_object_screen_positions() -> None:
     assert diagnostics["old_stair_screen_position"] is not None
     assert diagnostics["patrol_screen_position"] is not None
     assert diagnostics["patrol_entity_id"]
+
+
+def test_camera_diagnostics_do_not_depend_on_visual_audit_coord_helper() -> None:
+    source = inspect.getsource(viewer_module)
+
+    assert "def _coord_xy" not in source
+    assert "_coord_xy(" not in source
+    assert "square_grid_cell_to_world_xy" in inspect.getsource(viewer_module._local_exit_coord_world_position_for_diagnostics)
+
+
+def test_camera_diagnostics_report_local_extraction_marker_without_crashing() -> None:
+    sim, local_space_id = _camera_gate2_local_sim()
+    sim.set_rules_state(
+        LocalEncounterInstanceModule.name,
+        {
+            "active_by_local_space": {
+                local_space_id: {
+                    "from_space_id": "overworld",
+                    "return_exit_coord": {"x": 1, "y": 1},
+                }
+            }
+        },
+    )
+    center = (80.0, 60.0)
+    zoom = 2.0
+
+    diagnostics = viewer_module._camera_diagnostic_object_screens(sim, center=center, zoom_scale=zoom)
+    expected = viewer_module._world_to_screen(square_grid_cell_to_world_xy(1, 1), center, zoom)
+
+    assert diagnostics["extraction_marker_screen_position"] == pytest.approx({"x": expected[0], "y": expected[1]})
+    assert diagnostics["extraction_marker_failure_reason"] is None
+    assert diagnostics["local_hostile_screen_position"] is not None
+
+
+def test_camera_diagnostics_unknown_exit_coordinate_returns_unknown_not_exception() -> None:
+    sim, local_space_id = _camera_gate2_local_sim()
+    sim.set_rules_state(
+        LocalEncounterInstanceModule.name,
+        {
+            "active_by_local_space": {
+                local_space_id: {
+                    "from_space_id": "overworld",
+                    "return_exit_coord": {"x": "bad", "y": 1},
+                }
+            }
+        },
+    )
+
+    diagnostics = viewer_module._camera_diagnostic_object_screens(sim, center=(0.0, 0.0), zoom_scale=1.0)
+
+    assert diagnostics["extraction_marker_screen_position"] is None
+    assert diagnostics["extraction_marker_failure_reason"] == "return_exit_coord_not_integer_cell"
+    assert "extraction_marker:return_exit_coord_not_integer_cell" in diagnostics["camera_diagnostic_failure_reasons"]
+
+
+def test_camera_diagnostics_are_best_effort_for_missing_optional_objects() -> None:
+    sim, _local_space_id = _camera_gate2_local_sim()
+    sim.state.world.sites.clear()
+    sim.state.entities.pop("hostile:camera_gate2")
+
+    diagnostics = viewer_module._camera_diagnostic_object_screens(sim, center=(0.0, 0.0), zoom_scale=1.0)
+
+    assert diagnostics["greybridge_screen_position"] is None
+    assert diagnostics["old_stair_screen_position"] is None
+    assert diagnostics["local_hostile_screen_position"] is None
+    assert diagnostics["extraction_marker_screen_position"] is None
+    assert diagnostics["camera_diagnostic_failure_reasons"]
+
 
 def test_hud_hint_contains_mouse_wheel_zoom() -> None:
     source = inspect.getsource(viewer_module._draw_hud)
