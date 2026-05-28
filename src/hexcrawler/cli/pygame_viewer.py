@@ -12,7 +12,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from hexcrawler.content.io import load_game_json, load_world_json, save_game_json
 from hexcrawler.cli.runtime_profiles import (
@@ -294,6 +294,23 @@ class LocalCameraCache:
     center: tuple[float, float] = (0.0, 0.0)
     zoom_scale: float = 1.0
     target_zoom_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class Camera2D:
+    center_world_or_local: tuple[float, float]
+    zoom: float
+    viewport_rect: pygame.Rect
+    projection_id: str
+    focus_reason: str
+
+
+@dataclass(frozen=True)
+class ProjectionAdapter:
+    projection_id: str
+    local_to_screen: Callable[[tuple[float, float], Camera2D], tuple[float, float]]
+    screen_to_local: Callable[[tuple[float, float], Camera2D], tuple[float, float]]
+    vector_to_screen: Callable[[tuple[float, float], Camera2D], tuple[float, float]]
 
 
 @dataclass(frozen=True)
@@ -1151,14 +1168,13 @@ def _grid_coords(radius: int) -> list[HexCoord]:
     return coords
 
 
-def _axial_to_pixel(coord: HexCoord, center: tuple[float, float]) -> tuple[float, float]:
+def _axial_to_pixel(coord: HexCoord, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
     world_x, world_y = axial_to_world_xy(coord)
-    return (center[0] + world_x * HEX_SIZE, center[1] + world_y * HEX_SIZE)
+    return _world_to_screen((world_x, world_y), center, zoom_scale)
 
 
-def _pixel_to_world(pixel_x: int, pixel_y: int, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
-    size = HEX_SIZE * zoom_scale
-    return ((pixel_x - center[0]) / size, (pixel_y - center[1]) / size)
+def _pixel_to_world(pixel_x: int | float, pixel_y: int | float, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
+    return _screen_to_world((float(pixel_x), float(pixel_y)), center, zoom_scale)
 
 
 def _world_to_local_cell(
@@ -1177,11 +1193,12 @@ def _world_to_local_cell(
     return coord
 
 
-def _hex_points(center: tuple[float, float]) -> list[tuple[float, float]]:
+def _hex_points(center: tuple[float, float], zoom_scale: float = 1.0) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
+    radius = HEX_SIZE * float(zoom_scale)
     for i in range(6):
         angle = math.radians(60 * i - 30)
-        points.append((center[0] + HEX_SIZE * math.cos(angle), center[1] + HEX_SIZE * math.sin(angle)))
+        points.append((center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle)))
     return points
 
 
@@ -1393,7 +1410,25 @@ def _world_to_screen(
     camera_center: tuple[float, float],
     zoom_scale: float,
 ) -> tuple[float, float]:
-    return _world_to_pixel(world_xy[0], world_xy[1], camera_center, zoom_scale)
+    size = HEX_SIZE * float(zoom_scale)
+    return (float(camera_center[0]) + float(world_xy[0]) * size, float(camera_center[1]) + float(world_xy[1]) * size)
+
+
+def _camera2d(
+    *,
+    center_world_or_local: tuple[float, float],
+    zoom: float,
+    viewport_rect: pygame.Rect,
+    projection_id: str,
+    focus_reason: str,
+) -> Camera2D:
+    return Camera2D(
+        center_world_or_local=(float(center_world_or_local[0]), float(center_world_or_local[1])),
+        zoom=float(zoom),
+        viewport_rect=viewport_rect,
+        projection_id=str(projection_id),
+        focus_reason=str(focus_reason),
+    )
 
 
 def _screen_to_world(
@@ -1401,8 +1436,22 @@ def _screen_to_world(
     camera_center: tuple[float, float],
     zoom_scale: float,
 ) -> tuple[float, float]:
-    return _pixel_to_world(int(screen_xy[0]), int(screen_xy[1]), camera_center, zoom_scale)
+    size = HEX_SIZE * float(zoom_scale)
+    return ((float(screen_xy[0]) - float(camera_center[0])) / size, (float(screen_xy[1]) - float(camera_center[1])) / size)
 
+
+def _projection_adapter_for_id(projection_id: str) -> ProjectionAdapter:
+    projection = str(projection_id or "topdown_2d")
+    return ProjectionAdapter(
+        projection_id=projection,
+        local_to_screen=lambda pos, camera: _world_to_screen(pos, camera.center_world_or_local, camera.zoom),
+        screen_to_local=lambda pos, camera: _screen_to_world(pos, camera.center_world_or_local, camera.zoom),
+        vector_to_screen=lambda vec, camera: (float(vec[0]) * HEX_SIZE * camera.zoom, float(vec[1]) * HEX_SIZE * camera.zoom),
+    )
+
+
+def _camera_world_to_screen(world_xy: tuple[float, float], camera: Camera2D, projection: ProjectionAdapter) -> tuple[float, float]:
+    return projection.local_to_screen(world_xy, camera)
 
 
 
@@ -1759,6 +1808,49 @@ def _campaign_site_diagnostic_rows(
             f"on_screen={'yes' if row.on_screen else 'no'}"
         )
     return lines
+
+
+def _screen_position_dict(position: tuple[float, float]) -> dict[str, float]:
+    return {"x": float(position[0]), "y": float(position[1])}
+
+
+def _camera_diagnostic_object_screens(
+    sim: Simulation,
+    *,
+    center: tuple[float, float],
+    zoom_scale: float,
+) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    for diagnostic_key, site_id in (("greybridge_screen_position", "home_greybridge"), ("old_stair_screen_position", "demo_dungeon_entrance")):
+        site = sim.state.world.sites.get(site_id)
+        if site is None:
+            diagnostics[diagnostic_key] = None
+            continue
+        world_position, _anchor_source = _site_world_position(site)
+        if world_position is None:
+            diagnostics[diagnostic_key] = None
+            continue
+        diagnostics[diagnostic_key] = _screen_position_dict(_world_to_screen(world_position, center, zoom_scale))
+
+    player = sim.state.entities.get(PLAYER_ID)
+    current_space_id = _entity_space_id(player) if player is not None else "overworld"
+    patrol_entity: EntityState | None = None
+    for entity in sorted(sim.state.entities.values(), key=lambda current: current.entity_id):
+        if entity.entity_id == PLAYER_ID:
+            continue
+        if not _is_in_current_space(_entity_space_id(entity), current_space_id):
+            continue
+        if str(entity.template_id or "") == "campaign_danger_patrol" or "patrol" in entity.entity_id:
+            patrol_entity = entity
+            break
+    if patrol_entity is None:
+        diagnostics["patrol_screen_position"] = None
+    else:
+        diagnostics["patrol_screen_position"] = _screen_position_dict(
+            _world_to_screen((patrol_entity.position_x, patrol_entity.position_y), center, zoom_scale)
+        )
+        diagnostics["patrol_entity_id"] = patrol_entity.entity_id
+    return diagnostics
 
 
 def _major_site_visibility_diagnostic_rows(
@@ -2135,12 +2227,11 @@ def _collect_world_markers(
         markers.sort(key=lambda row: (row.priority, row.marker_id))
     return markers_by_cell
 def _marker_cell_center(cell: MarkerCellRef, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
-    size = HEX_SIZE * zoom_scale
     if cell.topology_type == SQUARE_GRID_TOPOLOGY:
         world_x = float(dict(cell.coord_key)["x"]) + 0.5
         world_y = float(dict(cell.coord_key)["y"]) + 0.5
-        return center[0] + world_x * size, center[1] + world_y * size
-    return _axial_to_pixel(HexCoord(q=dict(cell.coord_key)["q"], r=dict(cell.coord_key)["r"]), center)
+        return _world_to_screen((world_x, world_y), center, zoom_scale)
+    return _axial_to_pixel(HexCoord(q=dict(cell.coord_key)["q"], r=dict(cell.coord_key)["r"]), center, zoom_scale)
 
 
 def _placement_signature(cell: MarkerCellRef, marker: MarkerRecord) -> str:
@@ -2441,8 +2532,7 @@ def _draw_world(
         for coord in active_space.iter_cells():
             world_x = float(coord["x"]) + 0.5
             world_y = float(coord["y"]) + 0.5
-            pixel_x = center[0] + world_x * cell_size
-            pixel_y = center[1] + world_y * cell_size
+            pixel_x, pixel_y = _world_to_screen((world_x, world_y), center, zoom_scale)
             rect = pygame.Rect(int(pixel_x - cell_size / 2), int(pixel_y - cell_size / 2), int(cell_size), int(cell_size))
             pygame.draw.rect(screen, (58, 50, 44), rect)
             pygame.draw.rect(screen, (98, 88, 78), rect, 1)
@@ -2458,8 +2548,8 @@ def _draw_world(
         return
 
     for coord in _grid_coords(GRID_RADIUS):
-        pixel = _axial_to_pixel(coord, center)
-        points = _hex_points(pixel)
+        pixel = _axial_to_pixel(coord, center, zoom_scale)
+        points = _hex_points(pixel, zoom_scale)
 
         record = sim.state.world.get_hex_record(coord)
         terrain_type = record.terrain_type if record else "void"
@@ -2492,7 +2582,6 @@ def _draw_local_structure_overlay_bounds(
         return
     if str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
         return
-    cell_size = HEX_SIZE * zoom_scale
     structure_primitives = getattr(active_space, "structure_primitives", []) if active_space is not None else []
     compiled_overlay = compile_greybridge_overlay(structure_primitives)
     if not compiled_overlay.get("wall_segments") and not compiled_overlay.get("opening_cells"):
@@ -2511,7 +2600,8 @@ def _draw_local_structure_overlay_bounds(
         opening_by_cell[key] = row
 
     def to_px(x: float, y: float) -> tuple[int, int]:
-        return (int(center[0] + x * cell_size), int(center[1] + y * cell_size))
+        px, py = _world_to_screen((x, y), center, zoom_scale)
+        return int(px), int(py)
 
     for segment in compiled_overlay["wall_segments"]:
         if not isinstance(segment, dict):
@@ -2730,9 +2820,9 @@ def _draw_entity(
 ) -> None:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
-    size = HEX_SIZE * zoom_scale
-    x = int(center[0] + world_x * size)
-    y = int(center[1] + world_y * size)
+    px, py = _world_to_screen((world_x, world_y), center, zoom_scale)
+    x = int(px)
+    y = int(py)
     pygame.draw.circle(screen, (255, 246, 132), (x, y), 16)
     pygame.draw.circle(screen, (135, 42, 32), (x, y), 22, 4)
     pygame.draw.circle(screen, (18, 18, 18), (x, y), 13, 2)
@@ -2760,9 +2850,9 @@ def _draw_spawned_entity(
 ) -> None:
     old_clip = screen.get_clip()
     screen.set_clip(clip_rect)
-    size = HEX_SIZE * zoom_scale
-    x = int(center[0] + world_x * size)
-    y = int(center[1] + world_y * size)
+    px, py = _world_to_screen((world_x, world_y), center, zoom_scale)
+    x = int(px)
+    y = int(py)
     marker_color = (140, 225, 255)
     marker_radius = 10
     ring_color: tuple[int, int, int] | None = None
@@ -4537,22 +4627,18 @@ def _draw_local_arena_overlay(
     else:
         old_clip = screen.get_clip()
         screen.set_clip(clip_rect)
-        cell_size = HEX_SIZE * zoom_scale
         for anchor in sorted(active_space.anchors.values(), key=lambda row: row.anchor_id):
-            anchor_x = center[0] + (float(anchor.coord["x"]) + 0.5) * cell_size
-            anchor_y = center[1] + (float(anchor.coord["y"]) + 0.5) * cell_size
+            anchor_x, anchor_y = _world_to_screen((float(anchor.coord["x"]) + 0.5, float(anchor.coord["y"]) + 0.5), center, zoom_scale)
             pygame.draw.circle(screen, (255, 122, 122), (int(anchor_x), int(anchor_y)), 4)
             label = font.render(f"a:{anchor.anchor_id}", True, (255, 230, 230))
             screen.blit(label, (int(anchor_x) + 6, int(anchor_y) - 10))
         for door in sorted(active_space.doors.values(), key=lambda row: row.door_id):
-            door_x = center[0] + (float(door.a["x"]) + 0.5) * cell_size
-            door_y = center[1] + (float(door.a["y"]) + 0.5) * cell_size
+            door_x, door_y = _world_to_screen((float(door.a["x"]) + 0.5, float(door.a["y"]) + 0.5), center, zoom_scale)
             pygame.draw.rect(screen, (255, 214, 116), (int(door_x) - 3, int(door_y) - 3, 7, 7))
             label = font.render(f"d:{door.door_id} ({door.state})", True, (255, 240, 214))
             screen.blit(label, (int(door_x) + 6, int(door_y) - 10))
         for interactable in sorted(active_space.interactables.values(), key=lambda row: row.interactable_id):
-            obj_x = center[0] + (float(interactable.coord["x"]) + 0.5) * cell_size
-            obj_y = center[1] + (float(interactable.coord["y"]) + 0.5) * cell_size
+            obj_x, obj_y = _world_to_screen((float(interactable.coord["x"]) + 0.5, float(interactable.coord["y"]) + 0.5), center, zoom_scale)
             pygame.draw.circle(screen, (175, 175, 255), (int(obj_x), int(obj_y)), 3)
             label = font.render(f"i:{interactable.interactable_id}", True, (230, 230, 255))
             screen.blit(label, (int(obj_x) + 6, int(obj_y) - 10))
@@ -5119,8 +5205,7 @@ def _truncate_text_to_pixel_width(text: str, font: Any, max_width: int) -> str:
 
 
 def _world_to_pixel(world_x: float, world_y: float, center: tuple[float, float], zoom_scale: float = 1.0) -> tuple[float, float]:
-    size = HEX_SIZE * zoom_scale
-    return (center[0] + world_x * size, center[1] + world_y * size)
+    return _world_to_screen((world_x, world_y), center, zoom_scale)
 
 
 def _find_entity_at_pixel(
@@ -7113,6 +7198,9 @@ def run_pygame_viewer(
         if player is not None:
             player_px, player_py = _world_to_screen((player.position_x, player.position_y), world_center, world_zoom_scale)
             player_screen_position = {"x": float(player_px), "y": float(player_py)}
+        projection_id = "topdown_2d"
+        transform_adapter_id = _projection_adapter_for_id(projection_id).projection_id
+        object_screen_diagnostics = _camera_diagnostic_object_screens(sim, center=world_center, zoom_scale=world_zoom_scale)
         camera_diag = {
             "active_space_id": current_space_id,
             "active_space_role": sentinel_render_diag.get("active_space_role"),
@@ -7121,7 +7209,9 @@ def run_pygame_viewer(
             "player_interpolated_position": sentinel_render_diag.get("player_position"),
             "player_screen_position": player_screen_position,
             "camera_center_current": {"x": float(world_center[0]), "y": float(world_center[1])},
+            "camera_center": {"x": float(world_center[0]), "y": float(world_center[1])},
             "camera_target": {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])},
+            "camera_focus": {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])},
             "camera_delta_per_frame": {"x": float(world_center[0] - pre_focus_center[0]), "y": float(world_center[1] - pre_focus_center[1])},
             "camera_zoom_current": float(world_zoom_scale),
             "camera_zoom_target": float(local_camera_cache.target_zoom_scale),
@@ -7129,8 +7219,11 @@ def run_pygame_viewer(
             "current_zoom": float(world_zoom_scale),
             "target_zoom": float(local_camera_cache.target_zoom_scale),
             "zoom_delta": float(local_camera_cache.target_zoom_scale - world_zoom_scale),
+            "projection_id": projection_id,
+            "transform_adapter": transform_adapter_id,
             "cursor_anchor_zoom_active": bool(cursor_anchor_zoom_active),
             "camera_mode_focus_reason": focus_reason,
+            "focus_reason": focus_reason,
             "visual_audit_mode": bool(runtime_state.visual_audit_mode),
             "player_view": bool(player_view),
             "debug_overlay": bool(runtime_state.show_debug_overlay),
@@ -7141,6 +7234,7 @@ def run_pygame_viewer(
             "camera_position_rounded_before_transform": False,
             "camera_clamp_hysteresis_state": {"local_cache_space_id": local_camera_cache.space_id, "visual_audit_mode": bool(runtime_state.visual_audit_mode)},
         }
+        camera_diag.update(object_screen_diagnostics)
 
         hover_message: str | None = None
         mouse_pos = pygame_module.mouse.get_pos()

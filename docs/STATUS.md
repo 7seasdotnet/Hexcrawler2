@@ -1,5 +1,43 @@
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "zoom or camera_transform or projection or player_view or perf"`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
+- `python play.py --visual-audit` (blocked in this container: `ModuleNotFoundError: No module named 'pygame'`)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run the pygame-dependent manual checks on a machine with `pygame` installed: `python play.py`, zoom campaign/local spaces, press F1/F10, then run `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` and `python play.py --visual-audit`; `cue_rendered_false` remains the next separate visual-audit blocker.
+
+## What exists (folders/entry points)
+- Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
+- Camera/transform tests: `tests/test_pygame_viewer_cli.py`; visual audit tests: `tests/test_visual_audit.py`; campaign/local encounter slice tests: `tests/test_campaign_danger_contact_slice.py`, `tests/test_local_hostile_behavior_slice.py`, `tests/test_local_encounter_return.py`.
+
+## What changed in this commit
+- Fixed the live campaign terrain zoom path: hex centers and hex polygon radii now use the same zoomed canonical transform as sites/entities/labels, removing the terrain-vs-marker scale mismatch that made Greybridge, Old Stair, and patrols appear to warp outward.
+- Routed local floor cells, structure overlays, entity markers, spawned hostiles, local arena overlays, marker placements, and diagnostics through `_world_to_screen`/`_world_to_pixel` so campaign/local draw paths share one viewer-local transform seam.
+- Added reported-scene regression coverage and F10 diagnostics for Greybridge, Old Stair, patrol, player screen positions, projection adapter id, zoom deltas, cursor-anchor state, and visual-audit state.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "zoom or camera_transform or cursor_zoom"`
+- `python play.py` (fails in this environment if `pygame` is not installed)
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (fails in this environment if `pygame` is not installed)
+- `python play.py --visual-audit` (fails in this environment if `pygame` is not installed)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Run `python play.py`, `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50`, and `python play.py --visual-audit` on a machine with `pygame` installed to confirm campaign/local zoom stability and F10 camera diagnostics after the unified camera transform changes.
+
+## What changed in this commit
+- Centralized a viewer-local camera/projection contract (`Camera2D`, `ProjectionAdapter`, `_camera_world_to_screen`) so zoom/projection math is explicit and render-only.
+- Kept normal-runtime wheel zoom focus-centered by changing only `target_zoom_scale` and preserving camera-center ownership in follow/cached camera paths (no cursor-anchor recentering).
+- Added transform-coherence regression tests for round-trip projection, center stability across zoom, and zoom-ratio distance scaling.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera or zoom or player_view or perf or sentinel"`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`

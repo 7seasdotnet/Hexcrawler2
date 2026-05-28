@@ -1331,6 +1331,160 @@ def test_runtime_zoom_does_not_use_cursor_anchor_recenter_in_normal_play() -> No
     assert "cursor_anchor_zoom_active = False" in source
 
 
+def test_camera_transform_round_trip_and_center_stability_across_zoom() -> None:
+    class Viewport:
+        centerx = 640
+        centery = 360
+
+    viewport = Viewport()
+    world_point = (12.25, -4.75)
+    center_world = (640.0, 360.0)
+    camera_a = viewer_module._camera2d(
+        center_world_or_local=center_world,
+        zoom=1.0,
+        viewport_rect=viewport,
+        projection_id="topdown_2d",
+        focus_reason="test",
+    )
+    projection = viewer_module._projection_adapter_for_id(camera_a.projection_id)
+    screen_a = viewer_module._camera_world_to_screen(world_point, camera_a, projection)
+    round_trip = projection.screen_to_local(screen_a, camera_a)
+    assert round_trip[0] == pytest.approx(world_point[0], abs=0.03)
+    assert round_trip[1] == pytest.approx(world_point[1], abs=0.03)
+
+    focus_world = (0.0, 0.0)
+    center_screen_a = viewer_module._camera_world_to_screen(focus_world, camera_a, projection)
+    camera_b = viewer_module._camera2d(
+        center_world_or_local=center_world,
+        zoom=2.0,
+        viewport_rect=viewport,
+        projection_id="topdown_2d",
+        focus_reason="test",
+    )
+    center_screen_b = viewer_module._camera_world_to_screen(focus_world, camera_b, projection)
+    assert center_screen_a == pytest.approx(center_screen_b)
+
+
+def test_zoom_ratio_scales_pairwise_screen_distance() -> None:
+    class Viewport:
+        centerx = 640
+        centery = 360
+
+    viewport = Viewport()
+    camera_1x = viewer_module._camera2d(center_world_or_local=(0.0, 0.0), zoom=1.0, viewport_rect=viewport, projection_id="topdown_2d", focus_reason="test")
+    camera_2x = viewer_module._camera2d(center_world_or_local=(0.0, 0.0), zoom=2.0, viewport_rect=viewport, projection_id="topdown_2d", focus_reason="test")
+    projection = viewer_module._projection_adapter_for_id("topdown_2d")
+    a1 = viewer_module._camera_world_to_screen((0.0, 0.0), camera_1x, projection)
+    b1 = viewer_module._camera_world_to_screen((3.0, 1.0), camera_1x, projection)
+    a2 = viewer_module._camera_world_to_screen((0.0, 0.0), camera_2x, projection)
+    b2 = viewer_module._camera_world_to_screen((3.0, 1.0), camera_2x, projection)
+    d1 = viewer_module.math.hypot(b1[0] - a1[0], b1[1] - a1[1])
+    d2 = viewer_module.math.hypot(b2[0] - a2[0], b2[1] - a2[1])
+    assert d2 == pytest.approx(d1 * 2.0, rel=1e-6)
+
+
+def test_reported_campaign_zoom_fixture_keeps_world_positions_and_transforms_coherent() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    greybridge = sim.state.world.sites["home_greybridge"]
+    old_stair = sim.state.world.sites["demo_dungeon_entrance"]
+    patrol = next(entity for entity in sim.state.entities.values() if str(entity.template_id or "") == "campaign_danger_patrol")
+
+    world_positions_before = {
+        "player": (player.position_x, player.position_y),
+        "greybridge": _site_campaign_anchor_world(greybridge),
+        "old_stair": _site_campaign_anchor_world(old_stair),
+        "patrol": (patrol.position_x, patrol.position_y),
+    }
+    assert world_positions_before["greybridge"] is not None
+    assert world_positions_before["old_stair"] is not None
+
+    class Viewport:
+        centerx = 640
+        centery = 360
+
+    focus = world_positions_before["player"]
+    assert focus is not None
+    center_1x = (Viewport.centerx - (focus[0] * viewer_module.HEX_SIZE * 1.0), Viewport.centery - (focus[1] * viewer_module.HEX_SIZE * 1.0))
+    center_2x = (Viewport.centerx - (focus[0] * viewer_module.HEX_SIZE * 2.0), Viewport.centery - (focus[1] * viewer_module.HEX_SIZE * 2.0))
+    player_screen_1x = viewer_module._world_to_screen(focus, center_1x, 1.0)
+    player_screen_2x = viewer_module._world_to_screen(focus, center_2x, 2.0)
+    assert player_screen_1x == pytest.approx(player_screen_2x)
+
+    greybridge_pos = world_positions_before["greybridge"]
+    old_stair_pos = world_positions_before["old_stair"]
+    assert greybridge_pos is not None and old_stair_pos is not None
+    greybridge_1x = viewer_module._world_to_screen(greybridge_pos, center_1x, 1.0)
+    old_stair_1x = viewer_module._world_to_screen(old_stair_pos, center_1x, 1.0)
+    greybridge_2x = viewer_module._world_to_screen(greybridge_pos, center_2x, 2.0)
+    old_stair_2x = viewer_module._world_to_screen(old_stair_pos, center_2x, 2.0)
+    distance_1x = viewer_module.math.hypot(old_stair_1x[0] - greybridge_1x[0], old_stair_1x[1] - greybridge_1x[1])
+    distance_2x = viewer_module.math.hypot(old_stair_2x[0] - greybridge_2x[0], old_stair_2x[1] - greybridge_2x[1])
+    assert distance_2x == pytest.approx(distance_1x * 2.0, rel=1e-6)
+
+    # Zooming is render-local: no authoritative position moves and no command/hash substrates change.
+    input_log_before = list(sim.input_log)
+    world_hash_before = world_hash(sim.state.world)
+    simulation_hash_before = simulation_hash(sim)
+    _ = viewer_module._camera_diagnostic_object_screens(sim, center=center_2x, zoom_scale=2.0)
+    assert {
+        "player": (player.position_x, player.position_y),
+        "greybridge": _site_campaign_anchor_world(greybridge),
+        "old_stair": _site_campaign_anchor_world(old_stair),
+        "patrol": (patrol.position_x, patrol.position_y),
+    } == world_positions_before
+    assert list(sim.input_log) == input_log_before
+    assert world_hash(sim.state.world) == world_hash_before
+    assert simulation_hash(sim) == simulation_hash_before
+
+
+def test_terrain_sites_entities_and_labels_use_canonical_zoom_transform() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    center = (512.0, 384.0)
+    zoom = 1.75
+    coord = HexCoord(q=2, r=-1)
+    terrain_center = viewer_module._axial_to_pixel(coord, center, zoom)
+    terrain_world = viewer_module.axial_to_world_xy(coord)
+    assert terrain_center == pytest.approx(viewer_module._world_to_screen(terrain_world, center, zoom))
+    assert viewer_module._hex_points(terrain_center, 2.0)[0][0] - terrain_center[0] == pytest.approx(
+        (viewer_module._hex_points(terrain_center, 1.0)[0][0] - terrain_center[0]) * 2.0
+    )
+
+    greybridge_projection = next(row for row in _major_campaign_site_projections(sim, center, zoom) if row.site_id == "home_greybridge")
+    greybridge_screen = viewer_module._world_to_screen(greybridge_projection.world_position, center, zoom)
+    assert greybridge_projection.screen_position == (int(round(greybridge_screen[0])), int(round(greybridge_screen[1])))
+    site_placement = next(placement for placement in _world_marker_placements(sim, center, zoom) if placement.marker.marker_id == "site:home_greybridge")
+    assert (site_placement.x, site_placement.y) == greybridge_projection.screen_position
+
+    patrol = next(entity for entity in sim.state.entities.values() if str(entity.template_id or "") == "campaign_danger_patrol")
+    patrol_screen = viewer_module._world_to_screen((patrol.position_x, patrol.position_y), center, zoom)
+    assert viewer_module._world_to_pixel(patrol.position_x, patrol.position_y, center, zoom) == pytest.approx(patrol_screen)
+
+    draw_world_source = inspect.getsource(viewer_module._draw_world)
+    draw_entity_source = inspect.getsource(viewer_module._draw_entity)
+    draw_spawned_source = inspect.getsource(viewer_module._draw_spawned_entity)
+    marker_source = inspect.getsource(viewer_module._world_marker_placements)
+    assert "_axial_to_pixel(coord, center, zoom_scale)" in draw_world_source
+    assert "_hex_points(pixel, zoom_scale)" in draw_world_source
+    assert "_world_to_screen((world_x, world_y), center, zoom_scale)" in draw_entity_source
+    assert "_world_to_screen((world_x, world_y), center, zoom_scale)" in draw_spawned_source
+    assert "_world_to_pixel(world_position[0], world_position[1], center, zoom_scale)" in marker_source
+
+
+def test_normal_runtime_visual_audit_focus_camera_is_gated_to_visual_audit_mode() -> None:
+    source = inspect.getsource(viewer_module.run_pygame_viewer)
+    assert "_audit_local_focus_camera(sim, viewport_rect) if (runtime_state.visual_audit_mode and player_view) else None" in source
+
+
+def test_camera_diagnostics_include_reported_object_screen_positions() -> None:
+    sim = _build_viewer_simulation("content/examples/viewer_map.json", with_encounters=False)
+    diagnostics = viewer_module._camera_diagnostic_object_screens(sim, center=(640.0, 360.0), zoom_scale=1.0)
+
+    assert diagnostics["greybridge_screen_position"] is not None
+    assert diagnostics["old_stair_screen_position"] is not None
+    assert diagnostics["patrol_screen_position"] is not None
+    assert diagnostics["patrol_entity_id"]
+
 def test_hud_hint_contains_mouse_wheel_zoom() -> None:
     source = inspect.getsource(viewer_module._draw_hud)
     assert "wheel zoom" in source
