@@ -175,6 +175,8 @@ FACING_SWING_RADIANS_PER_SECOND = 10.0
 PERF_SENTINEL_BUFFER_CAP = 180
 PERF_SENTINEL_CONSECUTIVE_FRAME_CAP = 8
 PERF_SENTINEL_TRIGGER_CONSECUTIVE = 3
+CAMERA_FOLLOW_SMOOTHING_RATE = 24.0
+
 
 CORE_PLAYABLE_MAJOR_SITE_IDS: tuple[str, ...] = ("home_greybridge", "demo_dungeon_entrance")
 CORE_PLAYABLE_DEFAULT_PATROL_ID = "patrol:core_playable"
@@ -311,6 +313,8 @@ class LocalCameraCache:
     target_zoom_scale: float = 1.0
     mode: str = CAMERA_MODE_FOLLOW_PLAYER
     focus_reason: str = "follow_player"
+    target_center: tuple[float, float] | None = None
+    target_source: str = "unknown"
 
 
 @dataclass
@@ -1167,6 +1171,17 @@ def interpolate_entity_position(
     return (lerp(previous.x, current.x, alpha), lerp(previous.y, current.y, alpha))
 
 
+def get_entity_render_position(
+    entity_id: str,
+    previous_snapshot: RenderSnapshot,
+    current_snapshot: RenderSnapshot,
+    alpha: float,
+) -> tuple[float, float] | None:
+    """Viewer-local presentation position; never authoritative or serialized."""
+
+    return interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
+
+
 def _drain_sim_accumulator(accumulator: float, tick_seconds: float, *, paused: bool) -> tuple[float, int]:
     if not math.isfinite(accumulator) or accumulator < 0.0:
         accumulator = 0.0
@@ -1421,23 +1436,69 @@ def _pan_camera_cache(cache: LocalCameraCache, pixel_delta: tuple[float, float])
     _set_camera_mode(cache, CAMERA_MODE_FREE_PAN, focus_reason="middle_mouse_drag")
 
 
+def _camera_center_for_world_position(
+    world_position: tuple[float, float],
+    viewport_rect: pygame.Rect,
+    *,
+    zoom_scale: float,
+) -> tuple[float, float]:
+    size = HEX_SIZE * float(zoom_scale)
+    return (
+        float(viewport_rect.centerx) - (float(world_position[0]) * size),
+        float(viewport_rect.centery) - (float(world_position[1]) * size),
+    )
+
+
+def _follow_player_render_position(
+    sim: Simulation,
+    previous_snapshot: RenderSnapshot | None,
+    current_snapshot: RenderSnapshot | None,
+    alpha: float,
+) -> tuple[tuple[float, float] | None, str]:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return None, "unknown"
+    if previous_snapshot is not None and current_snapshot is not None:
+        render_position = get_entity_render_position(PLAYER_ID, previous_snapshot, current_snapshot, alpha)
+        if render_position is not None:
+            return render_position, "interpolated_render_position"
+    return (float(player.position_x), float(player.position_y)), "sim_position"
+
+
 def _follow_player_camera_center(
     sim: Simulation,
     viewport_rect: pygame.Rect,
     *,
     zoom_scale: float,
-) -> tuple[float, float] | None:
-    player = sim.state.entities.get(PLAYER_ID)
-    if player is None:
-        return None
-    return _camera_center_for_entity(player, viewport_rect, zoom_scale=zoom_scale)
+    previous_snapshot: RenderSnapshot | None = None,
+    current_snapshot: RenderSnapshot | None = None,
+    alpha: float = 1.0,
+) -> tuple[tuple[float, float] | None, str]:
+    render_position, source = _follow_player_render_position(sim, previous_snapshot, current_snapshot, alpha)
+    if render_position is None:
+        return None, source
+    return _camera_center_for_world_position(render_position, viewport_rect, zoom_scale=zoom_scale), source
+
+
+def _smooth_camera_center_toward_target(
+    current: tuple[float, float],
+    target: tuple[float, float],
+    dt_seconds: float,
+) -> tuple[float, float]:
+    if not math.isfinite(float(dt_seconds)) or float(dt_seconds) <= 0.0:
+        return (float(current[0]), float(current[1]))
+    t = 1.0 - math.exp(-CAMERA_FOLLOW_SMOOTHING_RATE * float(dt_seconds))
+    if t >= 0.999999:
+        return (float(target[0]), float(target[1]))
+    return (lerp(float(current[0]), float(target[0]), t), lerp(float(current[1]), float(target[1]), t))
 
 
 def _recenter_camera_on_player(sim: Simulation, viewport_rect: pygame.Rect, cache: LocalCameraCache) -> bool:
-    center = _follow_player_camera_center(sim, viewport_rect, zoom_scale=cache.zoom_scale)
+    center, source = _follow_player_camera_center(sim, viewport_rect, zoom_scale=cache.zoom_scale)
     if center is None:
         return False
-    cache.center = center
+    cache.target_center = center
+    cache.target_source = source
     _set_camera_mode(cache, CAMERA_MODE_FOLLOW_PLAYER, focus_reason="player_recenter")
     return True
 
@@ -1449,6 +1510,9 @@ def _update_camera_zoom_and_follow(
     dt_seconds: float,
     *,
     visual_audit_mode: bool,
+    previous_snapshot: RenderSnapshot | None = None,
+    current_snapshot: RenderSnapshot | None = None,
+    alpha: float = 1.0,
 ) -> tuple[tuple[float, float], float]:
     if visual_audit_mode:
         return cache.center, cache.zoom_scale
@@ -1457,9 +1521,18 @@ def _update_camera_zoom_and_follow(
     if abs(next_zoom - prior_zoom) > 1e-9:
         if cache.mode == CAMERA_MODE_FOLLOW_PLAYER:
             cache.zoom_scale = next_zoom
-            followed = _follow_player_camera_center(sim, viewport_rect, zoom_scale=next_zoom)
+            followed, source = _follow_player_camera_center(
+                sim,
+                viewport_rect,
+                zoom_scale=next_zoom,
+                previous_snapshot=previous_snapshot,
+                current_snapshot=current_snapshot,
+                alpha=alpha,
+            )
             if followed is not None:
-                cache.center = followed
+                cache.target_center = followed
+                cache.target_source = source
+                cache.center = _smooth_camera_center_toward_target(cache.center, followed, dt_seconds)
                 cache.focus_reason = "follow_player"
         else:
             cache.center = _camera_center_for_screen_anchor_zoom(
@@ -1471,9 +1544,18 @@ def _update_camera_zoom_and_follow(
             cache.zoom_scale = next_zoom
             cache.focus_reason = "free_pan_viewport_anchor_zoom"
     elif cache.mode == CAMERA_MODE_FOLLOW_PLAYER:
-        followed = _follow_player_camera_center(sim, viewport_rect, zoom_scale=cache.zoom_scale)
+        followed, source = _follow_player_camera_center(
+            sim,
+            viewport_rect,
+            zoom_scale=cache.zoom_scale,
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            alpha=alpha,
+        )
         if followed is not None:
-            cache.center = followed
+            cache.target_center = followed
+            cache.target_source = source
+            cache.center = _smooth_camera_center_toward_target(cache.center, followed, dt_seconds)
             cache.focus_reason = "follow_player"
     return cache.center, cache.zoom_scale
 
@@ -7356,6 +7438,9 @@ def run_pygame_viewer(
             local_camera_cache,
             dt,
             visual_audit_mode=runtime_state.visual_audit_mode,
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            alpha=alpha,
         )
         cursor_anchor_zoom_active = False
         pre_focus_center = world_center
@@ -7400,9 +7485,12 @@ def run_pygame_viewer(
             focus_reason = "follow_selected"
         if follow_message is not None:
             status_message = follow_message
+        player_render_position, camera_target_source = _follow_player_render_position(
+            sim, previous_snapshot, current_snapshot, alpha
+        )
         player_screen_position: dict[str, float] | None = None
-        if player is not None:
-            player_px, player_py = _world_to_screen((player.position_x, player.position_y), world_center, world_zoom_scale)
+        if player_render_position is not None:
+            player_px, player_py = _world_to_screen(player_render_position, world_center, world_zoom_scale)
             player_screen_position = {"x": float(player_px), "y": float(player_py)}
         projection_id = "topdown_2d"
         transform_adapter_id = _projection_adapter_for_id(projection_id).projection_id
@@ -7411,13 +7499,28 @@ def run_pygame_viewer(
             "active_space_id": current_space_id,
             "active_space_role": sentinel_render_diag.get("active_space_role"),
             "player_entity_id": PLAYER_ID if player is not None else None,
+            "player_sim_position": sentinel_render_diag.get("player_position"),
             "player_simulation_position": sentinel_render_diag.get("player_position"),
-            "player_interpolated_position": sentinel_render_diag.get("player_position"),
+            "player_interpolated_position": (
+                {"x": float(player_render_position[0]), "y": float(player_render_position[1])}
+                if player_render_position is not None
+                else None
+            ),
+            "player_render_position": (
+                {"x": float(player_render_position[0]), "y": float(player_render_position[1])}
+                if player_render_position is not None
+                else None
+            ),
             "player_screen_position": player_screen_position,
             "camera_center_current": {"x": float(world_center[0]), "y": float(world_center[1])},
             "camera_center": {"x": float(world_center[0]), "y": float(world_center[1])},
-            "camera_target": {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])},
+            "camera_target": (
+                {"x": float(local_camera_cache.target_center[0]), "y": float(local_camera_cache.target_center[1])}
+                if local_camera_cache.target_center is not None
+                else {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])}
+            ),
             "camera_focus": {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])},
+            "camera_delta": {"x": float(world_center[0] - pre_focus_center[0]), "y": float(world_center[1] - pre_focus_center[1])},
             "camera_delta_per_frame": {"x": float(world_center[0] - pre_focus_center[0]), "y": float(world_center[1] - pre_focus_center[1])},
             "camera_zoom_current": float(world_zoom_scale),
             "camera_zoom_target": float(local_camera_cache.target_zoom_scale),
@@ -7430,6 +7533,8 @@ def run_pygame_viewer(
             "cursor_anchor_zoom_active": bool(cursor_anchor_zoom_active),
             "free_pan_active": bool(camera_pan_state.active or camera_mode == CAMERA_MODE_FREE_PAN),
             "camera_mode": camera_mode,
+            "camera_target_source": camera_target_source if camera_mode == CAMERA_MODE_FOLLOW_PLAYER else local_camera_cache.target_source,
+            "camera_center_rounded": False,
             "camera_mode_focus_reason": focus_reason,
             "focus_reason": focus_reason,
             "visual_audit_mode": bool(runtime_state.visual_audit_mode),
