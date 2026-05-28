@@ -42,7 +42,7 @@ from hexcrawler.sim.campaign_danger import (
     FLEE_ENCOUNTER_OFFER_INTENT,
     CampaignDangerModule,
 )
-from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.combat import COMBAT_OUTCOME_EVENT_TYPE, WEAPON_MOTION_PROFILES
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.greybridge_layout import GREYBRIDGE_SAFE_HUB_SPACE_ID, compile_greybridge_overlay
 from hexcrawler.sim.exploration import (
@@ -396,18 +396,37 @@ class SimulationController:
             )
         )
 
-    def attack_entity(self, target_entity_id: str) -> None:
+    def attack_entity(
+        self,
+        target_entity_id: str | None,
+        *,
+        target_cell: dict[str, object] | None = None,
+        target_point: dict[str, object] | None = None,
+        committed_aim: dict[str, object] | None = None,
+        weapon_profile_id: str = "default_melee",
+    ) -> None:
+        params: dict[str, object] = {
+            "attacker_id": self.entity_id,
+            "mode": "melee",
+            "weapon_profile_id": weapon_profile_id,
+            # Melee is click-to-commit.  Future ranged profiles may use hold-to-aim
+            # and release-to-fire without changing this authoritative command seam.
+            "tags": ["viewer_lmb_directional_melee"],
+        }
+        if target_entity_id is not None:
+            params["target_id"] = target_entity_id
+        if target_cell is not None:
+            params["target_cell"] = target_cell
+        if target_point is not None:
+            params["target_point"] = target_point
+        if committed_aim is not None:
+            params["committed_aim"] = committed_aim
         self.sim.append_command(
             SimCommand(
                 tick=self.sim.state.tick,
                 entity_id=self.entity_id,
                 command_type="attack_intent",
-                params={
-                    "attacker_id": self.entity_id,
-                    "target_id": target_entity_id,
-                    "mode": "melee",
-                    "tags": ["viewer_local_attack"],
-                },
+                params=params,
             )
         )
 
@@ -666,22 +685,40 @@ COMBAT_CUE_MAX = 18
 class WeaponMotionProfile:
     profile_id: str
     motion_family: str
+    windup_ticks: int
+    impact_tick: int
+    recovery_ticks: int
+    reach: float
+    arc_degrees: float
+    visual_weight: float
+    tracking_degrees: float
     path_shape: str
-    reach_scale: float
-    width_scale: float
-    windup_style: str
-    impact_style: str
-    recovery_style: str
+
+
+def _viewer_weapon_profile(profile_id: str, path_shape: str) -> WeaponMotionProfile:
+    authoritative = WEAPON_MOTION_PROFILES[profile_id]
+    return WeaponMotionProfile(
+        profile_id=authoritative.profile_id,
+        motion_family=authoritative.motion_family,
+        windup_ticks=authoritative.windup_ticks,
+        impact_tick=authoritative.impact_tick,
+        recovery_ticks=authoritative.recovery_ticks,
+        reach=authoritative.reach,
+        arc_degrees=authoritative.arc_degrees,
+        visual_weight=authoritative.visual_weight,
+        tracking_degrees=authoritative.tracking_degrees,
+        path_shape=path_shape,
+    )
 
 
 WEAPON_MOTION_PROFILE_BY_FAMILY: dict[str, WeaponMotionProfile] = {
-    "thrust": WeaponMotionProfile("spear_polearm", "thrust", "narrow_lunge", 1.25, 0.75, "coiled", "pierce_snap", "pullback"),
-    "slash": WeaponMotionProfile("sword", "slash", "curved_arc", 1.05, 1.0, "shoulder_arc", "slice_followthrough", "reset_guard"),
-    "chop": WeaponMotionProfile("axe", "chop", "overhead_chop", 1.0, 1.15, "high_raise", "heavy_chop", "heavy_recover"),
-    "stab": WeaponMotionProfile("dagger", "stab", "line", 0.7, 0.65, "close_coil", "quick_stab", "short_recover"),
-    "bash": WeaponMotionProfile("mace_hammer", "bash", "blunt_swing", 0.95, 1.2, "hip_swing", "blunt_impact", "brace"),
+    "thrust": _viewer_weapon_profile("thrust", "narrow_lunge"),
+    "slash": _viewer_weapon_profile("slash", "curved_arc"),
+    "chop": _viewer_weapon_profile("chop", "overhead_chop"),
+    "stab": _viewer_weapon_profile("stab", "line"),
+    "bash": _viewer_weapon_profile("bash", "blunt_swing"),
 }
-DEFAULT_WEAPON_MOTION_PROFILE = WeaponMotionProfile("default_melee", "slash", "curved_arc", 0.9, 0.95, "ready", "generic_cut", "recover")
+DEFAULT_WEAPON_MOTION_PROFILE = _viewer_weapon_profile("default_melee", "curved_arc")
 WEAPON_MOTION_PROFILE_BY_WEAPON_KEYWORD: dict[str, WeaponMotionProfile] = {
     "spear": WEAPON_MOTION_PROFILE_BY_FAMILY["thrust"],
     "polearm": WEAPON_MOTION_PROFILE_BY_FAMILY["thrust"],
@@ -3650,8 +3687,15 @@ def _last_combat_impact_tick_for_entity(sim: Simulation, *, entity_id: str) -> i
     return None
 
 
-def _weapon_motion_profile_for_weapon_ref(weapon_ref: object) -> WeaponMotionProfile:
+def _weapon_motion_profile_for_weapon_ref(weapon_ref: object, *, profile_id: object = None, profile_payload: object = None) -> WeaponMotionProfile:
     """Viewer-local weapon motion seam; never feeds simulation authority or hashes."""
+    if isinstance(profile_payload, dict):
+        motion_family = profile_payload.get("motion_family")
+        if isinstance(motion_family, str) and motion_family in WEAPON_MOTION_PROFILE_BY_FAMILY:
+            return WEAPON_MOTION_PROFILE_BY_FAMILY[motion_family]
+    if isinstance(profile_id, str) and profile_id in WEAPON_MOTION_PROFILES:
+        family = WEAPON_MOTION_PROFILES[profile_id].motion_family
+        return WEAPON_MOTION_PROFILE_BY_FAMILY.get(family, DEFAULT_WEAPON_MOTION_PROFILE)
     if not isinstance(weapon_ref, str) or not weapon_ref.strip():
         return DEFAULT_WEAPON_MOTION_PROFILE
     normalized = weapon_ref.strip().lower()
@@ -3722,7 +3766,17 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         neutralized = payload.get("neutralized") is True
         source = str(payload.get("evidence_source", "unknown"))
         key = (tick, attacker_id, target_id, reason)
-        if tick < 0 or not attacker_id or not target_id:
+        if tick < 0 or not attacker_id:
+            skipped_invalid += 1
+            continue
+        if not target_id:
+            target_cell = payload.get("target_cell")
+            if isinstance(target_cell, dict):
+                target_id = f"cell:{target_cell.get('space_id', '')}:{target_cell.get('coord', '')}"
+            else:
+                target_id = "directional_swing"
+            key = (tick, attacker_id, target_id, reason)
+        if not target_id:
             skipped_invalid += 1
             continue
         if key in runtime_state.seen_combat_cue_keys:
@@ -3730,18 +3784,25 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
             continue
         attacker = sim.state.entities.get(attacker_id)
         target = sim.state.entities.get(target_id)
-        if attacker is None or target is None:
+        if attacker is None:
             skipped_missing_actor += 1
             continue
         runtime_state.seen_combat_cue_keys.append(key)
         if len(runtime_state.seen_combat_cue_keys) > COMBAT_CUE_MAX:
             runtime_state.seen_combat_cue_keys = runtime_state.seen_combat_cue_keys[-COMBAT_CUE_MAX:]
         outcome_label, _ = _combat_feedback_label_and_color(reason=reason, applied=applied, neutralized=neutralized)
-        dx = float(target.position_x) - float(attacker.position_x)
-        dy = float(target.position_y) - float(attacker.position_y)
-        magnitude = math.hypot(dx, dy)
-        vector = (dx / magnitude, dy / magnitude) if magnitude > 0.0001 else (1.0, 0.0)
-        profile = _weapon_motion_profile_for_weapon_ref(payload.get("weapon_ref"))
+        committed_aim = payload.get("committed_aim")
+        if isinstance(committed_aim, dict) and isinstance(committed_aim.get("x"), (int, float)) and isinstance(committed_aim.get("y"), (int, float)):
+            vector = (float(committed_aim["x"]), float(committed_aim["y"]))
+        elif target is not None:
+            dx = float(target.position_x) - float(attacker.position_x)
+            dy = float(target.position_y) - float(attacker.position_y)
+            magnitude = math.hypot(dx, dy)
+            vector = (dx / magnitude, dy / magnitude) if magnitude > 0.0001 else (1.0, 0.0)
+        else:
+            vector = (1.0, 0.0)
+        profile = _weapon_motion_profile_for_weapon_ref(payload.get("weapon_ref"), profile_id=payload.get("weapon_profile_id"), profile_payload=payload.get("weapon_profile"))
+        target_position = (float(target.position_x), float(target.position_y)) if target is not None else (float(attacker.position_x) + vector[0] * profile.reach, float(attacker.position_y) + vector[1] * profile.reach)
         runtime_state.combat_presentation_cues.append(
             CombatPresentationCue(
                 attacker_id=attacker_id,
@@ -3750,7 +3811,7 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
                 impact_tick=tick,
                 outcome_label=outcome_label,
                 attacker_position=(float(attacker.position_x), float(attacker.position_y)),
-                target_position=(float(target.position_x), float(target.position_y)),
+                target_position=target_position,
                 attack_vector_local=vector,
                 motion_family=profile.motion_family,
                 weapon_profile_id=profile.profile_id,
@@ -3787,7 +3848,7 @@ def _projection_vector_to_screen(local_vec: tuple[float, float], zoom_scale: flo
 def _render_weapon_motion(screen: pygame.Surface, cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> None:
     ax, ay = int(attacker_px[0]), int(attacker_px[1])
     tx, ty = int(target_px[0]), int(target_px[1])
-    width = max(3, int(6 * profile.width_scale))
+    width = max(3, int(5 * profile.visual_weight))
     if profile.motion_family == "thrust" or profile.motion_family == "stab":
         pygame.draw.line(screen, (255, 220, 96), (ax, ay), (tx, ty), width)
     elif profile.motion_family == "chop":
@@ -5798,6 +5859,10 @@ def _calendar_presentation(sim: Simulation) -> dict[str, Any]:
     }
 
 
+def _reserved_space_status_message() -> str:
+    return "Space reserved for future contextual violence"
+
+
 def _queue_local_attack_for_click(
     sim: Simulation,
     controller: SimulationController,
@@ -5813,15 +5878,49 @@ def _queue_local_attack_for_click(
     active_space = sim.state.world.spaces.get(player.space_id)
     if active_space is None or str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
         return None
+
+    target_x, target_y = _screen_to_world((float(pixel_pos[0]), float(pixel_pos[1])), center, zoom_scale)
+    dx = float(target_x) - float(player.position_x)
+    dy = float(target_y) - float(player.position_y)
+    magnitude = math.hypot(dx, dy)
+    if magnitude <= 0.0001:
+        return None
+    committed_aim: dict[str, object] = {
+        "space_id": player.space_id,
+        "x": round(dx / magnitude, 6),
+        "y": round(dy / magnitude, 6),
+        "facing": int(player.facing),
+    }
+    target_point: dict[str, object] = {"space_id": player.space_id, "x": round(float(target_x), 6), "y": round(float(target_y), 6)}
+
     target_entity_id = _selected_entity_for_click(sim, pixel_pos, center, zoom_scale, radius_px=radius_px)
-    if target_entity_id is None or target_entity_id == PLAYER_ID:
-        return None
-    target = sim.state.entities.get(target_entity_id)
-    if target is None or target.space_id != player.space_id:
-        return None
-    controller.attack_entity(target_entity_id)
-    controller.set_selected_entity(target_entity_id)
-    return f"attack queued -> {target_entity_id}"
+    if target_entity_id == PLAYER_ID:
+        target_entity_id = None
+    target_cell: dict[str, object] | None = None
+    if target_entity_id is not None:
+        target = sim.state.entities.get(target_entity_id)
+        if target is None or target.space_id != player.space_id:
+            target_entity_id = None
+        else:
+            target_coord = world_xy_to_square_grid_cell(target.position_x, target.position_y) if active_space.topology_type == SQUARE_GRID_TOPOLOGY else world_xy_to_axial(target.position_x, target.position_y).to_dict()
+            target_cell = {"space_id": player.space_id, "coord": target_coord}
+    if target_cell is None:
+        click_coord = world_xy_to_square_grid_cell(target_x, target_y) if active_space.topology_type == SQUARE_GRID_TOPOLOGY else world_xy_to_axial(target_x, target_y).to_dict()
+        if not active_space.is_valid_cell(click_coord):
+            return None
+        target_cell = {"space_id": player.space_id, "coord": click_coord}
+
+    controller.attack_entity(
+        target_entity_id,
+        target_cell=target_cell,
+        target_point=target_point,
+        committed_aim=committed_aim,
+        weapon_profile_id="default_melee",
+    )
+    if target_entity_id is not None:
+        controller.set_selected_entity(target_entity_id)
+        return f"melee committed -> {target_entity_id}"
+    return "directional melee committed"
 
 
 def _queue_selection_command_for_click(
@@ -7025,20 +7124,9 @@ def run_pygame_viewer(
                     controller.campaign_author_intent("delete_patrol", patrol_id="patrol:authoring_demo")
                     status_message = "campaign authoring: delete demo town/dungeon/patrol queued"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_SPACE:
-                player = sim.state.entities.get(PLAYER_ID)
-                selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
-                if player is not None and selected_entity_id is not None:
-                    active_space = sim.state.world.spaces.get(player.space_id)
-                    target = sim.state.entities.get(selected_entity_id)
-                    if (
-                        active_space is not None
-                        and str(getattr(active_space, "role", "")) == LOCAL_SPACE_ROLE
-                        and target is not None
-                        and target.entity_id != PLAYER_ID
-                        and target.space_id == player.space_id
-                    ):
-                        controller.attack_entity(target.entity_id)
-                        status_message = f"attack queued -> {target.entity_id}"
+                # Space is reserved for future contextual violence (execute/grapple/shove).
+                # It must not issue ordinary melee attack_intents.
+                status_message = _reserved_space_status_message()
             elif event.type == pygame_module.KEYDOWN and event.key in (pygame_module.K_RETURN, pygame_module.K_e):
                 player = sim.state.entities.get(PLAYER_ID)
                 if player is not None:

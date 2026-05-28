@@ -1,3 +1,38 @@
+## Current Verification Commands (automated tests passed in this container)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `python play.py --visual-audit` (runtime verification blocked in this container: `ModuleNotFoundError: No module named 'pygame'`; manual pygame verification remains required before merge/acceptance)
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Manual pygame runtime verification remains required before merge/acceptance: run `python play.py`; enter patrol fight; LMB click hostile; LMB click empty local space; hold LMB; repeat LMB during recovery; press/hold Space; verify no combat spam; verify direction lock; verify visible weapon cue; verify F1/F10/zoom/pan/recenter still work; then run `python play.py --visual-audit` and confirm all eight beats pass.
+
+## Local melee cadence semantics (Gate 1)
+- `weapon_profile_id` is normalized by the simulation layer. Until authoritative equipment identity exists, all melee uses `default_melee`; malformed/spoofed viewer profile IDs cannot change timing/reach/arc behavior.
+- `windup_ticks` counts ticks from accepted attack tick before impact readability; for `default_melee`, accepting at tick `T` creates WINDUP evidence at `T` and impact resolves at `T+2`.
+- `impact_tick` is relative to the accepted attack tick and fires exactly once via the serialized event queue.
+- `recovery_ticks` covers post-impact ticks where `current_tick < cooldown_until_tick`; for `default_melee`, recovery covers ticks `T+3` through `T+7`.
+- `cooldown_until_tick` is the first READY tick; an `attack_intent` exactly at `cooldown_until_tick` is admissible if other checks pass.
+
+## What exists (folders/entry points)
+- Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
+- Local-role melee input and presentation live in `src/hexcrawler/cli/pygame_viewer.py`: LMB converts screen clicks into local-space target cells/points plus committed aim vectors, Space is reserved for future contextual violence, and combat cues remain bounded viewer-local presentation state.
+- Authoritative local-role combat cadence lives in `src/hexcrawler/sim/combat.py`: `attack_intent` now carries committed aim/profile metadata and accepts only READY actors into deterministic WINDUP/IMPACT/RECOVERY. Combat execution tests live in `tests/test_combat_execution_module.py`; viewer input/cue regression tests live in `tests/test_pygame_viewer_cli.py`; audit tests live in `tests/test_visual_audit.py`.
+- Supported provisional action intent types include: `attack_intent`, `turn_intent`, `set_move_vector`, `set_target_position`, `set_selected_entity`, `clear_selected_entity`, local encounter offer/return intents, recovery/reward/loot intents, authoring intents, rumor list/select intents, inventory intents, and interaction/exploration intents.
+
+## What changed in this commit
+- Added LMB Directional Melee Gate 1: local LMB click queues one authoritative melee `attack_intent` with `target_id`/`target_cell` when present, local `target_point`, locked `committed_aim`, `weapon_profile_id`, and viewer-only edge-trigger behavior; Space no longer queues ordinary melee.
+- Added authoritative melee cadence/profile seam: READY actors enter WINDUP, resolve once at IMPACT, remain unavailable through RECOVERY, and not-ready duplicate intents produce compact command feedback instead of MISS/BLOCKED/WOUNDED combat-log spam.
+- Updated combat cue generation/rendering to derive windup, motion family, impact pulse, and result badge from authoritative combat evidence/profile metadata while keeping camera/projection/interpolation state viewer-local and non-serialized.
+- Hardened verification boundaries: spoofed weapon profiles normalize to `default_melee`, save/load during WINDUP/RECOVERY is deterministic, empty-space LMB whiffs cleanly, repeated Space creates no persistent/log feedback spam, and runtime visual audit remains explicitly unverified in this container because pygame is unavailable.
+
+Lock-out constraints reviewed: OK — changes are local-role gated, preserve campaign continuous-plane constraints, keep projection/camera out of simulation authority/hashes/input logs, and do not add networking or second-order systems.
+
+---
+
 ## Current Verification Commands (known working)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "camera or diagnostics or zoom or player_view or perf or sentinel"`

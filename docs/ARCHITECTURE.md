@@ -71,6 +71,14 @@ This document locks core engine contracts and invariants for the simulation subs
 
 **Anti-lock-in warning:** Do not introduce rules that assume a north-up screen or a top-down-only local map presentation. Do not encode isometric-specific offsets (or any projection-specific pixel transform) into simulation coordinates.
 
+## 2E) Local Melee Cadence Authority (Gate 1)
+- **Contract:** Local-role melee input is click-to-commit: the viewer may provide target entity, target cell/point, and committed local aim derived from mouse position, but combat timing/profile authority belongs to the simulation/rule layer.
+- **Contract:** Until authoritative equipment identity exists, local melee normalizes to `default_melee`; viewer-supplied or malformed `weapon_profile_id` values must not change timing, reach, arc, RNG, hit admissibility, or recovery.
+- **Contract:** `impact_tick` is relative to the accepted attack tick. For `default_melee`, acceptance at tick `T` uses WINDUP on ticks `T..T+windup_ticks-1`, IMPACT exactly at `T+impact_tick`, RECOVERY on ticks after impact while `current_tick < cooldown_until_tick`, and READY resumes when `current_tick == cooldown_until_tick`.
+- **Contract:** An `attack_intent` arriving exactly on `cooldown_until_tick` is admissible if all other local-role combat checks pass; intents before that tick are not-ready feedback only and must not append MISS/BLOCKED/WOUNDED combat outcomes.
+- **Contract:** Empty-space local melee may be accepted as a directional whiff using canonical local/topology target evidence; it may produce windup/impact-miss evidence but must not fake a target or wound.
+- **Contract:** Serialized combat evidence may include canonical local/topology terms and normalized cadence/profile identifiers only. Screen coordinates, camera center, zoom, interpolation, render bboxes, cursor pixels, visual geometry, and viewer-only presentation state are forbidden in canonical save/input/hash state.
+
 ## 3) Time Contract
 - **Contract:** Authoritative simulation advances only via `advance_ticks(n)` and `advance_days(n)`.
 - **Contract:** Tick duration is an in-world quantum; wall-clock stepping/speed controls are viewer concerns.

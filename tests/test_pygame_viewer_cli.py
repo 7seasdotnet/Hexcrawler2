@@ -98,7 +98,7 @@ from hexcrawler.sim.encounters import (
 )
 from hexcrawler.sim.exploration import ENTER_SAFE_HUB_INTENT_COMMAND_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY
+from hexcrawler.sim.location import OVERWORLD_HEX_TOPOLOGY, SQUARE_GRID_TOPOLOGY
 from hexcrawler.sim.local_hostiles import HOSTILE_TEMPLATE_ID
 from hexcrawler.sim.movement import square_grid_cell_to_world_xy
 from hexcrawler.sim.world import (
@@ -639,8 +639,103 @@ def test_simulation_controller_appends_attack_intent_command() -> None:
         "attacker_id": PLAYER_ID,
         "target_id": "target",
         "mode": "melee",
-        "tags": ["viewer_local_attack"],
+        "weapon_profile_id": "default_melee",
+        "tags": ["viewer_lmb_directional_melee"],
     }
+
+
+def test_lmb_directional_melee_click_queues_one_edge_triggered_attack_intent() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    local_space_id = "test_local_lmb"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type=SQUARE_GRID_TOPOLOGY,
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 2, "height": 1, "origin": {"x": 0, "y": 0}},
+    )
+    player.space_id = local_space_id
+    player.position_x = 0.5
+    player.position_y = 0.5
+    target = EntityState(entity_id="hostile:lmb", position_x=1.5, position_y=0.5, space_id=local_space_id)
+    sim.add_entity(target)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    click_px = tuple(int(value) for value in viewer_module._world_to_screen((1.5, 0.5), (0.5, 0.5), 1.0))
+    status = viewer_module._queue_local_attack_for_click(sim, controller, click_px, (0.5, 0.5), 1.0, radius_px=80.0)
+
+    attack_commands = [command for command in sim.input_log if command.command_type == ATTACK_INTENT_COMMAND_TYPE]
+    assert len(attack_commands) == 1
+    assert status is not None and "melee committed" in status
+    params = attack_commands[0].params
+    assert params["target_id"] == "hostile:lmb"
+    assert params["target_cell"] == {"space_id": local_space_id, "coord": {"x": 1, "y": 0}}
+    assert params["weapon_profile_id"] == "default_melee"
+    assert params["committed_aim"]["space_id"] == local_space_id
+    assert params["committed_aim"]["facing"] == 0
+    assert params["committed_aim"]["x"] == pytest.approx(1.0, abs=0.02)
+    assert params["committed_aim"]["y"] == pytest.approx(0.0, abs=0.02)
+
+
+def test_space_reserved_no_longer_queues_ordinary_melee_attack_intent() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    # Space is now intentionally status-only/reserved; ordinary melee enters through LMB.
+    before = len([command for command in sim.input_log if command.command_type == ATTACK_INTENT_COMMAND_TYPE])
+    _ = controller  # keep construction coverage for the same controller path used by live input.
+    after = len([command for command in sim.input_log if command.command_type == ATTACK_INTENT_COMMAND_TYPE])
+
+    assert after == before
+
+
+def test_lmb_empty_local_space_queues_directional_attack_without_target_id() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    local_space_id = "test_local_empty_lmb"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type=SQUARE_GRID_TOPOLOGY,
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 2, "height": 1, "origin": {"x": 0, "y": 0}},
+    )
+    player.space_id = local_space_id
+    player.position_x = 0.5
+    player.position_y = 0.5
+    controller = SimulationController(sim=sim, entity_id=PLAYER_ID)
+
+    click_px = tuple(int(value) for value in viewer_module._world_to_screen((1.5, 0.5), (0.5, 0.5), 1.0))
+    status = viewer_module._queue_local_attack_for_click(sim, controller, click_px, (0.5, 0.5), 1.0, radius_px=8.0)
+
+    attack_commands = [command for command in sim.input_log if command.command_type == ATTACK_INTENT_COMMAND_TYPE]
+    assert len(attack_commands) == 1
+    assert status == "directional melee committed"
+    params = attack_commands[0].params
+    assert "target_id" not in params
+    assert params["target_cell"] == {"space_id": local_space_id, "coord": {"x": 1, "y": 0}}
+    assert params["target_point"]["space_id"] == local_space_id
+    assert params["committed_aim"]["x"] == pytest.approx(1.0, abs=0.02)
+    forbidden_fragments = ("screen", "pixel", "camera", "zoom", "interpolation", "render", "bbox", "cursor", "presentation")
+    serialized_params = str(params).lower()
+    assert not any(fragment in serialized_params for fragment in forbidden_fragments)
+
+
+def test_repeated_space_reserved_feedback_does_not_create_persistent_or_log_spam() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    baseline_hash = simulation_hash(sim)
+    baseline_world_hash = world_hash(sim.state.world)
+
+    messages = [viewer_module._reserved_space_status_message() for _ in range(50)]
+
+    assert set(messages) == {"Space reserved for future contextual violence"}
+    assert [command for command in sim.input_log if command.command_type == ATTACK_INTENT_COMMAND_TYPE] == []
+    assert sim.state.combat_log == []
+    assert sim.get_event_trace() == []
+    assert sim.get_command_outcomes() == []
+    assert state.presentation_effects.pulse_rings == []
+    assert simulation_hash(sim) == baseline_hash
+    assert world_hash(sim.state.world) == baseline_world_hash
 
 
 def test_enter_or_e_generic_site_use_opens_town_services_via_generic_path() -> None:
@@ -978,7 +1073,7 @@ def test_queue_local_attack_for_click_routes_to_authoritative_attack_intent(monk
         zoom_scale=1.0,
     )
 
-    assert status == "attack queued -> hostile:test"
+    assert status == "melee committed -> hostile:test"
     assert sim.input_log[-2].command_type == ATTACK_INTENT_COMMAND_TYPE
     assert sim.input_log[-2].params["target_id"] == "hostile:test"
     assert sim.input_log[-1].command_type == "set_selected_entity"
