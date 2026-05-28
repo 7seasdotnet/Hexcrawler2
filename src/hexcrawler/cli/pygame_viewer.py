@@ -1381,11 +1381,27 @@ def _camera_center_for_cursor_zoom(
 ) -> tuple[float, float]:
     if abs(float(to_zoom) - float(from_zoom)) <= 1e-9:
         return center
-    world_x, world_y = _pixel_to_world(cursor_pos[0], cursor_pos[1], center, float(from_zoom))
+    world_x, world_y = _screen_to_world(cursor_pos, center, float(from_zoom))
     return (
         float(cursor_pos[0]) - (world_x * HEX_SIZE * float(to_zoom)),
         float(cursor_pos[1]) - (world_y * HEX_SIZE * float(to_zoom)),
     )
+
+
+def _world_to_screen(
+    world_xy: tuple[float, float],
+    camera_center: tuple[float, float],
+    zoom_scale: float,
+) -> tuple[float, float]:
+    return _world_to_pixel(world_xy[0], world_xy[1], camera_center, zoom_scale)
+
+
+def _screen_to_world(
+    screen_xy: tuple[int, int] | tuple[float, float],
+    camera_center: tuple[float, float],
+    zoom_scale: float,
+) -> tuple[float, float]:
+    return _pixel_to_world(int(screen_xy[0]), int(screen_xy[1]), camera_center, zoom_scale)
 
 
 
@@ -6266,14 +6282,6 @@ def run_pygame_viewer(
                 if abs(target_zoom - pre_zoom) <= 1e-9:
                     continue
                 local_camera_cache.target_zoom_scale = target_zoom
-                mouse_px, mouse_py = pygame_module.mouse.get_pos()
-                if viewport_rect.collidepoint((mouse_px, mouse_py)):
-                    local_camera_cache.center = _camera_center_for_cursor_zoom(
-                        center=local_camera_cache.center,
-                        cursor_pos=(int(mouse_px), int(mouse_py)),
-                        from_zoom=pre_zoom,
-                        to_zoom=target_zoom,
-                    )
                 status_message = f"zoom {target_zoom:.2f}x"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F4:
                 sim = runtime_controller.new_simulation(map_path=runtime_state.map_path, seed=runtime_state.sim.seed)
@@ -7055,18 +7063,10 @@ def run_pygame_viewer(
             else:
                 transition_overlay_title = "Transition"
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+        cursor_anchor_zoom_active = False
         if not runtime_state.visual_audit_mode:
             smoothed_zoom = _smooth_zoom_toward_target(world_zoom_scale, local_camera_cache.target_zoom_scale, dt)
             if abs(smoothed_zoom - world_zoom_scale) > 1e-9:
-                mouse_px, mouse_py = pygame_module.mouse.get_pos()
-                if viewport_rect.collidepoint((mouse_px, mouse_py)):
-                    world_center = _camera_center_for_cursor_zoom(
-                        center=world_center,
-                        cursor_pos=(int(mouse_px), int(mouse_py)),
-                        from_zoom=world_zoom_scale,
-                        to_zoom=smoothed_zoom,
-                    )
-                local_camera_cache.center = world_center
                 world_zoom_scale = smoothed_zoom
             local_camera_cache.zoom_scale = world_zoom_scale
         pre_focus_center = world_center
@@ -7111,7 +7111,7 @@ def run_pygame_viewer(
             status_message = follow_message
         player_screen_position: dict[str, float] | None = None
         if player is not None:
-            player_px, player_py = _world_to_pixel(player.position_x, player.position_y, world_center, world_zoom_scale)
+            player_px, player_py = _world_to_screen((player.position_x, player.position_y), world_center, world_zoom_scale)
             player_screen_position = {"x": float(player_px), "y": float(player_py)}
         camera_diag = {
             "active_space_id": current_space_id,
@@ -7129,7 +7129,9 @@ def run_pygame_viewer(
             "current_zoom": float(world_zoom_scale),
             "target_zoom": float(local_camera_cache.target_zoom_scale),
             "zoom_delta": float(local_camera_cache.target_zoom_scale - world_zoom_scale),
+            "cursor_anchor_zoom_active": bool(cursor_anchor_zoom_active),
             "camera_mode_focus_reason": focus_reason,
+            "visual_audit_mode": bool(runtime_state.visual_audit_mode),
             "player_view": bool(player_view),
             "debug_overlay": bool(runtime_state.show_debug_overlay),
             "interpolation_alpha": float(alpha),

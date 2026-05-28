@@ -9,12 +9,12 @@
 
 ## Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
-- **Next action:** Run the three `play.py` viewer commands on a machine with `pygame` installed and confirm mouse-wheel zoom remains stable through Greybridge approach/local transitions while perf sentinel records zoom diagnostics.
+- **Next action:** Run `python play.py`, `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50`, and `python play.py --visual-audit` on a machine with `pygame` installed to verify campaign/local zoom stability and collect F10 perf zoom diagnostics.
 
 ## What changed in this commit
-- Added viewer-local smooth mouse-wheel zoom (target+current zoom, clamp bounds, smoothing) for normal play; zoom is non-authoritative camera math and does not touch simulation/input log/hash state.
-- Implemented cursor-anchored zoom re-centering and kept visual-audit framing isolated from normal runtime zoom behavior.
-- Extended camera diagnostics payload and compact player HUD hint (`wheel zoom | F1 debug | F10 perf dump`), plus focused pygame viewer tests for zoom behavior and non-mutation guarantees.
+- Disabled cursor-anchor recentering in normal runtime mouse-wheel handling and smoothing pass; wheel input now updates `target_zoom_scale` only while camera center remains follow/cached-camera owned.
+- Added explicit render-local transform helpers (`_world_to_screen`, `_screen_to_world`) and used them in zoom/camera paths to keep one coherent center+zoom transform seam.
+- Extended/updated viewer tests to lock non-authoritative zoom behavior and runtime gating (cursor-anchor helper remains available but normal play no longer calls it).
 
 ## What changed in this commit
 - Fixed player-facing HUD regression by restoring compact canonical line formats expected by gameplay HUD tests (`condition=...`, `melee_state=...`, compact `time ...`, inventory line), while keeping debug/projection diagnostics out of player view.

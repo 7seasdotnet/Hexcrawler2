@@ -1307,7 +1307,7 @@ def test_smooth_zoom_moves_toward_target_without_overshoot() -> None:
     assert large_dt_zoom == target
 
 
-def test_cursor_zoom_reanchors_camera_without_simulation_mutation() -> None:
+def test_cursor_zoom_helper_is_viewer_local_and_non_authoritative() -> None:
     sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
     input_log_before = list(sim.input_log)
     world_before = world_hash(sim.state.world)
@@ -1323,6 +1323,12 @@ def test_cursor_zoom_reanchors_camera_without_simulation_mutation() -> None:
     assert list(sim.input_log) == input_log_before
     assert world_hash(sim.state.world) == world_before
     assert simulation_hash(sim) == sim_before
+
+
+def test_runtime_zoom_does_not_use_cursor_anchor_recenter_in_normal_play() -> None:
+    source = inspect.getsource(viewer_module.run_pygame_viewer)
+    assert "_camera_center_for_cursor_zoom(" not in source
+    assert "cursor_anchor_zoom_active = False" in source
 
 
 def test_hud_hint_contains_mouse_wheel_zoom() -> None:
