@@ -94,6 +94,10 @@ MIN_WORLD_HEIGHT = 220
 INSPECTOR_MIN_WIDTH = 320
 SIM_TICK_SECONDS = 0.10
 PLAYER_ID = "scout"
+ZOOM_STEP_PER_WHEEL_TICK = 0.12
+ZOOM_MIN_SCALE = 0.75
+ZOOM_MAX_SCALE = 3.2
+ZOOM_SMOOTHING_RATE = 12.0
 PENDING_OFFER_DECISION_TICK_CAP = 12
 CALENDAR_MONTH_LENGTH_DAYS = 28
 CALENDAR_MONTHS: tuple[str, ...] = (
@@ -289,6 +293,7 @@ class LocalCameraCache:
     topology_params_signature: str | None = None
     center: tuple[float, float] = (0.0, 0.0)
     zoom_scale: float = 1.0
+    target_zoom_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -1341,7 +1346,46 @@ def _cached_camera_center_and_zoom(
         cache.topology_params_signature = topology_signature
         cache.center = center
         cache.zoom_scale = zoom_scale
+        cache.target_zoom_scale = zoom_scale
     return cache.center, cache.zoom_scale
+
+
+def _clamp_zoom_scale(scale: float) -> float:
+    return max(ZOOM_MIN_SCALE, min(ZOOM_MAX_SCALE, float(scale)))
+
+
+def _zoom_target_from_wheel(current_target_zoom: float, wheel_y: int) -> float:
+    if int(wheel_y) == 0:
+        return _clamp_zoom_scale(current_target_zoom)
+    return _clamp_zoom_scale(float(current_target_zoom) * ((1.0 + ZOOM_STEP_PER_WHEEL_TICK) ** int(wheel_y)))
+
+
+def _smooth_zoom_toward_target(current_zoom: float, target_zoom: float, dt_seconds: float) -> float:
+    current = float(current_zoom)
+    target = _clamp_zoom_scale(target_zoom)
+    if abs(target - current) <= 1e-6:
+        return target
+    t = max(0.0, min(1.0, ZOOM_SMOOTHING_RATE * max(0.0, float(dt_seconds))))
+    next_zoom = current + ((target - current) * t)
+    if abs(target - next_zoom) < 1e-5:
+        return target
+    return _clamp_zoom_scale(next_zoom)
+
+
+def _camera_center_for_cursor_zoom(
+    *,
+    center: tuple[float, float],
+    cursor_pos: tuple[int, int],
+    from_zoom: float,
+    to_zoom: float,
+) -> tuple[float, float]:
+    if abs(float(to_zoom) - float(from_zoom)) <= 1e-9:
+        return center
+    world_x, world_y = _pixel_to_world(cursor_pos[0], cursor_pos[1], center, float(from_zoom))
+    return (
+        float(cursor_pos[0]) - (world_x * HEX_SIZE * float(to_zoom)),
+        float(cursor_pos[1]) - (world_y * HEX_SIZE * float(to_zoom)),
+    )
 
 
 
@@ -4278,7 +4322,7 @@ def _draw_hud(
         lines.append(f"follow={follow_state.status} | debug data in inspector/debug panel")
     else:
         lines = lines[:1]
-        lines.append("hint: right-click to move/interact | F1 debug | F10 perf dump")
+        lines.append("hint: right-click move/interact | wheel zoom | F1 debug | F10 perf dump")
 
     if status_message:
         lines.append(f"status: {status_message}")
@@ -6214,6 +6258,23 @@ def run_pygame_viewer(
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F1:
                 runtime_state.show_debug_overlay = not runtime_state.show_debug_overlay
                 status_message = f"debug overlay {'on' if runtime_state.show_debug_overlay else 'off'}"
+            elif event.type == pygame_module.MOUSEWHEEL:
+                if runtime_state.visual_audit_mode:
+                    continue
+                pre_zoom = float(local_camera_cache.target_zoom_scale)
+                target_zoom = _zoom_target_from_wheel(pre_zoom, int(getattr(event, "y", 0)))
+                if abs(target_zoom - pre_zoom) <= 1e-9:
+                    continue
+                local_camera_cache.target_zoom_scale = target_zoom
+                mouse_px, mouse_py = pygame_module.mouse.get_pos()
+                if viewport_rect.collidepoint((mouse_px, mouse_py)):
+                    local_camera_cache.center = _camera_center_for_cursor_zoom(
+                        center=local_camera_cache.center,
+                        cursor_pos=(int(mouse_px), int(mouse_py)),
+                        from_zoom=pre_zoom,
+                        to_zoom=target_zoom,
+                    )
+                status_message = f"zoom {target_zoom:.2f}x"
             elif event.type == pygame_module.KEYDOWN and event.key == pygame_module.K_F4:
                 sim = runtime_controller.new_simulation(map_path=runtime_state.map_path, seed=runtime_state.sim.seed)
                 previous_snapshot = extract_render_snapshot(sim)
@@ -6994,6 +7055,20 @@ def run_pygame_viewer(
             else:
                 transition_overlay_title = "Transition"
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+        if not runtime_state.visual_audit_mode:
+            smoothed_zoom = _smooth_zoom_toward_target(world_zoom_scale, local_camera_cache.target_zoom_scale, dt)
+            if abs(smoothed_zoom - world_zoom_scale) > 1e-9:
+                mouse_px, mouse_py = pygame_module.mouse.get_pos()
+                if viewport_rect.collidepoint((mouse_px, mouse_py)):
+                    world_center = _camera_center_for_cursor_zoom(
+                        center=world_center,
+                        cursor_pos=(int(mouse_px), int(mouse_py)),
+                        from_zoom=world_zoom_scale,
+                        to_zoom=smoothed_zoom,
+                    )
+                local_camera_cache.center = world_center
+                world_zoom_scale = smoothed_zoom
+            local_camera_cache.zoom_scale = world_zoom_scale
         pre_focus_center = world_center
         pre_focus_zoom = world_zoom_scale
         player_view = not runtime_state.show_debug_overlay
@@ -7049,8 +7124,11 @@ def run_pygame_viewer(
             "camera_target": {"x": float(local_camera_cache.center[0]), "y": float(local_camera_cache.center[1])},
             "camera_delta_per_frame": {"x": float(world_center[0] - pre_focus_center[0]), "y": float(world_center[1] - pre_focus_center[1])},
             "camera_zoom_current": float(world_zoom_scale),
-            "camera_zoom_target": float(local_camera_cache.zoom_scale),
+            "camera_zoom_target": float(local_camera_cache.target_zoom_scale),
             "zoom_delta_per_frame": float(world_zoom_scale - pre_focus_zoom),
+            "current_zoom": float(world_zoom_scale),
+            "target_zoom": float(local_camera_cache.target_zoom_scale),
+            "zoom_delta": float(local_camera_cache.target_zoom_scale - world_zoom_scale),
             "camera_mode_focus_reason": focus_reason,
             "player_view": bool(player_view),
             "debug_overlay": bool(runtime_state.show_debug_overlay),
