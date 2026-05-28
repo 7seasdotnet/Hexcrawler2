@@ -1,4 +1,5 @@
 import inspect
+import json
 from pathlib import Path
 
 import hexcrawler.cli.pygame_viewer as viewer_module
@@ -1267,6 +1268,48 @@ def test_perf_sentinel_sampling_does_not_reference_player_view_symbol() -> None:
     assert "debug_panel_active=not player_view" not in source
     assert "debug_panel_active=bool(panel_section_counts)" in source
     assert "K_F1" in source
+
+
+def test_dump_perf_report_with_records_sets_empty_reason_to_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    sentinel.records.append({"frame_ms": 16.5, "timing": {"draw_ms": 2.0, "simulation_advance_ms": 1.0, "debug_draw_ms": 0.5, "flip_ms": 0.1, "throttle_ms": 10.0}})
+    sentinel.last_render_diag = {"draw_path_entered": True}
+    monkeypatch.chdir(tmp_path)
+
+    out_path = viewer_module._dump_perf_report(sentinel, sim=sim, reason="hotkey_f10")
+
+    payload = json.loads(Path(out_path).read_text(encoding="utf-8"))
+    assert payload["reason"] == "hotkey_f10"
+    assert payload["records"]
+    assert payload["empty_records_reason"] is None
+    assert payload["render_diagnostics"]["draw_path_entered"] is True
+
+
+def test_dump_perf_report_with_empty_records_writes_explicit_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    sentinel.last_sample_failure_reason = "no_samples_before_hotkey"
+    sentinel.last_render_diag = None  # type: ignore[assignment]
+    monkeypatch.chdir(tmp_path)
+
+    out_path = viewer_module._dump_perf_report(sentinel, sim=sim, reason="hotkey_f10")
+
+    payload = json.loads(Path(out_path).read_text(encoding="utf-8"))
+    assert payload["records"] == []
+    assert payload["empty_records_reason"] == "no_samples_before_hotkey"
+    assert payload["render_diagnostics"] == {}
+
+
+def test_dump_perf_report_empty_records_uses_fallback_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    sentinel = viewer_module.PerfSentinelState(enabled=True)
+    monkeypatch.chdir(tmp_path)
+
+    out_path = viewer_module._dump_perf_report(sentinel, sim=sim, reason="hotkey_f10")
+
+    payload = json.loads(Path(out_path).read_text(encoding="utf-8"))
+    assert payload["empty_records_reason"] == "no_perf_samples_captured"
 
 
 def test_import_pygame_viewer_succeeds_when_resource_module_missing(tmp_path: Path) -> None:

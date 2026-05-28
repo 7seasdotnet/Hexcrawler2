@@ -571,3 +571,17 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
 - `python play.py --visual-audit`
 - `python play.py --durability-audit --days 30 --out docs/ai_playtest/durability`
+# What changed in this commit
+- Fixed perf sentinel F10 dump crash in `pygame_viewer._dump_perf_report` by defining `empty_records_reason` deterministically (`None` when records exist; explicit reason when empty) and preventing unassigned local access.
+- Hardened perf report diagnostics export so missing/non-dict `last_render_diag` degrades safely to `{}` instead of raising during report generation.
+- Added regression coverage for perf report dump behavior with records, empty records (explicit reason), and fallback empty reason so F10 dump remains non-crashing.
+
+# Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+
+# Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Validate `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` on a pygame-enabled Windows machine and press `F10` to confirm `lag_capture_metrics.json` always writes with either sampled records or explicit `empty_records_reason`.

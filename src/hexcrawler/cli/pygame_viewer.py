@@ -2938,6 +2938,10 @@ def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: s
     avg_throttle = _summary(throttle_values)["avg"] or 0.0
     compute_avg = avg_draw + avg_sim + avg_flip
     pacing_diagnosis = "mostly_sleep_or_throttle" if avg_throttle > compute_avg else "mostly_compute"
+    empty_reason: str | None = None
+    if not sentinel.records:
+        empty_reason = sentinel.last_sample_failure_reason or "no_perf_samples_captured"
+    render_diag = sentinel.last_render_diag if isinstance(sentinel.last_render_diag, dict) else {}
     payload = {
         "reason": reason,
         "tick": int(sim.state.tick),
@@ -2952,7 +2956,7 @@ def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: s
             "frame_time_diagnosis": pacing_diagnosis,
         },
         "empty_records_reason": empty_reason,
-        "render_diagnostics": dict(sentinel.last_render_diag),
+        "render_diagnostics": dict(render_diag),
     }
     metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report_path.write_text(
