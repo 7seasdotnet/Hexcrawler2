@@ -1259,6 +1259,38 @@ def _topology_params_signature(active_space: Any) -> str | None:
     return json.dumps(params, sort_keys=True)
 
 
+
+
+def _audit_local_focus_camera(sim: Simulation, viewport_rect: pygame.Rect) -> tuple[tuple[float, float], float] | None:
+    player = sim.state.entities.get(PLAYER_ID)
+    if player is None:
+        return None
+    active_space = sim.state.world.spaces.get(player.space_id)
+    if active_space is None or str(getattr(active_space, "role", "")) != LOCAL_SPACE_ROLE:
+        return None
+    points: list[tuple[float, float]] = [(float(player.position_x), float(player.position_y))]
+    for entity in sim.state.entities.values():
+        if entity.entity_id == PLAYER_ID or entity.space_id != player.space_id:
+            continue
+        if _is_hostile(sim, PLAYER_ID, entity.entity_id):
+            points.append((float(entity.position_x), float(entity.position_y)))
+            break
+    return_context = _get_return_context_for_space(sim, player.space_id)
+    if isinstance(return_context, dict):
+        exit_coord = return_context.get("return_exit_coord")
+        exit_xy = _coord_xy(sim, player.space_id, exit_coord) if isinstance(exit_coord, dict) else None
+        if isinstance(exit_xy, dict):
+            points.append((float(exit_xy["x"]), float(exit_xy["y"])))
+    min_x=min(x for x,_ in points); max_x=max(x for x,_ in points)
+    min_y=min(y for _,y in points); max_y=max(y for _,y in points)
+    span_x=max(3.0, (max_x-min_x)+3.5)
+    span_y=max(3.0, (max_y-min_y)+3.5)
+    size=max(span_x, span_y)
+    zoom_scale=max(1.35, min(4.2, (float(viewport_rect.width)*0.62)/(size*HEX_SIZE)))
+    focus_x=(min_x+max_x)*0.5; focus_y=(min_y+max_y)*0.5
+    center=(float(viewport_rect.centerx)-(focus_x*HEX_SIZE*zoom_scale), float(viewport_rect.centery)-(focus_y*HEX_SIZE*zoom_scale))
+    return center, zoom_scale
+
 def _cached_camera_center_and_zoom(
     sim: Simulation,
     viewport_rect: pygame.Rect,
@@ -3187,6 +3219,12 @@ def _draw_combat_presentation_cues(
                 "attacker_screen_pos": {"x": int(ax), "y": int(ay)},
                 "target_screen_pos": {"x": int(tx), "y": int(ty)},
                 "rendered": True,
+                "cue_rendered": True,
+                "arc_bbox": {"x": int(min(ax, tx) - 48), "y": int(min(ay, ty) - 48), "w": int(abs(tx - ax) + 96), "h": int(abs(ty - ay) + 96)},
+                "impact_bbox": {"x": int(tx - 48), "y": int(ty - 48), "w": 96, "h": 96},
+                "badge_text": cue.outcome_label.upper(),
+                "badge_screen_pos": {"x": int(tx), "y": int(ty - 54)},
+                "render_layer_used": "combat_cues_overlay",
             }
         )
     runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]
@@ -3195,6 +3233,7 @@ def _draw_combat_presentation_cues(
         "active_cue_ids": [f"{cue.impact_tick}:{cue.attacker_id}:{cue.target_id}" for cue in runtime_state.combat_presentation_cues],
         "rendered_cues": rendered_rows,
         "phase_override": phase_override,
+        "cue_rendered": bool(rendered_rows),
     }
     screen.set_clip(old_clip)
     return runtime_state.last_combat_cue_render_diagnostics
@@ -6858,6 +6897,10 @@ def run_pygame_viewer(
             else:
                 transition_overlay_title = "Transition"
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
+    if player_view:
+        focused_camera = _audit_local_focus_camera(sim, viewport_rect)
+        if focused_camera is not None:
+            world_center, world_zoom_scale = focused_camera
         selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
         follow_center, follow_message = _apply_follow_selected_camera(
             sim,
