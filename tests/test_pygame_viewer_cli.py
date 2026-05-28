@@ -2047,6 +2047,37 @@ def test_combat_presentation_cues_are_bounded_and_viewer_local() -> None:
     assert all(cue.attacker_id == PLAYER_ID for cue in state.combat_presentation_cues)
 
 
+def test_combat_presentation_cue_duplicate_keys_are_suppressed() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    target = EntityState(entity_id="hostile:dup", position_x=1.0, position_y=0.0, space_id=player.space_id)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    payload = {"tick": sim.state.tick, "attacker_id": PLAYER_ID, "target_id": target.entity_id, "reason": "resolved", "applied": True}
+    sim.schedule_event_at(sim.state.tick, "combat_outcome", payload)
+    sim.advance_ticks(1)
+    viewer_module._refresh_combat_presentation_cues(sim, state)
+    viewer_module._refresh_combat_presentation_cues(sim, state)
+    assert len(state.combat_presentation_cues) == 1
+
+
+def test_combat_presentation_cues_do_not_mutate_hash_or_input_log() -> None:
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    target = EntityState(entity_id="hostile:hash", position_x=1.0, position_y=0.0, space_id=player.space_id)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    sim.schedule_event_at(sim.state.tick, "combat_outcome", {"tick": sim.state.tick, "attacker_id": PLAYER_ID, "target_id": target.entity_id, "reason": "resolved", "applied": True})
+    sim.advance_ticks(1)
+    sim_hash_before = simulation_hash(sim)
+    world_hash_before = world_hash(sim.state.world)
+    input_log_before = list(sim.input_log)
+    viewer_module._refresh_combat_presentation_cues(sim, state)
+    assert simulation_hash(sim) == sim_hash_before
+    assert world_hash(sim.state.world) == world_hash_before
+    assert list(sim.input_log) == input_log_before
+
+
 def test_context_menu_layout_wraps_long_rows_and_click_index_maps_correctly() -> None:
     viewer_module._ensure_pygame_imported()
     viewer_module.pygame.font.init()

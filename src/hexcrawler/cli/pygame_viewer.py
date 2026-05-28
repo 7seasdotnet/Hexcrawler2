@@ -2509,7 +2509,15 @@ def _draw_frame_layers(
         seen_event_keys=runtime_state.seen_combat_feedback_keys,
     )
     _refresh_combat_presentation_cues(sim, runtime_state)
-    _draw_combat_presentation_cues(screen, sim, runtime_state, world_center=world_center, zoom_scale=world_zoom_scale, clip_rect=viewport_rect)
+    _draw_combat_presentation_cues(
+        screen,
+        sim,
+        runtime_state,
+        marker_font=marker_font,
+        world_center=world_center,
+        zoom_scale=world_zoom_scale,
+        clip_rect=viewport_rect,
+    )
     runtime_state.presentation_effects.draw(pygame, screen)
     timing["draw_entities_ms"] = (time.perf_counter() - t1) * 1000.0
     player = sim.state.entities.get(PLAYER_ID)
@@ -3065,10 +3073,14 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
     for row in sim.get_event_trace()[-12:]:
         if str(row.get("event_type")) != COMBAT_OUTCOME_EVENT_TYPE:
             continue
-        tick = int(row.get("tick", -1))
-        attacker_id = str(row.get("attacker_id", ""))
-        target_id = str(row.get("target_id", ""))
-        reason = str(row.get("reason", "resolved"))
+        params = row.get("params")
+        payload = params if isinstance(params, dict) else row
+        tick = int(payload.get("tick", row.get("tick", -1)))
+        attacker_id = str(payload.get("attacker_id", ""))
+        target_id = str(payload.get("target_id", ""))
+        reason = str(payload.get("reason", "resolved"))
+        applied = payload.get("applied") is True
+        neutralized = payload.get("neutralized") is True
         key = (tick, attacker_id, target_id, reason)
         if key in runtime_state.seen_combat_cue_keys or not attacker_id or not target_id:
             continue
@@ -3079,16 +3091,17 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         runtime_state.seen_combat_cue_keys.append(key)
         if len(runtime_state.seen_combat_cue_keys) > COMBAT_CUE_MAX:
             runtime_state.seen_combat_cue_keys = runtime_state.seen_combat_cue_keys[-COMBAT_CUE_MAX:]
+        outcome_label, _ = _combat_feedback_label_and_color(reason=reason, applied=applied, neutralized=neutralized)
         runtime_state.combat_presentation_cues.append(
             CombatPresentationCue(
                 attacker_id=attacker_id,
                 target_id=target_id,
-                start_tick=max(0, tick - 2),
+                start_tick=max(0, tick - 4),
                 impact_tick=tick,
-                outcome_label=_combat_reason_label(reason),
+                outcome_label=outcome_label,
                 attacker_position=(float(attacker.position_x), float(attacker.position_y)),
                 target_position=(float(target.position_x), float(target.position_y)),
-                phase="impact",
+                phase="windup",
             )
         )
     if len(runtime_state.combat_presentation_cues) > COMBAT_CUE_MAX:
@@ -3100,6 +3113,7 @@ def _draw_combat_presentation_cues(
     sim: Simulation,
     runtime_state: ViewerRuntimeState,
     *,
+    marker_font: pygame.font.Font,
     world_center: tuple[float, float],
     zoom_scale: float,
     clip_rect: pygame.Rect,
@@ -3109,15 +3123,52 @@ def _draw_combat_presentation_cues(
     now_tick = sim.state.tick
     survivors: list[CombatPresentationCue] = []
     for cue in runtime_state.combat_presentation_cues:
-        age = now_tick - cue.impact_tick
-        if age > 8:
+        if now_tick < cue.start_tick:
             continue
+        total_age = now_tick - cue.start_tick
+        if total_age > 14:
+            continue
+        if now_tick < cue.impact_tick:
+            phase = "windup"
+        elif now_tick == cue.impact_tick:
+            phase = "impact"
+        elif now_tick <= cue.impact_tick + 3:
+            phase = "arc"
+        else:
+            phase = "recovery"
+        cue = CombatPresentationCue(
+            attacker_id=cue.attacker_id,
+            target_id=cue.target_id,
+            start_tick=cue.start_tick,
+            impact_tick=cue.impact_tick,
+            outcome_label=cue.outcome_label,
+            attacker_position=cue.attacker_position,
+            target_position=cue.target_position,
+            phase=phase,
+        )
         survivors.append(cue)
         ax, ay = _world_to_pixel(cue.attacker_position[0], cue.attacker_position[1], world_center, zoom_scale)
         tx, ty = _world_to_pixel(cue.target_position[0], cue.target_position[1], world_center, zoom_scale)
-        pygame.draw.line(screen, (250, 220, 120), (int(ax), int(ay)), (int(tx), int(ty)), 2)
-        radius = 8 + min(14, age * 2)
-        pygame.draw.circle(screen, (255, 120, 88), (int(tx), int(ty)), radius, 2)
+        if cue.phase == "windup":
+            pygame.draw.line(screen, (246, 210, 130), (int(ax), int(ay)), (int(tx), int(ty)), 3)
+            pygame.draw.circle(screen, (255, 236, 150), (int(ax), int(ay)), 8, 2)
+        else:
+            midpoint = (int((ax + tx) * 0.5), int((ay + ty) * 0.5))
+            pygame.draw.line(screen, (255, 156, 96), (int(ax), int(ay)), midpoint, 4)
+            pygame.draw.line(screen, (255, 216, 138), midpoint, (int(tx), int(ty)), 3)
+            pygame.draw.circle(screen, (255, 236, 150), (int(ax), int(ay)), 7, 2)
+        if cue.phase in {"impact", "arc", "recovery"}:
+            impact_age = max(0, now_tick - cue.impact_tick)
+            radius = 10 + min(16, impact_age * 3)
+            pygame.draw.circle(screen, (255, 120, 88), (int(tx), int(ty)), radius, 3)
+            flash_radius = 6 + min(8, impact_age * 2)
+            pygame.draw.circle(screen, (255, 210, 140), (int(tx), int(ty)), flash_radius, 0)
+            badge = marker_font.render(cue.outcome_label.upper(), True, (255, 248, 232))
+            badge_rect = badge.get_rect(center=(int(tx), int(ty - radius - 12)))
+            bg_rect = badge_rect.inflate(10, 6)
+            pygame.draw.rect(screen, (54, 24, 24), bg_rect, border_radius=5)
+            pygame.draw.rect(screen, (255, 156, 96), bg_rect, 1, border_radius=5)
+            screen.blit(badge, badge_rect)
     runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]
     screen.set_clip(old_clip)
 

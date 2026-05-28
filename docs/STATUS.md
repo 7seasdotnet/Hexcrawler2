@@ -1,4 +1,17 @@
 ## What changed in this commit
+- Extended local-role `CombatPresentationCue` rendering to show windup-to-impact phases with readable attacker/target distinction, arc/slash lines, impact ring+flash, and authoritative outcome badges derived from combat outcome evidence only.
+- Hardened cue extraction to consume canonical combat outcome payloads (`params`) while preserving bounded queue/seen-key suppression and viewer-only state (no simulation mutation).
+- Added focused viewer tests for duplicate cue suppression and hash/input-log immutability during cue generation.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or player_view or perf or sentinel"`
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Re-run full visual-audit/perf command suite and inspect first_attack/combat_result contact-sheet readability after the cue pass.
+
+## What changed in this commit
 - Added explicit player-view/debug separation in pygame viewer: default runtime hides inspector/debug overlays and keeps compact player HUD, with full debug panels behind `F1` toggle and perf dump on `F10` when sentinel is enabled.
 - Corrected draw timing attribution by measuring world/entity/hud+debug/modal overlay slices independently instead of attributing full draw time to debug fields.
 - Added bounded viewer-local CombatPresentationCue pass derived from authoritative combat outcome evidence, rendering procedural attack line + impact ring without touching canonical simulation state.
