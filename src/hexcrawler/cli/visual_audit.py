@@ -216,6 +216,46 @@ Upload docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png to ChatGPT for visual 
 ## Known Blockers
 """+"\n".join(f"- {b}" for b in blocker_lines),encoding='utf-8')
 
+
+
+def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
+    rendered = diag.get("rendered_cues", []) if isinstance(diag, dict) else []
+    row = rendered[0] if rendered else {}
+    return {
+        "cue_count": int(diag.get("cue_count", 0)) if isinstance(diag, dict) else 0,
+        "cue_rendered": bool(diag.get("cue_rendered", False)) if isinstance(diag, dict) else False,
+        "cue_phase": row.get("phase"),
+        "cue_age": row.get("age_ticks"),
+        "attacker_id": row.get("attacker_id"),
+        "target_id": row.get("target_id"),
+        "outcome_label": row.get("outcome_label"),
+        "attacker_screen_pos": row.get("attacker_screen_pos"),
+        "target_screen_pos": row.get("target_screen_pos"),
+        "arc_bbox": row.get("arc_bbox"),
+        "impact_bbox": row.get("impact_bbox"),
+        "badge_text": row.get("badge_text"),
+        "badge_screen_pos": row.get("badge_screen_pos"),
+        "render_layer_used": row.get("render_layer_used"),
+    }
+
+def _draw_combat_inset(pg: Any, sheet: Any, view: Any, beat: BeatResult, x: int, y: int) -> None:
+    if beat.name not in {"first_attack", "combat_result"}:
+        return
+    timeline = ((beat.diagnostics or {}).get("combat_cue_timeline") or {})
+    bbox = timeline.get("arc_bbox") if beat.name == "first_attack" else timeline.get("impact_bbox")
+    if not isinstance(bbox, dict):
+        return
+    bx, by, bw, bh = int(bbox.get("x", 0)), int(bbox.get("y", 0)), int(bbox.get("w", 0)), int(bbox.get("h", 0))
+    if bw <= 0 or bh <= 0:
+        return
+    rect = pg.Rect(max(0, bx-30), max(0, by-30), min(view.get_width(), bw+60), min(view.get_height(), bh+60))
+    rect.width = min(rect.width, view.get_width()-rect.x); rect.height = min(rect.height, view.get_height()-rect.y)
+    if rect.width <= 8 or rect.height <= 8:
+        return
+    crop = view.subsurface(rect).copy()
+    inset = pg.transform.smoothscale(crop, (168, 112))
+    sheet.blit(inset, (x+248, y+6))
+    pg.draw.rect(sheet, (255,210,130), pg.Rect(x+248, y+6, 168, 112), 3)
 def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCRIPT,command:str="python play.py --visual-audit")->int:
     ts=datetime.now(timezone.utc).isoformat(); commit=_git_commit(); out=Path(out_dir) if out_dir else DEFAULT_OUT; out.mkdir(parents=True,exist_ok=True)
     for f in out.glob('*.png'): f.unlink()
@@ -251,6 +291,17 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         role=_get_space_role(sim, player.space_id if player else None)
         if sanity["blank_frame_suspected"] and status=="ok":
             status="failed"; reason=(reason+"; " if reason else "")+"blank_frame_suspected"
+        if name in {"first_attack", "combat_result"} and status == "ok":
+            cue_timeline = _extract_cue_timeline(render_meta.get("combat_cue_diagnostics", {}))
+            bbox = cue_timeline.get("arc_bbox") if name == "first_attack" else cue_timeline.get("impact_bbox")
+            if cue_timeline.get("cue_rendered") is not True:
+                status = "partial"
+                reason = (reason+"; " if reason else "") + "cue_rendered_false"
+            elif isinstance(bbox, dict):
+                bx, by, bw, bh = int(bbox.get("x",0)), int(bbox.get("y",0)), int(bbox.get("w",0)), int(bbox.get("h",0))
+                if bw <= 0 or bh <= 0 or bx >= screen.get_width() or by >= screen.get_height() or (bx+bw) <= 0 or (by+bh) <= 0:
+                    status = "partial"
+                    reason = (reason+"; " if reason else "") + "cue_bbox_offscreen"
         if status!="ok": blockers.append(f"{name}: {reason or 'failed'}")
         beats.append(BeatResult(name=name,file=str(path),status=status,tick=sim.state.tick,notes=reason,diagnostics={
             "active_space_id": player.space_id if player else None,
@@ -263,6 +314,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             "viewer_render_path": render_meta["render_path"],
             "viewer_viewport_rect": render_meta.get("viewport", [0, 0, 0, 0]),
             "combat_cue_diagnostics": render_meta.get("combat_cue_diagnostics", {}),
+            "combat_cue_timeline": _extract_cue_timeline(render_meta.get("combat_cue_diagnostics", {})),
             "rendered_from_actual_viewer_path": True,
             "visual_sanity": sanity,
             **(extra or {}),
@@ -457,7 +509,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         vx, vy, vw, vh = [int(v) for v in viewport]
         view = raw.subsurface(pg.Rect(vx, vy, vw, vh)).copy() if vw > 0 and vh > 0 else raw
         img=pg.transform.smoothscale(view,(420,236)); x=26+(i%4)*444; y=88+(i//4)*292
-        sheet.blit(img,(x,y)); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+214));
+        sheet.blit(img,(x,y)); _draw_combat_inset(pg, sheet, view, b, x, y); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+214));
         if b.notes: sheet.blit(sfont.render(b.notes[:44],True,(240,180,180)),(x,y+238))
     pg.image.save(sheet,str(CONTACT_SHEET_PATH))
     timeline={"script":script,"command":command,"timestamp":ts,"commit":commit,"pygame_status":"available","result":result,
