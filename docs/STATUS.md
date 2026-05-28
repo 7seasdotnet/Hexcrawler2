@@ -1,4 +1,27 @@
 ## What changed in this commit
+- Fixed player-facing HUD regression by restoring compact canonical line formats expected by gameplay HUD tests (`condition=...`, `melee_state=...`, compact `time ...`, inventory line), while keeping debug/projection diagnostics out of player view.
+- Added explicit player-facing campaign location line (`OUTSIDE Greybridge on campaign map`) for overworld HUD consistency, without reintroducing debug-heavy projection fields.
+- Preserved the black-screen fix path: runtime draw/flip/perf sampling remains unconditional and independent of debug overlay visibility.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or player_view or perf or sentinel or projection or weapon"`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+
+## What changed in this commit
+- Fixed the interactive viewer black-screen regression by restoring the canonical per-frame draw path unconditionally in `run_pygame_viewer` (the accidental `if player_view` gate had moved drawing/perf sampling behind an undefined symbol path).
+- Added bounded render-path diagnostics to perf sentinel capture (`draw_path_entered`, layer list, camera/display/player/space fields, flip/blit flags, and last render exception), and included explicit empty-sample reasons in lag reports.
+- Preserved/extended projection-safe combat cue architecture with viewer-local `WeaponMotionProfile` seams and projection adapters (`local_to_screen`, `vector_to_screen`, `render_weapon_motion`) without touching authoritative simulation state.
+
+## Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_hostile_behavior_slice.py tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or player_view or perf or sentinel or projection or weapon"` (one existing failure: `test_player_facing_hud_lines_are_compact_and_exclude_world_projection_diagnostics`)
+- `python play.py` / `python play.py --visual-audit` / `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` (blocked in this container: `ModuleNotFoundError: No module named pygame`)
+
+## What changed in this commit
 - Fixed combat cue generation starvation by replacing the `event_trace[-12:]` scan with a viewer-local incremental event-trace cursor; cue extraction now consumes new authoritative `combat_outcome` evidence deterministically even when many non-combat events occur before audit capture.
 - Added explicit `cue_render_failure_reason` diagnostics (`no_active_cues`, `invalid_phase_override`, `all_cues_filtered_by_timing`) and surfaced `active_cue_ids` in visual-audit cue timeline extraction for first-attack/combat-result truth reporting.
 - Added/updated verification coverage for combat presentation and preserved determinism boundaries (viewer-only cue state; no simulation/world/input-log mutation).

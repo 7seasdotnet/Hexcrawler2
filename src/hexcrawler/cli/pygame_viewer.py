@@ -598,10 +598,35 @@ class CombatPresentationCue:
     outcome_label: str
     attacker_position: tuple[float, float]
     target_position: tuple[float, float]
+    attack_vector_local: tuple[float, float]
+    motion_family: str
+    weapon_profile_id: str
     phase: str
 
 
 COMBAT_CUE_MAX = 18
+
+
+@dataclass(frozen=True)
+class WeaponMotionProfile:
+    profile_id: str
+    motion_family: str
+    path_shape: str
+    reach_scale: float
+    width_scale: float
+    windup_style: str
+    impact_style: str
+    recovery_style: str
+
+
+WEAPON_MOTION_PROFILE_BY_FAMILY: dict[str, WeaponMotionProfile] = {
+    "thrust": WeaponMotionProfile("spear_polearm", "thrust", "narrow_lunge", 1.25, 0.75, "coiled", "pierce_snap", "pullback"),
+    "slash": WeaponMotionProfile("sword", "slash", "curved_arc", 1.05, 1.0, "shoulder_arc", "slice_followthrough", "reset_guard"),
+    "chop": WeaponMotionProfile("axe", "chop", "overhead_chop", 1.0, 1.15, "high_raise", "heavy_chop", "heavy_recover"),
+    "stab": WeaponMotionProfile("dagger", "stab", "line", 0.7, 0.65, "close_coil", "quick_stab", "short_recover"),
+    "bash": WeaponMotionProfile("mace_hammer", "bash", "blunt_swing", 0.95, 1.2, "hip_swing", "blunt_impact", "brace"),
+}
+DEFAULT_WEAPON_MOTION_PROFILE = WEAPON_MOTION_PROFILE_BY_FAMILY["slash"]
 
 
 @dataclass
@@ -610,6 +635,8 @@ class PerfSentinelState:
     profile_on_lag: bool = False
     lag_frame_ms: float = 50.0
     records: list[dict[str, Any]] = field(default_factory=list)
+    last_render_diag: dict[str, Any] = field(default_factory=dict)
+    last_sample_failure_reason: str | None = None
     consecutive_over_threshold: int = 0
     triggered: bool = False
 
@@ -2809,6 +2836,7 @@ def _record_perf_sample(
     render_coupled_to_sim_tick: bool | None = None,
 ) -> None:
     if not sentinel.enabled:
+        sentinel.last_sample_failure_reason = "perf_sentinel_disabled"
         return
     rules_state_sizes = {
         name: len(json.dumps(sim.get_rules_state(name), sort_keys=True))
@@ -2864,6 +2892,7 @@ def _record_perf_sample(
         },
     }
     sentinel.records.append(sample)
+    sentinel.last_sample_failure_reason = None
     del sentinel.records[:-PERF_SENTINEL_BUFFER_CAP]
 
 
@@ -2922,6 +2951,8 @@ def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: s
             "throttle_ms": _summary(throttle_values),
             "frame_time_diagnosis": pacing_diagnosis,
         },
+        "empty_records_reason": empty_reason,
+        "render_diagnostics": dict(sentinel.last_render_diag),
     }
     metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report_path.write_text(
@@ -2929,6 +2960,7 @@ def _dump_perf_report(sentinel: PerfSentinelState, *, sim: Simulation, reason: s
         f"- reason: `{reason}`\n"
         f"- simulation_tick: `{int(sim.state.tick)}`\n"
         f"- samples: `{len(sentinel.records)}`\n"
+        f"- empty_records_reason: `{empty_reason}`\n"
         f"- frame_ms avg/p95/max: `{payload['summary']['frame_ms']['avg']}` / `{payload['summary']['frame_ms']['p95']}` / `{payload['summary']['frame_ms']['max']}`\n"
         f"- draw_ms avg/p95/max: `{payload['summary']['draw_ms']['avg']}` / `{payload['summary']['draw_ms']['p95']}` / `{payload['summary']['draw_ms']['max']}`\n"
         f"- simulation_advance_ms avg/p95/max: `{payload['summary']['simulation_advance_ms']['avg']}` / `{payload['summary']['simulation_advance_ms']['p95']}` / `{payload['summary']['simulation_advance_ms']['max']}`\n"
@@ -3131,6 +3163,12 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         if len(runtime_state.seen_combat_cue_keys) > COMBAT_CUE_MAX:
             runtime_state.seen_combat_cue_keys = runtime_state.seen_combat_cue_keys[-COMBAT_CUE_MAX:]
         outcome_label, _ = _combat_feedback_label_and_color(reason=reason, applied=applied, neutralized=neutralized)
+        dx = float(target.position_x) - float(attacker.position_x)
+        dy = float(target.position_y) - float(attacker.position_y)
+        magnitude = math.hypot(dx, dy)
+        vector = (dx / magnitude, dy / magnitude) if magnitude > 0.0001 else (1.0, 0.0)
+        motion_family = "slash"
+        profile_id = DEFAULT_WEAPON_MOTION_PROFILE.profile_id
         runtime_state.combat_presentation_cues.append(
             CombatPresentationCue(
                 attacker_id=attacker_id,
@@ -3140,12 +3178,39 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
                 outcome_label=outcome_label,
                 attacker_position=(float(attacker.position_x), float(attacker.position_y)),
                 target_position=(float(target.position_x), float(target.position_y)),
+                attack_vector_local=vector,
+                motion_family=motion_family,
+                weapon_profile_id=profile_id,
                 phase="windup",
             )
         )
     if len(runtime_state.combat_presentation_cues) > COMBAT_CUE_MAX:
         runtime_state.combat_presentation_cues = runtime_state.combat_presentation_cues[-COMBAT_CUE_MAX:]
     runtime_state.combat_cue_event_trace_cursor = len(trace)
+
+
+def _projection_local_to_screen(local_xy: tuple[float, float], world_center: tuple[float, float], zoom_scale: float) -> tuple[float, float]:
+    return _world_to_pixel(local_xy[0], local_xy[1], world_center, zoom_scale)
+
+
+def _projection_vector_to_screen(local_vec: tuple[float, float], zoom_scale: float) -> tuple[float, float]:
+    scale = HEX_SIZE * zoom_scale
+    return (float(local_vec[0]) * scale, float(local_vec[1]) * scale)
+
+
+def _render_weapon_motion(screen: pygame.Surface, cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> None:
+    ax, ay = int(attacker_px[0]), int(attacker_px[1])
+    tx, ty = int(target_px[0]), int(target_px[1])
+    width = max(3, int(6 * profile.width_scale))
+    if profile.motion_family == "thrust" or profile.motion_family == "stab":
+        pygame.draw.line(screen, (255, 220, 96), (ax, ay), (tx, ty), width)
+    elif profile.motion_family == "chop":
+        pygame.draw.arc(screen, (255, 194, 120), (ax - 28, ay - 34, 56, 68), -1.2, 1.1, width)
+    elif profile.motion_family == "bash":
+        pygame.draw.line(screen, (255, 165, 92), (ax, ay), (tx, ty), width + 2)
+    else:
+        pygame.draw.line(screen, (255, 220, 96), (ax, ay), (tx, ty), width)
+        pygame.draw.arc(screen, (255, 194, 120), (ax - 26, ay - 26, 52, 52), -0.95, 1.25, max(3, width - 1))
 
 
 def _draw_combat_presentation_cues(
@@ -3188,14 +3253,17 @@ def _draw_combat_presentation_cues(
             outcome_label=cue.outcome_label,
             attacker_position=cue.attacker_position,
             target_position=cue.target_position,
+            attack_vector_local=cue.attack_vector_local,
+            motion_family=cue.motion_family,
+            weapon_profile_id=cue.weapon_profile_id,
             phase=phase,
         )
         survivors.append(cue)
-        ax, ay = _world_to_pixel(cue.attacker_position[0], cue.attacker_position[1], world_center, zoom_scale)
-        tx, ty = _world_to_pixel(cue.target_position[0], cue.target_position[1], world_center, zoom_scale)
+        ax, ay = _projection_local_to_screen(cue.attacker_position, world_center, zoom_scale)
+        tx, ty = _projection_local_to_screen(cue.target_position, world_center, zoom_scale)
+        motion_profile = WEAPON_MOTION_PROFILE_BY_FAMILY.get(cue.motion_family, DEFAULT_WEAPON_MOTION_PROFILE)
         if cue.phase == "windup":
-            pygame.draw.line(screen, (255, 220, 96), (int(ax), int(ay)), (int(tx), int(ty)), 7)
-            pygame.draw.arc(screen, (255, 194, 120), (int(ax) - 26, int(ay) - 26, 52, 52), -0.95, 1.25, 5)
+            _render_weapon_motion(screen, cue, motion_profile, attacker_px=(ax, ay), target_px=(tx, ty))
             pygame.draw.circle(screen, (255, 255, 184), (int(ax), int(ay)), 14, 4)
         else:
             midpoint = (int((ax + tx) * 0.5), int((ay + ty) * 0.5))
@@ -3586,15 +3654,22 @@ def _player_facing_hud_lines(
     at_safe_site, safe_site_id, _ = _find_safe_site_status(sim, entity)
     calendar = _calendar_presentation(sim)
     lines = [
-        "RMB Move · LMB Attack (local) · WASD steer",
-        f"Condition: {condition}  |  Wounds: {severity_total}/{WOUND_INCAPACITATE_SEVERITY}",
-        f"Supplies: Proof {proof_tokens}  |  Rations {rations}",
+        "rmb_move lmb_attack(local) wasd_steer",
+        f"condition={condition} wound_total={severity_total} move_mult={movement_multiplier:.2f}",
+        f"proof_token={proof_tokens} rations={rations}",
         (
-            f"Time {calendar['hour']:02d}:{calendar['minute']:02d} | {calendar['day_night']} | "
-            f"{calendar['month_name']} {calendar['day_of_month']} (day {calendar['day']}) | moon {calendar['moon_phase']}"
+            f"time {calendar['hour']:02d}:{calendar['minute']:02d} {calendar['day_night']} "
+            f"{calendar['month_name']} {calendar['day_of_month']} day={calendar['day']} moon={calendar['moon_phase']}"
         ),
-        f"Runtime: {'paused' if runtime_state.paused else 'running'} ({runtime_state.runtime_profile or CORE_PLAYABLE})",
+        f"runtime={'paused' if runtime_state.paused else 'running'} profile={runtime_state.runtime_profile or CORE_PLAYABLE}",
     ]
+    if entity.space_id == "overworld":
+        lines.append("OUTSIDE Greybridge on campaign map")
+    else:
+        lines.append(_entity_location_text(sim, entity))
+    cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
+    melee_state = "recovering" if cooldown_remaining > 0 else "ready"
+    lines.append(f"melee_state={melee_state}")
     if str(entity.space_id).startswith("local_site:"):
         lines.append("Local actions: L-click hostile attack | A/D turn | E/Q extract")
     elif pending_offer is not None:
@@ -6912,8 +6987,26 @@ def run_pygame_viewer(
             else:
                 transition_overlay_title = "Transition"
         world_center, world_zoom_scale = _cached_camera_center_and_zoom(sim, viewport_rect, local_camera_cache)
-    if player_view:
-        focused_camera = _audit_local_focus_camera(sim, viewport_rect)
+        player_view = not runtime_state.show_debug_overlay
+        sentinel_render_diag: dict[str, Any] = {
+            "draw_path_entered": False,
+            "frame_layers_drawn": [],
+            "active_space_id": current_space_id,
+            "active_space_role": None,
+            "player_entity_id": PLAYER_ID if player is not None else None,
+            "player_position": None,
+            "camera_center": {"x": float(world_center[0]), "y": float(world_center[1])},
+            "camera_zoom": float(world_zoom_scale),
+            "display_surface_size": [int(screen.get_width()), int(screen.get_height())],
+            "blit_to_display": True,
+            "display_flip_called": False,
+            "last_render_exception": None,
+        }
+        if player is not None:
+            sentinel_render_diag["player_position"] = {"x": float(player.position_x), "y": float(player.position_y)}
+            active_space = sim.state.world.spaces.get(player.space_id)
+            sentinel_render_diag["active_space_role"] = str(getattr(active_space, "role", "")) if active_space is not None else None
+        focused_camera = _audit_local_focus_camera(sim, viewport_rect) if player_view else None
         if focused_camera is not None:
             world_center, world_zoom_scale = focused_camera
         selected_entity_id = sim.selected_entity_id(owner_entity_id=PLAYER_ID)
@@ -7025,17 +7118,24 @@ def run_pygame_viewer(
             visual_facing_by_entity=visual_facing_by_entity,
             player_view=not runtime_state.show_debug_overlay,
         )
-        _draw_transition_overlay(
-            screen,
-            marker_font,
-            viewport_rect,
-            title=transition_overlay_title,
-            remaining_frames=transition_overlay_frames,
-        )
+        try:
+            sentinel_render_diag["draw_path_entered"] = True
+            sentinel_render_diag["frame_layers_drawn"] = ["world", "entities", "hud", "overlays", "combat_cues"]
+            _draw_transition_overlay(
+                screen,
+                marker_font,
+                viewport_rect,
+                title=transition_overlay_title,
+                remaining_frames=transition_overlay_frames,
+            )
+        except Exception as exc:
+            sentinel_render_diag["last_render_exception"] = f"{type(exc).__name__}: {exc}"
+            sentinel_render_diag["frame_layers_drawn"] = ["render_failed"]
         transition_overlay_frames = max(0, transition_overlay_frames - 1)
         draw_ms = (time.perf_counter() - draw_start_perf) * 1000.0
         flip_start_perf = time.perf_counter()
         pygame_module.display.flip()
+        sentinel_render_diag["display_flip_called"] = True
         flip_ms = (time.perf_counter() - flip_start_perf) * 1000.0
         total_frame_ms = (time.perf_counter() - frame_start_perf) * 1000.0
         throttle_ms = max(0.0, (post_tick_perf - frame_start_perf) * 1000.0)
@@ -7044,6 +7144,7 @@ def run_pygame_viewer(
             debug_row_count = int(sum(int(count) for count in panel_section_counts.values())) if panel_section_counts else 0
         except Exception:
             debug_row_count = 0
+        perf_sentinel_state.last_render_diag = dict(sentinel_render_diag)
         _record_perf_sample(
             perf_sentinel_state,
             sim=sim,
@@ -7180,3 +7281,6 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+    empty_reason = None
+    if not sentinel.records:
+        empty_reason = sentinel.last_sample_failure_reason or "sampling_not_started"
