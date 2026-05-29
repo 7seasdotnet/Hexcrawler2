@@ -1,3 +1,24 @@
+# STALE FOR COMBAT CADENCE GATE 2 MELEE-READABILITY ACCEPTANCE
+
+This report/contact-sheet bundle was **not regenerated** after the accepted Combat Cadence Gate 2 melee-readability code amendment referenced as commit `5072447` (current branch equivalent: `a340e24`). It must not be used as final acceptance evidence for default_melee readability. Runtime/manual pygame verification remains required before merge acceptance.
+
+Required pygame-enabled reruns before claiming visual acceptance:
+- `python play.py`
+- `python play.py --visual-audit`
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50`
+
+Pending visual questions:
+1. Does `default_melee` now read as a clean arc/crescent?
+2. Does the arc originate from attacker and travel toward/into hostile?
+3. Is the orange/yellow impact circle actually gone or reduced enough?
+4. Is the hostile marker visible above the cue?
+5. Is the facing/front indicator legible?
+6. Do F1/F10/zoom/pan/recenter still work?
+
+Do not claim `Known Blockers: None recorded` for this PR until those runs regenerate fresh artifacts.
+
+---
+
 # Hexcrawler2 AI Visual Audit Report
 
 ## Upload This File

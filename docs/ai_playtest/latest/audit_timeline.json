@@ -64,5 +64,21 @@
       "notes": "No module named 'pygame'"
     }
   ],
-  "hashes_unchanged_by_screenshots": true
+  "hashes_unchanged_by_screenshots": true,
+  "stale_for_combat_cadence_gate2_melee_readability": true,
+  "stale_reason": "Not regenerated after accepted Combat Cadence Gate 2 melee-readability code amendment referenced as commit 5072447; current branch equivalent a340e24.",
+  "acceptance_evidence": false,
+  "required_pygame_reruns_before_merge_acceptance": [
+    "python play.py",
+    "python play.py --visual-audit",
+    "python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50"
+  ],
+  "pending_visual_questions": [
+    "Does default_melee now read as a clean arc/crescent?",
+    "Does the arc originate from attacker and travel toward/into hostile?",
+    "Is the orange/yellow impact circle actually gone or reduced enough?",
+    "Is the hostile marker visible above the cue?",
+    "Is the facing/front indicator legible?",
+    "Do F1/F10/zoom/pan/recenter still work?"
+  ]
 }
