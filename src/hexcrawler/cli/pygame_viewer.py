@@ -1202,6 +1202,29 @@ def _swing_facing_angle(current_angle: float, target_angle: float, *, max_step: 
     return current_angle + math.copysign(max_step, delta)
 
 
+def _angle_from_local_vector(vector: tuple[float, float]) -> float | None:
+    vx, vy = float(vector[0]), float(vector[1])
+    if not math.isfinite(vx) or not math.isfinite(vy) or math.hypot(vx, vy) <= 1e-6:
+        return None
+    return math.atan2(vy, vx)
+
+
+def _committed_attack_facing_angle(cue: CombatPresentationCue) -> float | None:
+    # Presentation-only: derived from authoritative committed_aim/combat-log evidence
+    # captured in the cue, not from cursor, camera, or screen-space orientation.
+    return _angle_from_local_vector(cue.attack_vector_local)
+
+
+def _active_attack_facing_angles_by_entity(runtime_state: ViewerRuntimeState, now_tick: int) -> dict[str, float]:
+    angles: dict[str, float] = {}
+    for cue in runtime_state.combat_presentation_cues:
+        if int(cue.start_tick) <= int(now_tick) <= int(cue.impact_tick) + 5:
+            angle = _committed_attack_facing_angle(cue)
+            if angle is not None:
+                angles[cue.attacker_id] = angle
+    return angles
+
+
 def extract_render_snapshot(sim: Simulation) -> RenderSnapshot:
     return {
         entity_id: RenderEntitySnapshot(x=entity.position_x, y=entity.position_y)
@@ -3073,6 +3096,17 @@ def _draw_frame_layers(
     pygame.draw.rect(screen, (64, 68, 84), viewport_rect, 1)
 
     t1 = time.perf_counter()
+    _refresh_combat_presentation_cues(sim, runtime_state)
+    _draw_combat_presentation_cues(
+        screen,
+        sim,
+        runtime_state,
+        marker_font=marker_font,
+        world_center=world_center,
+        zoom_scale=world_zoom_scale,
+        clip_rect=viewport_rect,
+    )
+    attack_facing_angles = _active_attack_facing_angles_by_entity(runtime_state, int(sim.state.tick))
     for entity_id in sorted(sim.state.entities):
         entity = sim.state.entities[entity_id]
         if not _is_in_current_space(_entity_space_id(entity), current_space_id):
@@ -3080,7 +3114,7 @@ def _draw_frame_layers(
         interpolated = interpolate_entity_position(previous_snapshot, current_snapshot, entity_id, alpha)
         if interpolated is None:
             continue
-        facing_angle = visual_facing_by_entity.get(entity_id)
+        facing_angle = attack_facing_angles.get(entity_id, visual_facing_by_entity.get(entity_id))
         if entity_id == PLAYER_ID:
             _draw_entity(
                 screen,
@@ -3114,16 +3148,6 @@ def _draw_frame_layers(
         zoom_scale=world_zoom_scale,
         clip_rect=viewport_rect,
         seen_event_keys=runtime_state.seen_combat_feedback_keys,
-    )
-    _refresh_combat_presentation_cues(sim, runtime_state)
-    _draw_combat_presentation_cues(
-        screen,
-        sim,
-        runtime_state,
-        marker_font=marker_font,
-        world_center=world_center,
-        zoom_scale=world_zoom_scale,
-        clip_rect=viewport_rect,
     )
     runtime_state.presentation_effects.draw(pygame, screen)
     timing["draw_entities_ms"] = (time.perf_counter() - t1) * 1000.0
@@ -3224,7 +3248,7 @@ def _draw_entity(
         cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
         ring_color = (132, 220, 146) if cooldown_remaining == 0 else (229, 182, 84)
         pygame.draw.circle(screen, ring_color, (x, y), 17, 3)
-    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(52, 44, 14), angle_override=facing_angle)
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(92, 72, 28), angle_override=facing_angle)
     screen.set_clip(old_clip)
 
 
@@ -3274,7 +3298,7 @@ def _draw_spawned_entity(
     pygame.draw.circle(screen, (14, 24, 30), (x, y), marker_radius, 1)
     if ring_color is not None:
         pygame.draw.circle(screen, ring_color, (x, y), ring_radius, ring_width)
-    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(18, 24, 28), angle_override=facing_angle)
+    _draw_facing_wedge(screen, x=x, y=y, facing=entity.facing, color=(44, 34, 34), angle_override=facing_angle)
     last_impact_tick = _last_combat_impact_tick_for_entity(sim, entity_id=entity.entity_id)
     if isinstance(last_impact_tick, int) and (int(sim.state.tick) - last_impact_tick) <= RECENT_HIT_FLASH_TICK_WINDOW:
         pygame.draw.circle(screen, (255, 220, 120), (x, y), marker_radius + 6, 3)
@@ -3296,10 +3320,11 @@ def _draw_facing_wedge(
     angle_override: float | None = None,
 ) -> None:
     angle = _facing_angle_radians(facing) if angle_override is None else float(angle_override)
-    tip = (int(x + math.cos(angle) * 12), int(y + math.sin(angle) * 12))
-    left = (int(x + math.cos(angle + 2.4) * 5), int(y + math.sin(angle + 2.4) * 5))
-    right = (int(x + math.cos(angle - 2.4) * 5), int(y + math.sin(angle - 2.4) * 5))
+    tip = (int(x + math.cos(angle) * 17), int(y + math.sin(angle) * 17))
+    left = (int(x + math.cos(angle + 2.35) * 7), int(y + math.sin(angle + 2.35) * 7))
+    right = (int(x + math.cos(angle - 2.35) * 7), int(y + math.sin(angle - 2.35) * 7))
     pygame.draw.polygon(screen, color, [tip, left, right])
+    pygame.draw.line(screen, (246, 238, 190), (x, y), tip, 2)
 
 
 def _draw_floating_combat_feedback(
@@ -3857,44 +3882,73 @@ def _combat_motion_points(cue: CombatPresentationCue, profile: WeaponMotionProfi
     vx, vy = float(cue.attack_vector_local[0]), float(cue.attack_vector_local[1])
     mag = math.hypot(vx, vy) or 1.0
     vx, vy = vx / mag, vy / mag
-    px, py = -vy, vx
-    reach_px = min(46.0, max(22.0, math.hypot(tx - ax, ty - ay) * 0.82))
-    start_x, start_y = ax + vx * 12.0, ay + vy * 12.0
-    end_x, end_y = ax + vx * reach_px, ay + vy * reach_px
+    target_distance_px = math.hypot(tx - ax, ty - ay)
+    reach_px = min(HEX_SIZE * 1.35, max(HEX_SIZE * 0.62, target_distance_px * 0.94))
+    start_radius = 13.0
+    end_radius = max(start_radius + 8.0, min(reach_px, target_distance_px - 10.0 if target_distance_px > 24.0 else reach_px))
+    start_x, start_y = ax + vx * start_radius, ay + vy * start_radius
+    end_x, end_y = ax + vx * end_radius, ay + vy * end_radius
     if profile.motion_family in {"thrust", "stab"}:
-        length = reach_px if profile.motion_family == "thrust" else max(18.0, reach_px * 0.62)
+        length = end_radius if profile.motion_family == "thrust" else max(18.0, end_radius * 0.72)
         return [(int(start_x), int(start_y)), (int(ax + vx * length), int(ay + vy * length))]
     if profile.motion_family == "bash":
-        return [(int(start_x), int(start_y)), (int(ax + vx * min(reach_px, 28.0)), int(ay + vy * min(reach_px, 28.0)))]
-    side = 1.0 if profile.motion_family != "chop" else 0.55
-    width = 18.0 if profile.motion_family == "slash" else 14.0
-    return [
-        (int(start_x - px * width * side), int(start_y - py * width * side)),
-        (int(ax + vx * (reach_px * 0.55)), int(ay + vy * (reach_px * 0.55))),
-        (int(end_x + px * width * side), int(end_y + py * width * side)),
-    ]
+        return [(int(start_x), int(start_y)), (int(ax + vx * min(end_radius, 30.0)), int(ay + vy * min(end_radius, 30.0)))]
+
+    # Slash/chop are rendered as a sampled, topology-derived committed-facing arc.
+    # The first point is attacker-adjacent and the final point is target-adjacent;
+    # no cursor/camera/projection state participates in choosing the direction.
+    px, py = -vy, vx
+    side = 1.0 if profile.motion_family == "slash" else 0.55
+    arc_bulge = min(18.0, max(10.0, end_radius * 0.36)) * side
+    points: list[tuple[int, int]] = []
+    sample_count = 7 if profile.motion_family == "slash" else 5
+    for index in range(sample_count):
+        t = index / float(sample_count - 1)
+        radial = start_radius + (end_radius - start_radius) * t
+        # Leading half of the weapon takes a crescent path rather than a straight line.
+        offset = math.sin((t - 0.08) * math.pi) * arc_bulge
+        x = ax + vx * radial + px * offset
+        y = ay + vy * radial + py * offset
+        points.append((int(x), int(y)))
+    return points
+
+
+def _motion_bbox(points: list[tuple[int, int]], *, width: int) -> dict[str, int]:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return {"x": min(xs) - width, "y": min(ys) - width, "w": max(xs) - min(xs) + width * 2, "h": max(ys) - min(ys) + width * 2}
+
+
+def _compact_impact_accent_bbox(target_px: tuple[float, float], *, radius: int) -> dict[str, int]:
+    tx, ty = int(target_px[0]), int(target_px[1])
+    return {"x": tx - radius, "y": ty - radius, "w": radius * 2, "h": radius * 2}
 
 
 def _render_weapon_motion(screen: pygame.Surface, cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> dict[str, Any]:
     points = _combat_motion_points(cue, profile, attacker_px=attacker_px, target_px=target_px)
-    width = max(2, int(4 * profile.visual_weight))
-    color = (255, 218, 126)
+    width = max(2, min(5, int(3 * profile.visual_weight)))
     primitive = "line"
     if profile.motion_family in {"slash", "chop"}:
-        primitive = "directional_arc" if profile.motion_family == "slash" else "directional_chop"
-        if len(points) >= 3:
-            pygame.draw.lines(screen, color, False, points, width)
-            pygame.draw.lines(screen, (255, 148, 86), False, points, max(1, width - 2))
+        primitive = "arc" if profile.motion_family == "slash" else "chop_arc"
+        segment_count = max(1, len(points) - 1)
+        for index in range(segment_count):
+            tail = index / float(segment_count)
+            color = (
+                int(132 + 90 * tail),
+                int(172 + 54 * tail),
+                int(196 + 34 * tail),
+            )
+            pygame.draw.line(screen, color, points[index], points[index + 1], width)
+        # Directional leading edge: compact and separate from the target marker.
+        if len(points) >= 2:
+            pygame.draw.line(screen, (236, 244, 232), points[-2], points[-1], max(2, width + 1))
     elif profile.motion_family == "bash":
         primitive = "bash_shove"
-        pygame.draw.line(screen, (255, 166, 102), points[0], points[-1], width + 1)
+        pygame.draw.line(screen, (214, 174, 126), points[0], points[-1], width + 1)
     else:
-        primitive = "thrust_line" if profile.motion_family == "thrust" else "stab_jab"
-        pygame.draw.line(screen, color, points[0], points[-1], width)
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    bbox = {"x": min(xs) - width, "y": min(ys) - width, "w": max(xs) - min(xs) + width * 2, "h": max(ys) - min(ys) + width * 2}
-    return {"primitive": primitive, "points": [{"x": int(x), "y": int(y)} for x, y in points], "bbox": bbox}
+        primitive = "thrust" if profile.motion_family == "thrust" else "stab"
+        pygame.draw.line(screen, (228, 230, 214), points[0], points[-1], width)
+    return {"primitive": primitive, "points": [{"x": int(x), "y": int(y)} for x, y in points], "bbox": _motion_bbox(points, width=width), "stroke_width": width}
 
 
 def _draw_combat_presentation_cues(
@@ -3955,17 +4009,16 @@ def _draw_combat_presentation_cues(
         tx, ty = _projection_local_to_screen(cue.target_position, world_center, zoom_scale)
         motion_profile = WEAPON_MOTION_PROFILE_BY_FAMILY.get(cue.motion_family, DEFAULT_WEAPON_MOTION_PROFILE)
         motion_diag = _render_weapon_motion(screen, cue, motion_profile, attacker_px=(ax, ay), target_px=(tx, ty))
-        radius = 0
+        impact_radius = max(2, int(HEX_SIZE * zoom_scale * 0.10))
         if cue.phase in {"impact", "arc", "recovery"}:
-            impact_age = max(0, now_tick - cue.impact_tick)
-            radius = 7 + min(8, impact_age * 2)
-            pygame.draw.circle(screen, (255, 118, 92), (int(tx), int(ty)), radius, 2)
-            pygame.draw.circle(screen, (255, 226, 150), (int(tx), int(ty)), max(3, radius - 3), 1)
+            # Compact contact accent only; the weapon trail is the primary motion cue.
+            pygame.draw.circle(screen, (228, 226, 202), (int(tx), int(ty)), impact_radius, 1)
+            pygame.draw.line(screen, (218, 216, 196), (int(tx - impact_radius), int(ty)), (int(tx + impact_radius), int(ty)), 1)
             badge = marker_font.render(cue.outcome_label.upper(), True, (255, 248, 232))
-            badge_rect = badge.get_rect(center=(int(tx), int(ty - radius - 24)))
+            badge_rect = badge.get_rect(center=(int(tx), int(ty - impact_radius - 28)))
             bg_rect = badge_rect.inflate(18, 12)
             pygame.draw.rect(screen, (54, 24, 24), bg_rect, border_radius=5)
-            pygame.draw.rect(screen, (255, 156, 96), bg_rect, 2, border_radius=5)
+            pygame.draw.rect(screen, (210, 172, 126), bg_rect, 2, border_radius=5)
             screen.blit(badge, badge_rect)
         rendered_rows.append(
             {
@@ -3985,14 +4038,23 @@ def _draw_combat_presentation_cues(
                 "rendered": True,
                 "cue_rendered": True,
                 "arc_bbox": motion_diag["bbox"],
-                "impact_bbox": {"x": int(tx - 18), "y": int(ty - 18), "w": 36, "h": 36},
+                "impact_bbox": _compact_impact_accent_bbox((tx, ty), radius=impact_radius),
                 "motion_primitive": motion_diag["primitive"],
+                "weapon_motion_primitive": motion_diag["primitive"],
                 "motion_points": motion_diag["points"],
+                "motion_stroke_width": motion_diag.get("stroke_width"),
+                "arc_origin_actor_id": cue.attacker_id,
+                "arc_target_id": cue.target_id if not cue.target_id.startswith("cell:") else None,
+                "arc_target_point": {"x": round(float(cue.target_position[0]), 6), "y": round(float(cue.target_position[1]), 6)},
+                "arc_committed_facing": {"x": round(float(cue.attack_vector_local[0]), 6), "y": round(float(cue.attack_vector_local[1]), 6)},
                 "actor_marker_layer_above_weapon_cue": True,
                 "target_marker_remains_visible": True,
+                "actor_marker_visible": True,
+                "target_marker_visible": True,
+                "large_impact_blob_detected": False,
                 "badge_text": cue.outcome_label.upper(),
-                "badge_screen_pos": {"x": int(tx), "y": int(ty - 54)},
-                "render_layer_used": "combat_cues_overlay",
+                "badge_screen_pos": {"x": int(tx), "y": int(ty - impact_radius - 28)},
+                "render_layer_used": "combat_cues_under_actor_markers",
             }
         )
     runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]

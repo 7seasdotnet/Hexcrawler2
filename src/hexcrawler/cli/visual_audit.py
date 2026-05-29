@@ -241,9 +241,18 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
         "arc_bbox": row.get("arc_bbox"),
         "impact_bbox": row.get("impact_bbox"),
         "motion_primitive": row.get("motion_primitive"),
+        "weapon_motion_primitive": row.get("weapon_motion_primitive", row.get("motion_primitive")),
         "motion_points": row.get("motion_points"),
+        "motion_stroke_width": row.get("motion_stroke_width"),
+        "arc_origin_actor_id": row.get("arc_origin_actor_id"),
+        "arc_target_id": row.get("arc_target_id"),
+        "arc_target_point": row.get("arc_target_point"),
+        "arc_committed_facing": row.get("arc_committed_facing"),
         "actor_marker_layer_above_weapon_cue": row.get("actor_marker_layer_above_weapon_cue"),
         "target_marker_remains_visible": row.get("target_marker_remains_visible"),
+        "actor_marker_visible": row.get("actor_marker_visible"),
+        "target_marker_visible": row.get("target_marker_visible"),
+        "large_impact_blob_detected": row.get("large_impact_blob_detected"),
         "badge_text": row.get("badge_text"),
         "badge_screen_pos": row.get("badge_screen_pos"),
         "render_layer_used": row.get("render_layer_used"),
@@ -306,14 +315,29 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
         if name in {"first_attack", "combat_result"} and status == "ok":
             cue_timeline = _extract_cue_timeline(render_meta.get("combat_cue_diagnostics", {}))
             bbox = cue_timeline.get("arc_bbox") if name == "first_attack" else cue_timeline.get("impact_bbox")
+            motion = str(cue_timeline.get("weapon_motion_primitive") or cue_timeline.get("motion_primitive") or "")
             if cue_timeline.get("cue_rendered") is not True:
                 status = "partial"
                 reason = (reason+"; " if reason else "") + "cue_rendered_false"
+            elif motion not in {"arc", "chop_arc", "thrust", "stab", "bash_shove"}:
+                status = "partial"
+                reason = (reason+"; " if reason else "") + "weapon_motion_primitive_unreadable"
+            elif cue_timeline.get("target_marker_visible") is False or cue_timeline.get("target_marker_remains_visible") is False:
+                status = "partial"
+                reason = (reason+"; " if reason else "") + "target_marker_obscured"
+            elif cue_timeline.get("large_impact_blob_detected") is True:
+                status = "partial"
+                reason = (reason+"; " if reason else "") + "large_impact_blob_detected"
             elif isinstance(bbox, dict):
                 bx, by, bw, bh = int(bbox.get("x",0)), int(bbox.get("y",0)), int(bbox.get("w",0)), int(bbox.get("h",0))
                 if bw <= 0 or bh <= 0 or bx >= screen.get_width() or by >= screen.get_height() or (bx+bw) <= 0 or (by+bh) <= 0:
                     status = "partial"
                     reason = (reason+"; " if reason else "") + "cue_bbox_offscreen"
+            if status == "ok" and name == "combat_result":
+                points = cue_timeline.get("motion_points")
+                if not isinstance(points, list) or len(points) < 5:
+                    status = "partial"
+                    reason = (reason+"; " if reason else "") + "default_melee_not_rendered_as_sampled_arc"
         if status!="ok": blockers.append(f"{name}: {reason or 'failed'}")
         beats.append(BeatResult(name=name,file=str(path),status=status,tick=sim.state.tick,notes=reason,diagnostics={
             "active_space_id": player.space_id if player else None,

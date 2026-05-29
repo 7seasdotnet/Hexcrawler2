@@ -50,10 +50,18 @@ def test_visual_audit_cue_timeline_preserves_render_failure_and_weapon_diagnosti
                 "target_screen_pos": {"x": 20, "y": 21},
                 "arc_bbox": {"x": 1, "y": 2, "w": 3, "h": 4},
                 "impact_bbox": {"x": 5, "y": 6, "w": 7, "h": 8},
-                "motion_primitive": "directional_arc",
-                "motion_points": [{"x": 10, "y": 11}, {"x": 15, "y": 14}, {"x": 20, "y": 21}],
+                "motion_primitive": "arc",
+                "weapon_motion_primitive": "arc",
+                "motion_points": [{"x": 10, "y": 11}, {"x": 12, "y": 13}, {"x": 15, "y": 14}, {"x": 18, "y": 17}, {"x": 20, "y": 21}],
+                "motion_stroke_width": 3,
+                "arc_origin_actor_id": "scout",
+                "arc_target_id": "hostile",
+                "arc_committed_facing": {"x": 1.0, "y": 0.0},
                 "actor_marker_layer_above_weapon_cue": True,
                 "target_marker_remains_visible": True,
+                "actor_marker_visible": True,
+                "target_marker_visible": True,
+                "large_impact_blob_detected": False,
                 "badge_text": "WOUNDED",
                 "badge_screen_pos": {"x": 20, "y": -10},
                 "render_layer_used": "combat_cues_overlay",
@@ -69,9 +77,15 @@ def test_visual_audit_cue_timeline_preserves_render_failure_and_weapon_diagnosti
     assert timeline["evidence_reason"] == "resolved"
     assert timeline["weapon_profile_id"] == "default_melee"
     assert timeline["motion_family"] == "slash"
-    assert timeline["motion_primitive"] == "directional_arc"
+    assert timeline["motion_primitive"] == "arc"
+    assert timeline["weapon_motion_primitive"] == "arc"
+    assert timeline["arc_origin_actor_id"] == "scout"
+    assert timeline["arc_target_id"] == "hostile"
+    assert timeline["arc_committed_facing"] == {"x": 1.0, "y": 0.0}
     assert timeline["target_marker_remains_visible"] is True
+    assert timeline["target_marker_visible"] is True
     assert timeline["actor_marker_layer_above_weapon_cue"] is True
+    assert timeline["large_impact_blob_detected"] is False
     assert timeline["refresh_diagnostics"]["authoritative_evidence_count"] == 1
 
 def test_visual_audit_default_out() -> None:

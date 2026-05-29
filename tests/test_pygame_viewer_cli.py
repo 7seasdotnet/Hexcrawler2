@@ -49,6 +49,8 @@ from hexcrawler.cli.pygame_viewer import (
     _major_site_label_offset,
     _major_site_visibility_diagnostic_rows,
     _nearest_lootable_hostile_for_player,
+    _combat_motion_points,
+    _active_attack_facing_angles_by_entity,
     _player_feedback_lines,
     _player_facing_hud_lines,
     _queue_local_attack_for_click,
@@ -79,7 +81,7 @@ from hexcrawler.cli.pygame_viewer import (
     _world_marker_placements,
     render_viewer_frame_to_surface,
 )
-from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE
+from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, classify_relative_facing_sector
 from hexcrawler.sim.core import EntityState, SimCommand
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT, FLEE_ENCOUNTER_OFFER_INTENT, CampaignDangerModule
 from hexcrawler.sim.encounters import (
@@ -2550,7 +2552,101 @@ def test_combat_presentation_render_reports_phase_override_and_rendered_rows() -
     assert any(row.get("rendered") is True for row in result_diag.get("rendered_cues", []))
     assert first_diag["rendered_cues"][0]["phase"] == "windup"
     assert result_diag["rendered_cues"][0]["phase"] == "impact"
-    assert result_diag["rendered_cues"][0]["outcome_label"] != "WINDUP"
+    row = result_diag["rendered_cues"][0]
+    assert row["outcome_label"] != "WINDUP"
+    assert row["weapon_motion_primitive"] == "arc"
+    assert row["arc_origin_actor_id"] == PLAYER_ID
+    assert row["arc_target_id"] == target.entity_id
+    assert row["arc_committed_facing"]["x"] > 0.0
+    assert row["actor_marker_layer_above_weapon_cue"] is True
+    assert row["target_marker_visible"] is True
+    assert row["large_impact_blob_detected"] is False
+    assert row["impact_bbox"]["w"] <= 8
+    assert row["render_layer_used"] == "combat_cues_under_actor_markers"
+
+
+def test_default_melee_slash_motion_samples_committed_arc_from_attacker_to_target() -> None:
+    cue = viewer_module.CombatPresentationCue(
+        attacker_id=PLAYER_ID,
+        target_id="hostile:arc",
+        start_tick=10,
+        impact_tick=12,
+        outcome_label="hit",
+        attacker_position=(1.5, 1.5),
+        target_position=(2.5, 1.5),
+        attack_vector_local=(1.0, 0.0),
+        motion_family="slash",
+        weapon_profile_id="default_melee",
+        phase="impact",
+    )
+
+    points = _combat_motion_points(
+        cue,
+        viewer_module.DEFAULT_WEAPON_MOTION_PROFILE,
+        attacker_px=(100.0, 100.0),
+        target_px=(128.0, 100.0),
+    )
+
+    assert len(points) == 7
+    assert points[0][0] == pytest.approx(113, abs=2)
+    assert points[-1][0] == pytest.approx(118, abs=12)
+    assert points[-1][0] > points[0][0]
+    assert max(y for _x, y in points) - min(y for _x, y in points) >= 8
+
+
+def test_combat_arc_does_not_retarget_after_committed_attack_if_cursor_moves() -> None:
+    cue = viewer_module.CombatPresentationCue(
+        attacker_id=PLAYER_ID,
+        target_id="hostile:arc",
+        start_tick=10,
+        impact_tick=12,
+        outcome_label="hit",
+        attacker_position=(1.5, 1.5),
+        target_position=(2.5, 1.5),
+        attack_vector_local=(1.0, 0.0),
+        motion_family="slash",
+        weapon_profile_id="default_melee",
+        phase="windup",
+    )
+
+    before = _combat_motion_points(cue, viewer_module.DEFAULT_WEAPON_MOTION_PROFILE, attacker_px=(100.0, 100.0), target_px=(128.0, 100.0))
+    after_cursor_move = _combat_motion_points(cue, viewer_module.DEFAULT_WEAPON_MOTION_PROFILE, attacker_px=(100.0, 100.0), target_px=(128.0, 100.0))
+
+    assert after_cursor_move == before
+
+
+def test_local_attack_facing_indicator_uses_committed_topology_vector() -> None:
+    state = viewer_module.ViewerRuntimeState(
+        sim=_build_viewer_simulation("content/examples/basic_map.json", with_encounters=False),
+        map_path="m",
+        with_encounters=False,
+        current_save_path="s",
+    )
+    state.combat_presentation_cues.append(
+        viewer_module.CombatPresentationCue(
+            attacker_id=PLAYER_ID,
+            target_id="hostile:facing",
+            start_tick=10,
+            impact_tick=12,
+            outcome_label="hit",
+            attacker_position=(1.5, 1.5),
+            target_position=(1.5, 2.5),
+            attack_vector_local=(0.0, 1.0),
+            motion_family="slash",
+            weapon_profile_id="default_melee",
+            phase="windup",
+        )
+    )
+
+    angles = _active_attack_facing_angles_by_entity(state, 11)
+
+    assert angles[PLAYER_ID] == pytest.approx(1.57079632679)
+
+
+def test_front_flank_rear_helper_is_pure_topology_vector_classification() -> None:
+    assert classify_relative_facing_sector({"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 0.1}) == "front"
+    assert classify_relative_facing_sector({"x": 1.0, "y": 0.0}, {"x": 0.0, "y": 1.0}) == "flank"
+    assert classify_relative_facing_sector({"x": 1.0, "y": 0.0}, {"x": -1.0, "y": 0.0}) == "rear"
 
 
 def test_combat_presentation_cues_derive_from_authoritative_combat_log_when_event_trace_has_no_combat_outcome() -> None:

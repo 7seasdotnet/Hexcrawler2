@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +51,39 @@ WEAPON_MOTION_PROFILES: dict[str, WeaponMotionProfile] = {
     "bash": WeaponMotionProfile("bash", "bash", 2, 2, 5, 0.9, 80.0, 1.25, 0.0),
 }
 DEFAULT_WEAPON_PROFILE_ID = "default_melee"
+
+
+def classify_relative_facing_sector(
+    facing_vector: dict[str, Any] | tuple[float, float],
+    target_vector: dict[str, Any] | tuple[float, float],
+    *,
+    front_sector_degrees: float = 120.0,
+    rear_sector_degrees: float = 120.0,
+) -> str:
+    """Classify a local/topology-space target vector relative to a committed facing.
+
+    Pure seam for future front/flank/rear mechanics and current diagnostics only.
+    It consumes local/topology vectors, not screen/camera/projection coordinates, and
+    does not mutate or rebalance combat outcomes.
+    """
+    def _xy(value: dict[str, Any] | tuple[float, float]) -> tuple[float, float]:
+        if isinstance(value, dict):
+            return (float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+        return (float(value[0]), float(value[1]))
+
+    fx, fy = _xy(facing_vector)
+    tx, ty = _xy(target_vector)
+    fmag = math.hypot(fx, fy)
+    tmag = math.hypot(tx, ty)
+    if fmag <= 1e-9 or tmag <= 1e-9:
+        return "unknown"
+    dot = max(-1.0, min(1.0, ((fx / fmag) * (tx / tmag)) + ((fy / fmag) * (ty / tmag))))
+    degrees = math.degrees(math.acos(dot))
+    if degrees <= max(0.0, float(front_sector_degrees)) * 0.5:
+        return "front"
+    if degrees >= 180.0 - (max(0.0, float(rear_sector_degrees)) * 0.5):
+        return "rear"
+    return "flank"
 
 
 def _is_json_primitive(value: Any) -> bool:

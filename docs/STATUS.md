@@ -815,3 +815,70 @@ Robust/engine-first/do-not-lock-out requirements are architecture guardrails, no
 # Phase
 - **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
 - **Next action:** Re-run live pygame playthrough into Greybridge with perf sentinel enabled and verify camera diagnostics remain stable (no camera/zoom target oscillation) while visual audit may still report `cue_rendered_false` until combat cue visibility work is addressed.
+
+# What changed in this commit
+- Reworked local `default_melee` slash presentation into a sampled procedural arc/crescent drawn below actor markers, with compact impact accents and cue diagnostics for origin, target, committed facing, marker visibility, and large-impact-blob detection.
+- Added a viewer-only committed-attack facing read during windup/impact/recovery and a pure topology-vector front/flank/rear classification seam for future diagnostics without changing combat math.
+- Hardened visual audit cue-readability checks so `first_attack`/`combat_result` require a readable weapon primitive, visible target marker, and no large impact blob instead of merely accepting any cue.
+
+# Current Verification Commands (known working)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_encounter_return.py`
+
+# Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Re-run `python play.py --visual-audit` and one live pygame local fight in a pygame-enabled environment (this container lacks `pygame`) to inspect/update the contact sheet and tune remaining procedural slash curvature/contact-point readability without altering cadence authority.
+
+# What Exists (folders / entry points)
+- `src/hexcrawler/cli/pygame_viewer.py`: pygame viewer, local combat cue rendering, compact impact accent, topology-derived attack-facing presentation, camera/zoom/pan/F1/F10 paths.
+- `src/hexcrawler/cli/visual_audit.py`: scripted core-playable visual audit with combat cue-readability diagnostics and contact-sheet/report generation.
+- `src/hexcrawler/sim/combat.py`: deterministic combat authority, cadence gates, weapon motion profile metadata, and pure topology-vector front/flank/rear helper seam.
+- `tests/test_pygame_viewer_cli.py`: viewer command/input/camera/combat-presentation regression coverage.
+- `tests/test_visual_audit.py`: visual audit report/timeline/cue-diagnostic regression coverage.
+- `docs/ai_playtest/latest/`: latest generated visual audit screenshots, timeline, and contact sheet.
+
+Lock-out constraints reviewed: OK
+
+
+# What changed in this commit
+- Documentation/artifact-only amendment: labeled the existing visual-audit artifacts as stale for the Combat Cadence Gate 2 melee-readability verdict because Codex did not regenerate them after the accepted code amendment referenced as commit `5072447` (current branch equivalent: `a340e24`).
+- Clarified that runtime/manual pygame verification remains required before merge acceptance, including `python play.py`, `python play.py --visual-audit`, and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` in a pygame-enabled environment.
+- Listed the exact pending visual questions for reviewers so stale reports/contact sheets are not treated as acceptance evidence.
+
+# Current Verification Commands (known working)
+- `git diff --name-only HEAD`
+- `git diff --check`
+
+# Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** In a pygame-enabled environment, regenerate visual/runtime evidence for the accepted melee-readability amendment with:
+  - `python play.py`
+  - `python play.py --visual-audit`
+  - `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50`
+
+# What Exists (folders / entry points)
+- `docs/STATUS.md`: authoritative current status and stale-artifact warning for this documentation-only amendment.
+- `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md`: visual-audit report artifact now explicitly marked stale for the accepted Combat Cadence Gate 2 melee-readability amendment.
+- `docs/ai_playtest/latest/audit_timeline.json`: old visual-audit timeline metadata now marked stale for the accepted melee-readability verdict.
+- `src/hexcrawler/cli/pygame_viewer.py`: unchanged by this documentation-only amendment.
+- `src/hexcrawler/sim/combat.py`: unchanged by this documentation-only amendment.
+
+## Visual-audit artifact warning for Combat Cadence Gate 2 melee-readability amendment
+- No visual-audit contact sheet has been regenerated for commit `5072447` in Codex's environment; the current branch carries the same accepted code amendment as `a340e24` after branch history normalization.
+- Any existing `docs/ai_playtest/latest/*` artifact or `docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md` output predates this final visual-readability verdict and is stale for PR acceptance evidence.
+- Do **not** treat `Known Blockers: None recorded` (if seen in any older uploaded report/contact-sheet bundle) as valid for this PR until the pygame-enabled commands above regenerate fresh artifacts.
+- Runtime/manual pygame verification remains required before merge acceptance.
+
+## Pending manual visual questions
+1. Does `default_melee` now read as a clean arc/crescent?
+2. Does the arc originate from attacker and travel toward/into hostile?
+3. Is the orange/yellow impact circle actually gone or reduced enough?
+4. Is the hostile marker visible above the cue?
+5. Is the facing/front indicator legible?
+6. Do F1/F10/zoom/pan/recenter still work?
+
+Lock-out constraints reviewed: OK
