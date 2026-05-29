@@ -12,8 +12,8 @@ from hexcrawler.sim.wounds import is_incapacitated_from_wounds
 
 HOSTILE_TEMPLATE_ID = "encounter_hostile_v1"
 MAX_TRACKED_ATTACKERS = 512
-LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS = 8
-LOCAL_CONTACT_TELEGRAPH_TICKS = 2
+LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS = 14
+LOCAL_CONTACT_TELEGRAPH_TICKS = 3
 
 
 class LocalHostileBehaviorModule(RuleModule):

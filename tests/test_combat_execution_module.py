@@ -839,3 +839,58 @@ def test_legacy_world_payload_defaults_space_roles_deterministically() -> None:
     assert restored.spaces["overworld"].role == "campaign"
     assert restored.spaces["local_extra"].role == "local"
     assert WorldState.from_dict(restored.to_dict()).to_dict() == restored.to_dict()
+
+
+def test_combat_cadence_probe_records_acceptance_rejection_and_impact_source_paths() -> None:
+    from hexcrawler.sim.combat import combat_cadence_probe
+
+    sim = _build_sim()
+    sim.append_command(
+        SimCommand(
+            tick=0,
+            command_type=ATTACK_INTENT_COMMAND_TYPE,
+            params={"attacker_id": "attacker", "target_id": "target", "mode": "melee", "tags": ["viewer_lmb_directional_melee"]},
+        )
+    )
+    sim.append_command(
+        SimCommand(
+            tick=1,
+            command_type=ATTACK_INTENT_COMMAND_TYPE,
+            params={"attacker_id": "attacker", "target_id": "target", "mode": "melee", "tags": ["viewer_lmb_directional_melee"]},
+        )
+    )
+    sim.advance_ticks(2)
+
+    probe = combat_cadence_probe(sim)
+    rows = probe["rows"]
+    assert any(row["source_path"] == "player_lmb" and row["accepted"] is True and row["windup_start_tick"] == 0 for row in rows)
+    assert any(row["accepted"] is False and row["rejection_reason"] == "not_ready" and row["outcome_emitted"] is False for row in rows)
+
+    sim.advance_ticks(1)
+    rows = combat_cadence_probe(sim)["rows"]
+    assert any(row["source_path"] == "scheduled_impact" and row["outcome_emitted"] is True and row["impact_tick"] == 2 for row in rows)
+
+
+def test_every_applied_combat_outcome_has_preceding_accepted_cadence_evidence() -> None:
+    sim = _build_sim()
+    sim.append_command(_attack_command(tick=0))
+    sim.append_command(_attack_command(tick=8))
+    sim.advance_ticks(12)
+
+    accepted = {row["action_uid"] for row in sim.state.combat_log if row.get("reason") == "windup_started"}
+    applied = [row for row in sim.state.combat_log if row.get("applied") is True]
+    assert applied
+    assert all(row.get("action_uid") in accepted for row in applied)
+
+
+def test_starter_hostile_durability_tuning_is_stat_gated_not_global() -> None:
+    sim = _build_sim()
+    sim.state.entities["target"].stats["starter_incoming_wound_severity_bonus"] = 1
+    sim.append_command(_attack_command(tick=0))
+    sim.advance_ticks(3)
+    assert sim.state.entities["target"].wounds[-1]["severity"] == 2
+
+    baseline = _build_sim()
+    baseline.append_command(_attack_command(tick=0))
+    baseline.advance_ticks(3)
+    assert baseline.state.entities["target"].wounds[-1]["severity"] == 1

@@ -50,6 +50,10 @@ def test_visual_audit_cue_timeline_preserves_render_failure_and_weapon_diagnosti
                 "target_screen_pos": {"x": 20, "y": 21},
                 "arc_bbox": {"x": 1, "y": 2, "w": 3, "h": 4},
                 "impact_bbox": {"x": 5, "y": 6, "w": 7, "h": 8},
+                "motion_primitive": "directional_arc",
+                "motion_points": [{"x": 10, "y": 11}, {"x": 15, "y": 14}, {"x": 20, "y": 21}],
+                "actor_marker_layer_above_weapon_cue": True,
+                "target_marker_remains_visible": True,
                 "badge_text": "WOUNDED",
                 "badge_screen_pos": {"x": 20, "y": -10},
                 "render_layer_used": "combat_cues_overlay",
@@ -65,6 +69,9 @@ def test_visual_audit_cue_timeline_preserves_render_failure_and_weapon_diagnosti
     assert timeline["evidence_reason"] == "resolved"
     assert timeline["weapon_profile_id"] == "default_melee"
     assert timeline["motion_family"] == "slash"
+    assert timeline["motion_primitive"] == "directional_arc"
+    assert timeline["target_marker_remains_visible"] is True
+    assert timeline["actor_marker_layer_above_weapon_cue"] is True
     assert timeline["refresh_diagnostics"]["authoritative_evidence_count"] == 1
 
 def test_visual_audit_default_out() -> None:

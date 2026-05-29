@@ -3803,12 +3803,18 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
             vector = (1.0, 0.0)
         profile = _weapon_motion_profile_for_weapon_ref(payload.get("weapon_ref"), profile_id=payload.get("weapon_profile_id"), profile_payload=payload.get("weapon_profile"))
         target_position = (float(target.position_x), float(target.position_y)) if target is not None else (float(attacker.position_x) + vector[0] * profile.reach, float(attacker.position_y) + vector[1] * profile.reach)
+        if reason == "windup_started":
+            start_tick = tick
+            impact_tick = int(payload.get("impact_tick", tick + profile.impact_tick)) if isinstance(payload.get("impact_tick", tick + profile.impact_tick), int) else tick + profile.impact_tick
+        else:
+            impact_tick = tick
+            start_tick = max(0, tick - int(profile.impact_tick))
         runtime_state.combat_presentation_cues.append(
             CombatPresentationCue(
                 attacker_id=attacker_id,
                 target_id=target_id,
-                start_tick=max(0, tick - 4),
-                impact_tick=tick,
+                start_tick=start_tick,
+                impact_tick=impact_tick,
                 outcome_label=outcome_label,
                 attacker_position=(float(attacker.position_x), float(attacker.position_y)),
                 target_position=target_position,
@@ -3845,19 +3851,50 @@ def _projection_vector_to_screen(local_vec: tuple[float, float], zoom_scale: flo
     return (float(local_vec[0]) * scale, float(local_vec[1]) * scale)
 
 
-def _render_weapon_motion(screen: pygame.Surface, cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> None:
-    ax, ay = int(attacker_px[0]), int(attacker_px[1])
-    tx, ty = int(target_px[0]), int(target_px[1])
-    width = max(3, int(5 * profile.visual_weight))
-    if profile.motion_family == "thrust" or profile.motion_family == "stab":
-        pygame.draw.line(screen, (255, 220, 96), (ax, ay), (tx, ty), width)
-    elif profile.motion_family == "chop":
-        pygame.draw.arc(screen, (255, 194, 120), (ax - 28, ay - 34, 56, 68), -1.2, 1.1, width)
+def _combat_motion_points(cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> list[tuple[int, int]]:
+    ax, ay = float(attacker_px[0]), float(attacker_px[1])
+    tx, ty = float(target_px[0]), float(target_px[1])
+    vx, vy = float(cue.attack_vector_local[0]), float(cue.attack_vector_local[1])
+    mag = math.hypot(vx, vy) or 1.0
+    vx, vy = vx / mag, vy / mag
+    px, py = -vy, vx
+    reach_px = min(46.0, max(22.0, math.hypot(tx - ax, ty - ay) * 0.82))
+    start_x, start_y = ax + vx * 12.0, ay + vy * 12.0
+    end_x, end_y = ax + vx * reach_px, ay + vy * reach_px
+    if profile.motion_family in {"thrust", "stab"}:
+        length = reach_px if profile.motion_family == "thrust" else max(18.0, reach_px * 0.62)
+        return [(int(start_x), int(start_y)), (int(ax + vx * length), int(ay + vy * length))]
+    if profile.motion_family == "bash":
+        return [(int(start_x), int(start_y)), (int(ax + vx * min(reach_px, 28.0)), int(ay + vy * min(reach_px, 28.0)))]
+    side = 1.0 if profile.motion_family != "chop" else 0.55
+    width = 18.0 if profile.motion_family == "slash" else 14.0
+    return [
+        (int(start_x - px * width * side), int(start_y - py * width * side)),
+        (int(ax + vx * (reach_px * 0.55)), int(ay + vy * (reach_px * 0.55))),
+        (int(end_x + px * width * side), int(end_y + py * width * side)),
+    ]
+
+
+def _render_weapon_motion(screen: pygame.Surface, cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> dict[str, Any]:
+    points = _combat_motion_points(cue, profile, attacker_px=attacker_px, target_px=target_px)
+    width = max(2, int(4 * profile.visual_weight))
+    color = (255, 218, 126)
+    primitive = "line"
+    if profile.motion_family in {"slash", "chop"}:
+        primitive = "directional_arc" if profile.motion_family == "slash" else "directional_chop"
+        if len(points) >= 3:
+            pygame.draw.lines(screen, color, False, points, width)
+            pygame.draw.lines(screen, (255, 148, 86), False, points, max(1, width - 2))
     elif profile.motion_family == "bash":
-        pygame.draw.line(screen, (255, 165, 92), (ax, ay), (tx, ty), width + 2)
+        primitive = "bash_shove"
+        pygame.draw.line(screen, (255, 166, 102), points[0], points[-1], width + 1)
     else:
-        pygame.draw.line(screen, (255, 220, 96), (ax, ay), (tx, ty), width)
-        pygame.draw.arc(screen, (255, 194, 120), (ax - 26, ay - 26, 52, 52), -0.95, 1.25, max(3, width - 1))
+        primitive = "thrust_line" if profile.motion_family == "thrust" else "stab_jab"
+        pygame.draw.line(screen, color, points[0], points[-1], width)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    bbox = {"x": min(xs) - width, "y": min(ys) - width, "w": max(xs) - min(xs) + width * 2, "h": max(ys) - min(ys) + width * 2}
+    return {"primitive": primitive, "points": [{"x": int(x), "y": int(y)} for x, y in points], "bbox": bbox}
 
 
 def _draw_combat_presentation_cues(
@@ -3917,22 +3954,15 @@ def _draw_combat_presentation_cues(
         ax, ay = _projection_local_to_screen(cue.attacker_position, world_center, zoom_scale)
         tx, ty = _projection_local_to_screen(cue.target_position, world_center, zoom_scale)
         motion_profile = WEAPON_MOTION_PROFILE_BY_FAMILY.get(cue.motion_family, DEFAULT_WEAPON_MOTION_PROFILE)
-        if cue.phase == "windup":
-            _render_weapon_motion(screen, cue, motion_profile, attacker_px=(ax, ay), target_px=(tx, ty))
-            pygame.draw.circle(screen, (255, 255, 184), (int(ax), int(ay)), 14, 4)
-        else:
-            midpoint = (int((ax + tx) * 0.5), int((ay + ty) * 0.5))
-            pygame.draw.line(screen, (255, 120, 72), (int(ax), int(ay)), midpoint, 9)
-            pygame.draw.line(screen, (255, 214, 120), midpoint, (int(tx), int(ty)), 7)
-            pygame.draw.circle(screen, (255, 255, 184), (int(ax), int(ay)), 13, 4)
+        motion_diag = _render_weapon_motion(screen, cue, motion_profile, attacker_px=(ax, ay), target_px=(tx, ty))
+        radius = 0
         if cue.phase in {"impact", "arc", "recovery"}:
             impact_age = max(0, now_tick - cue.impact_tick)
-            radius = 14 + min(24, impact_age * 5)
-            pygame.draw.circle(screen, (255, 98, 72), (int(tx), int(ty)), radius, 5)
-            flash_radius = 9 + min(14, impact_age * 3)
-            pygame.draw.circle(screen, (255, 236, 160), (int(tx), int(ty)), flash_radius, 0)
+            radius = 7 + min(8, impact_age * 2)
+            pygame.draw.circle(screen, (255, 118, 92), (int(tx), int(ty)), radius, 2)
+            pygame.draw.circle(screen, (255, 226, 150), (int(tx), int(ty)), max(3, radius - 3), 1)
             badge = marker_font.render(cue.outcome_label.upper(), True, (255, 248, 232))
-            badge_rect = badge.get_rect(center=(int(tx), int(ty - radius - 20)))
+            badge_rect = badge.get_rect(center=(int(tx), int(ty - radius - 24)))
             bg_rect = badge_rect.inflate(18, 12)
             pygame.draw.rect(screen, (54, 24, 24), bg_rect, border_radius=5)
             pygame.draw.rect(screen, (255, 156, 96), bg_rect, 2, border_radius=5)
@@ -3954,8 +3984,12 @@ def _draw_combat_presentation_cues(
                 "target_screen_pos": {"x": int(tx), "y": int(ty)},
                 "rendered": True,
                 "cue_rendered": True,
-                "arc_bbox": {"x": int(min(ax, tx) - 48), "y": int(min(ay, ty) - 48), "w": int(abs(tx - ax) + 96), "h": int(abs(ty - ay) + 96)},
-                "impact_bbox": {"x": int(tx - 48), "y": int(ty - 48), "w": 96, "h": 96},
+                "arc_bbox": motion_diag["bbox"],
+                "impact_bbox": {"x": int(tx - 18), "y": int(ty - 18), "w": 36, "h": 36},
+                "motion_primitive": motion_diag["primitive"],
+                "motion_points": motion_diag["points"],
+                "actor_marker_layer_above_weapon_cue": True,
+                "target_marker_remains_visible": True,
                 "badge_text": cue.outcome_label.upper(),
                 "badge_screen_pos": {"x": int(tx), "y": int(ty - 54)},
                 "render_layer_used": "combat_cues_overlay",
@@ -4304,6 +4338,19 @@ def _home_panel_buttons_for_click(
     return _home_panel_button_rects(panel_rect)
 
 
+def _local_player_melee_readiness_label(sim: Simulation, *, entity: EntityState) -> str:
+    if int(entity.cooldown_until_tick) <= int(sim.state.tick):
+        return "READY"
+    for row in reversed(sim.state.combat_log):
+        if not isinstance(row, dict) or row.get("attacker_id") != entity.entity_id:
+            continue
+        if row.get("reason") == "windup_started":
+            impact_tick = row.get("impact_tick")
+            if isinstance(impact_tick, int) and int(sim.state.tick) < impact_tick:
+                return "WINDUP"
+        break
+    return "RECOVERING"
+
 def _player_facing_hud_lines(
     sim: Simulation,
     *,
@@ -4332,9 +4379,9 @@ def _player_facing_hud_lines(
         lines.append("OUTSIDE Greybridge on campaign map")
     else:
         lines.append(_entity_location_text(sim, entity))
+    melee_state = _local_player_melee_readiness_label(sim, entity=entity)
     cooldown_remaining = max(0, int(entity.cooldown_until_tick) - int(sim.state.tick))
-    melee_state = "recovering" if cooldown_remaining > 0 else "ready"
-    lines.append(f"melee_state={melee_state}")
+    lines.append(f"melee_state={melee_state} ready_in_ticks={cooldown_remaining}")
     if str(entity.space_id).startswith("local_site:"):
         lines.append("Local actions: L-click hostile attack | A/D turn | E/Q extract")
     elif pending_offer is not None:
@@ -5885,6 +5932,9 @@ def _queue_local_attack_for_click(
     magnitude = math.hypot(dx, dy)
     if magnitude <= 0.0001:
         return None
+    if int(player.cooldown_until_tick) > int(sim.state.tick):
+        remaining = int(player.cooldown_until_tick) - int(sim.state.tick)
+        return f"RECOVERING ({remaining} ticks)"
     committed_aim: dict[str, object] = {
         "space_id": player.space_id,
         "x": round(dx / magnitude, 6),

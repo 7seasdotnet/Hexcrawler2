@@ -23,6 +23,9 @@ MELEE_ACTIVE_WINDOW_TICKS = 1
 MELEE_RECOVERY_TICKS = 5
 MELEE_TOTAL_COMMIT_TICKS = MELEE_WINDUP_TICKS + MELEE_ACTIVE_WINDOW_TICKS + MELEE_RECOVERY_TICKS
 DEFAULT_WOUND_SEVERITY = 1
+STARTER_HOSTILE_INCOMING_SEVERITY_BONUS_STAT = "starter_incoming_wound_severity_bonus"
+COMBAT_CADENCE_PROBE_MAX_ROWS = 96
+
 
 
 @dataclass(frozen=True)
@@ -181,7 +184,8 @@ class CombatExecutionModule(RuleModule):
                             resolve_tick = int(command.tick) + weapon_profile.impact_tick
                             if committed_aim is None:
                                 committed_aim = self._aim_from_attacker_to_cell(sim=sim, attacker_id=attacker_id, target_cell=target_cell)
-                            sim.append_combat_outcome(
+                            self._append_combat_outcome_and_trace(
+                                sim,
                                 {
                                     "tick": int(command.tick),
                                     "intent": ATTACK_INTENT_COMMAND_TYPE,
@@ -265,7 +269,7 @@ class CombatExecutionModule(RuleModule):
                 "roll_trace": [],
                 "tags": list(tags),
             }
-            sim.append_combat_outcome(outcome)
+            self._append_combat_outcome_and_trace(sim, outcome)
         return True
 
     def on_event_executed(self, sim: Simulation, event: SimEvent) -> None:
@@ -372,7 +376,33 @@ class CombatExecutionModule(RuleModule):
         }
         if affected:
             outcome["affected"] = affected
+        self._append_combat_outcome_and_trace(sim, outcome)
+
+
+    @classmethod
+    def _append_combat_outcome_and_trace(cls, sim: Simulation, outcome: dict[str, Any]) -> None:
         sim.append_combat_outcome(outcome)
+        normalized = sim.state.combat_log[-1]
+        trace_key = f"combat:{normalized.get('action_uid')}:{normalized.get('tick')}:{normalized.get('reason')}"
+        sim._append_event_trace_entry(
+            {
+                "tick": int(normalized["tick"]),
+                "event_id": sim._trace_event_id_as_int(trace_key),
+                "event_type": COMBAT_OUTCOME_EVENT_TYPE,
+                "params": copy.deepcopy(normalized),
+                "module_hooks_called": False,
+            }
+        )
+
+    @classmethod
+    def _wound_severity_for_target(cls, *, sim: Simulation, entity_id: str) -> int:
+        entity = sim.state.entities.get(entity_id)
+        bonus = 0
+        if entity is not None and isinstance(entity.stats, dict):
+            raw_bonus = entity.stats.get(STARTER_HOSTILE_INCOMING_SEVERITY_BONUS_STAT, 0)
+            if isinstance(raw_bonus, int) and not isinstance(raw_bonus, bool):
+                bonus = max(0, min(3, raw_bonus))
+        return DEFAULT_WOUND_SEVERITY + bonus
 
     @staticmethod
     def _append_wound_with_fifo_cap(entity_wounds: list[dict[str, Any]], wound: dict[str, Any]) -> None:
@@ -401,7 +431,7 @@ class CombatExecutionModule(RuleModule):
                 continue
             wound = {
                 "region": cls._resolve_wound_region(entry=entry, called_region=called_region),
-                "severity": DEFAULT_WOUND_SEVERITY,
+                "severity": cls._wound_severity_for_target(sim=sim, entity_id=entity_id),
                 "tags": [],
                 "inflicted_tick": int(tick),
                 "source": attacker_id if isinstance(attacker_id, str) else None,
@@ -786,3 +816,131 @@ class CombatExecutionModule(RuleModule):
             ),
         )
         return distance == 1
+
+
+def _combat_source_from_tags(tags: Any, *, fallback: str = "other") -> str:
+    tag_set = {str(tag) for tag in tags} if isinstance(tags, list) else set()
+    if "viewer_lmb_directional_melee" in tag_set:
+        return "player_lmb"
+    if "local_hostile_behavior" in tag_set:
+        return "hostile_ai"
+    if "visual_audit" in tag_set:
+        return "visual_audit"
+    if "test" in tag_set:
+        return "test_driver"
+    return fallback
+
+
+def _combat_cadence_state_for_actor(sim: Simulation, actor_id: str) -> str:
+    entity = sim.state.entities.get(actor_id)
+    if entity is None:
+        return "UNKNOWN"
+    pending_impacts = [
+        event for event in sim.pending_events()
+        if event.event_type == ATTACK_RESOLVE_EVENT_TYPE and event.params.get("attacker_id") == actor_id
+    ]
+    if pending_impacts:
+        return "WINDUP"
+    if int(entity.cooldown_until_tick) > int(sim.state.tick):
+        return "RECOVERING"
+    return "READY"
+
+
+def combat_cadence_probe(sim: Simulation) -> dict[str, Any]:
+    """Return bounded deterministic combat-cadence diagnostics.
+
+    The probe is a read-only derived report: it stores no viewer/camera/projection
+    state and does not mutate the simulation.  It is safe for debug and audit
+    surfaces, but it is not authoritative combat evidence.
+    """
+
+    accepted_by_uid: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    for index, entry in enumerate(sim.state.combat_log[-COMBAT_CADENCE_PROBE_MAX_ROWS:]):
+        if not isinstance(entry, dict):
+            continue
+        action_uid = str(entry.get("action_uid", ""))
+        tags = entry.get("tags", [])
+        weapon_profile = entry.get("weapon_profile") if isinstance(entry.get("weapon_profile"), dict) else {}
+        reason = str(entry.get("reason", ""))
+        accepted = reason == "windup_started"
+        if accepted and action_uid:
+            accepted_by_uid[action_uid] = entry
+        accepted_row = accepted_by_uid.get(action_uid, entry if accepted else {})
+        actor_id = entry.get("attacker_id") if isinstance(entry.get("attacker_id"), str) else None
+        target_cell = copy.deepcopy(entry.get("target_cell")) if isinstance(entry.get("target_cell"), dict) else None
+        row = {
+            "row_id": index,
+            "actor_id": actor_id,
+            "faction": (sim.state.entities.get(actor_id).stats.get("faction_id") if actor_id in sim.state.entities and isinstance(sim.state.entities[actor_id].stats, dict) else None),
+            "role": (sim.state.entities.get(actor_id).stats.get("role") if actor_id in sim.state.entities and isinstance(sim.state.entities[actor_id].stats, dict) else None),
+            "source_path": "scheduled_impact" if reason in {"resolved", "no_target_in_cell", "target_moved", "invalid_arc"} and not accepted else _combat_source_from_tags(tags),
+            "accepted_attack_tick": accepted_row.get("tick") if isinstance(accepted_row, dict) and accepted_row.get("reason") == "windup_started" else (entry.get("tick") if accepted else None),
+            "windup_start_tick": accepted_row.get("tick") if isinstance(accepted_row, dict) and accepted_row.get("reason") == "windup_started" else None,
+            "impact_tick": entry.get("tick") if reason != "windup_started" else entry.get("impact_tick"),
+            "cooldown_until_tick": entry.get("recovery_until_tick"),
+            "recovery_until_tick": entry.get("recovery_until_tick"),
+            "current_cadence_state": _combat_cadence_state_for_actor(sim, actor_id) if actor_id else "UNKNOWN",
+            "accepted": accepted,
+            "rejection_reason": None if accepted or reason in {"resolved", "target_incapacitated"} else reason,
+            "outcome_emitted": reason != "windup_started" and str(entry.get("strike_phase", "")) != "rejected",
+            "combat_log_summary": {"index": index, "tick": entry.get("tick"), "reason": reason, "applied": entry.get("applied")},
+            "event_trace_summary": None,
+            "target_id": entry.get("target_id"),
+            "target_cell": target_cell,
+            "target_point": copy.deepcopy(entry.get("target_point")) if isinstance(entry.get("target_point"), dict) else None,
+            "committed_aim": copy.deepcopy(entry.get("committed_aim")) if isinstance(entry.get("committed_aim"), dict) else None,
+            "outcome_label": reason,
+            "weapon_profile_id": entry.get("weapon_profile_id"),
+            "motion_family": weapon_profile.get("motion_family"),
+            "action_uid": action_uid or None,
+        }
+        rows.append(row)
+
+    for outcome in sim.get_command_outcomes()[-COMBAT_CADENCE_PROBE_MAX_ROWS:]:
+        if not isinstance(outcome, dict) or outcome.get("command_type") != ATTACK_INTENT_COMMAND_TYPE:
+            continue
+        actor_id = outcome.get("attacker_id") if isinstance(outcome.get("attacker_id"), str) else None
+        rows.append({
+            "row_id": len(rows),
+            "actor_id": actor_id,
+            "faction": (sim.state.entities.get(actor_id).stats.get("faction_id") if actor_id in sim.state.entities and isinstance(sim.state.entities[actor_id].stats, dict) else None),
+            "role": (sim.state.entities.get(actor_id).stats.get("role") if actor_id in sim.state.entities and isinstance(sim.state.entities[actor_id].stats, dict) else None),
+            "source_path": "other",
+            "accepted_attack_tick": None,
+            "windup_start_tick": None,
+            "impact_tick": None,
+            "cooldown_until_tick": sim.state.entities[actor_id].cooldown_until_tick if actor_id in sim.state.entities else None,
+            "recovery_until_tick": sim.state.entities[actor_id].cooldown_until_tick if actor_id in sim.state.entities else None,
+            "current_cadence_state": _combat_cadence_state_for_actor(sim, actor_id) if actor_id else "UNKNOWN",
+            "accepted": False,
+            "rejection_reason": outcome.get("reason"),
+            "outcome_emitted": False,
+            "combat_log_summary": None,
+            "event_trace_summary": None,
+            "target_id": None,
+            "target_cell": None,
+            "target_point": None,
+            "committed_aim": None,
+            "outcome_label": outcome.get("feedback"),
+            "weapon_profile_id": None,
+            "motion_family": None,
+            "action_uid": None,
+        })
+
+    return {
+        "tick": int(sim.state.tick),
+        "max_rows": COMBAT_CADENCE_PROBE_MAX_ROWS,
+        "rows": rows[-COMBAT_CADENCE_PROBE_MAX_ROWS:],
+        "pending_impacts": [
+            {
+                "event_id": event.event_id,
+                "tick": int(event.tick),
+                "actor_id": event.params.get("attacker_id"),
+                "target_id": event.params.get("target_id"),
+                "source_path": "scheduled_impact",
+            }
+            for event in sim.pending_events()
+            if event.event_type == ATTACK_RESOLVE_EVENT_TYPE
+        ][-COMBAT_CADENCE_PROBE_MAX_ROWS:],
+    }

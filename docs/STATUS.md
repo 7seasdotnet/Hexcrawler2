@@ -1,4 +1,53 @@
 ## Current Verification Commands (automated tests passed in this container)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py src/hexcrawler/sim/combat.py src/hexcrawler/sim/local_hostiles.py src/hexcrawler/sim/encounters.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel"`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_encounter_return.py`
+- `python play.py` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); manual pygame runtime acceptance remains required.
+- `python play.py --visual-audit` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); no updated contact sheet could be generated here.
+- `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`).
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **Next action:** Manual pygame runtime verification remains required before acceptance: run `python play.py`, fight the first patrol using one LMB click per visible READY opportunity, hold/repeatedly click LMB during recovery, click empty local space, move the mouse after accepted attacks, observe bounded hostile cadence/telegraph, verify target dots remain visible with directional weapon arcs, verify Space does not ordinary-attack, verify F1/F10/zoom/pan/recenter, then run `python play.py --visual-audit` and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` where pygame is available.
+
+## Local melee cadence semantics (Gate 2)
+- `impact_tick` is relative to the accepted attack tick. An attack accepted at tick `T` emits WINDUP evidence at `T`, schedules exactly one serialized impact at `T + impact_tick`, and recovers while `current_tick < cooldown_until_tick`.
+- `cooldown_until_tick` is the first READY tick. Player and hostile attack intents use the same boundary: an `attack_intent` exactly at `cooldown_until_tick` is admissible if local-role target/range/arc checks pass; earlier intents produce bounded non-combat feedback and no MISS/BLOCKED/WOUNDED combat-log row.
+- Every player or hostile melee outcome now flows through accepted cadence evidence and the serialized `attack_resolve` event; hostile behavior requests `attack_intent` rather than directly applying wounds.
+- `combat_cadence_probe` is a bounded, read-only diagnostic report over canonical combat evidence, command outcomes, and pending impact events. It includes actor/source path, accepted/windup/impact/recovery ticks, cadence state, rejection reasons, target evidence, weapon profile, and motion family without camera/screen/projection fields.
+
+
+## Exact starter-fight tuning values (Gate 2 amendment)
+- Global authoritative melee profile was **not** silently nerfed: `default_melee` remains `windup_ticks=2`, `impact_tick=2`, `recovery_ticks=5`, and `cooldown_until_tick=accepted_tick+8` for both player and hostile accepted melee.
+- Starter hostile behavior cadence in local contact is explicitly `LOCAL_CONTACT_TELEGRAPH_TICKS=3` and `LOCAL_CONTACT_ATTACK_COOLDOWN_TICKS=14`; this controls hostile attack request frequency/aggro telegraph in the first local patrol fight path and does not change global weapon profiles.
+- First/core-playable patrol hostile durability tuning is local to spawned starter encounter hostiles with `stats.role="starter_patrol_hostile"` and `stats.starter_incoming_wound_severity_bonus=1`, so incoming wounds against that starter hostile are severity `2` instead of global default severity `1`.
+- Hostile accuracy, player wound severity, armor, body-part targeting, stamina, ranged combat, spells, cover, and equipment-derived weapon profile behavior were not changed.
+- Headless cadence transcript artifact: `docs/ai_playtest/combat_cadence_gate2/HEADLESS_CADENCE_TRANSCRIPT.md`.
+
+## What exists (folders/entry points)
+- Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
+- Authoritative local-role melee cadence and `combat_cadence_probe` live in `src/hexcrawler/sim/combat.py`; hostile local-role attack requests and starter cadence tuning live in `src/hexcrawler/sim/local_hostiles.py`; first patrol hostile durability tuning is attached explicitly to the spawned starter encounter hostile in `src/hexcrawler/sim/encounters.py`.
+- Viewer-local readiness/cue presentation lives in `src/hexcrawler/cli/pygame_viewer.py`: READY/WINDUP/RECOVERING HUD text, not-ready LMB feedback, and bounded procedural slash/thrust/chop/stab/bash primitives remain presentation-only and non-serialized.
+- Visual audit capture/report hardening lives in `src/hexcrawler/cli/visual_audit.py`: original campaign/contact/local/extraction beats remain, with additional `combat_cadence_sequence`, combat cadence probe data, and cue readability diagnostics.
+
+## What changed in this commit
+- Added combat cadence probe/trace observability and tests proving accepted windup, scheduled impact, rejection, and outcome evidence stay bounded and deterministic; amended with a headless cadence transcript artifact at `docs/ai_playtest/combat_cadence_gate2/HEADLESS_CADENCE_TRANSCRIPT.md`.
+- Slowed starter hostile attack pressure and made first patrol hostile durability tuning explicit/stat-gated instead of globally nerfing combat.
+- Replaced oversized combat splash presentation with bounded directional procedural weapon motion plus small impact accents, visible READY/WINDUP/RECOVERING feedback, and stricter visual-audit cadence/readability evidence.
+
+## Manual-vs-automated reality note
+- The previous automated visual audit passed but did not prove live combat feel.
+- Manual pygame playtest found live combat blockers: LMB spam still functionally required; hostile appears to over-attack or mirror wounds; combat cue obscures enemy; no readable weapon arc; visual audit needs cadence/readability hardening.
+- This PR addresses those blockers as a follow-up to the merged LMB directional melee baseline, but does **not** claim runtime acceptance until manual smoke passes on a pygame-capable workstation.
+
+Lock-out constraints reviewed: OK
+
+---
+
+## Current Verification Commands (automated tests passed in this container)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel"`
