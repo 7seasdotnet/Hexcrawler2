@@ -719,6 +719,11 @@ class LocalEncounterInstanceModule(RuleModule):
                                 space_id=local_space.space_id,
                                 template_id="encounter_hostile_v1",
                                 source_action_uid=self._optional_non_empty_string(event.params.get("action_uid")),
+                                stats={
+                                    "faction_id": "hostile",
+                                    "role": "starter_patrol_hostile",
+                                    "starter_incoming_wound_severity_bonus": 1,
+                                },
                             )
                         )
                         participant_spawn_records.append(

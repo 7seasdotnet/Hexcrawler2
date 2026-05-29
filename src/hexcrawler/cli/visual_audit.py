@@ -12,7 +12,7 @@ from hexcrawler.cli.pygame_viewer import (
 )
 from hexcrawler.sim.core import SimCommand
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT
-from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, COMBAT_OUTCOME_EVENT_TYPE
+from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, COMBAT_OUTCOME_EVENT_TYPE, combat_cadence_probe
 from hexcrawler.sim.encounters import END_LOCAL_ENCOUNTER_INTENT, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
 from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE
@@ -240,6 +240,10 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
         "target_screen_pos": row.get("target_screen_pos"),
         "arc_bbox": row.get("arc_bbox"),
         "impact_bbox": row.get("impact_bbox"),
+        "motion_primitive": row.get("motion_primitive"),
+        "motion_points": row.get("motion_points"),
+        "actor_marker_layer_above_weapon_cue": row.get("actor_marker_layer_above_weapon_cue"),
+        "target_marker_remains_visible": row.get("target_marker_remains_visible"),
         "badge_text": row.get("badge_text"),
         "badge_screen_pos": row.get("badge_screen_pos"),
         "render_layer_used": row.get("render_layer_used"),
@@ -386,7 +390,7 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
                     _advance_one_tick(sim)
                     player = sim.state.entities.get(PLAYER_ID)
                 if _distance(player, target) <= 1.35:
-                    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ATTACK_INTENT_COMMAND_TYPE, params={"target_id": target.entity_id, "attacker_id": PLAYER_ID, "mode": "melee"}))
+                    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ATTACK_INTENT_COMMAND_TYPE, params={"target_id": target.entity_id, "attacker_id": PLAYER_ID, "mode": "melee", "tags": ["visual_audit"]}))
                     attack_result.attack_issued = True
                     attack_result.attack_tick = sim.state.tick
                 else:
@@ -394,35 +398,68 @@ def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCR
             else:
                 attack_result.outcome_reason = "no_local_hostile_found"
 
-            if attack_result.attack_issued:
-                for _ in range(120):
-                    latest = sim.state.combat_log[-1] if sim.state.combat_log else None
-                    if isinstance(latest, dict) and latest.get("attacker_id") == PLAYER_ID:
-                        if latest.get("reason") == "windup_started":
-                            attack_result.first_attack_status = "ok"
-                        if latest.get("applied") is True or latest.get("reason") in {"resolved", "target_incapacitated"}:
-                            attack_result.outcome_detected = True
-                            attack_result.outcome_reason = str(latest.get("reason"))
-                            attack_result.combat_result_status = "ok"
-                            break
-                    _advance_one_tick(sim)
-                if attack_result.combat_result_status != "ok":
-                    attack_result.combat_result_status = "partial"
-                    if attack_result.first_attack_status != "ok":
-                        attack_result.first_attack_status = "partial"
-                    if attack_result.outcome_reason is None:
-                        attack_result.outcome_reason = "attack_issued_no_outcome_within_wait"
-            elif attack_result.outcome_reason is None:
+            if not attack_result.attack_issued and attack_result.outcome_reason is None:
                 attack_result.outcome_reason = "attack_not_issued"
+
+    combat_cadence_sequence: dict[str, Any] = {
+        "pre_click_ready": attack_result.attack_tick is not None,
+        "accepted_attack_tick": None,
+        "windup_start_tick": None,
+        "impact_tick": None,
+        "recovery_until_tick": None,
+        "ready_again_tick": None,
+        "hostile_cadence_diagnostics": None,
+    }
+    if attack_result.attack_issued:
+        for _ in range(40):
+            player_rows = [row for row in sim.state.combat_log if isinstance(row, dict) and row.get("attacker_id") == PLAYER_ID]
+            windup = next((row for row in reversed(player_rows) if row.get("reason") == "windup_started"), None)
+            if isinstance(windup, dict):
+                attack_result.first_attack_status = "ok"
+                combat_cadence_sequence["accepted_attack_tick"] = windup.get("tick")
+                combat_cadence_sequence["windup_start_tick"] = windup.get("tick")
+                combat_cadence_sequence["impact_tick"] = windup.get("impact_tick")
+                combat_cadence_sequence["recovery_until_tick"] = windup.get("recovery_until_tick")
+                break
+            _advance_one_tick(sim)
+        if attack_result.first_attack_status != "ok":
+            attack_result.first_attack_status = "partial"
+            if attack_result.outcome_reason is None:
+                attack_result.outcome_reason = "attack_issued_no_windup_within_wait"
 
     event_types_seen = {row.get("event_type") for row in sim.get_event_trace() if isinstance(row, dict)}
     attack_result.event_types_after_attack = sorted(str(t) for t in event_types_seen if t)
     first_attack_note = "" if attack_result.first_attack_status == "ok" else (attack_result.outcome_reason or "first attack not observed")
     player_first = sim.state.entities.get(PLAYER_ID)
-    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_first, selected_target_id=attack_result.target_id)}, cue_phase_override="windup")
+    cadence_probe_first = combat_cadence_probe(sim)
+    combat_cadence_sequence["hostile_cadence_diagnostics"] = [row for row in cadence_probe_first.get("rows", []) if str(row.get("source_path")) == "hostile_ai"][-6:]
+    capture("first_attack", attack_result.first_attack_status, first_attack_note, ATTACK_INTENT_COMMAND_TYPE if attack_result.attack_issued else None, extra={"combat_probe": attack_result.__dict__, "combat_cadence_probe": cadence_probe_first, "combat_cadence_sequence": dict(combat_cadence_sequence), "local_entity_probe": _build_local_entity_probe(sim, player_first, selected_target_id=attack_result.target_id)}, cue_phase_override="windup")
+
+    if attack_result.attack_issued and attack_result.first_attack_status == "ok":
+        for _ in range(120):
+            player_rows = [row for row in sim.state.combat_log if isinstance(row, dict) and row.get("attacker_id") == PLAYER_ID]
+            latest = player_rows[-1] if player_rows else None
+            if isinstance(latest, dict) and (latest.get("applied") is True or latest.get("reason") in {"resolved", "target_incapacitated", "no_target_in_cell", "target_moved"}):
+                attack_result.outcome_detected = True
+                attack_result.outcome_reason = str(latest.get("reason"))
+                attack_result.combat_result_status = "ok"
+                combat_cadence_sequence["impact_tick"] = latest.get("tick")
+                combat_cadence_sequence["recovery_until_tick"] = latest.get("recovery_until_tick", combat_cadence_sequence.get("recovery_until_tick"))
+                break
+            _advance_one_tick(sim)
+        if attack_result.combat_result_status != "ok":
+            attack_result.combat_result_status = "partial"
+            if attack_result.outcome_reason is None:
+                attack_result.outcome_reason = "attack_issued_no_outcome_within_wait"
     combat_note = "" if attack_result.combat_result_status == "ok" else (attack_result.outcome_reason or "combat outcome not observed")
+    if attack_result.combat_result_status == "ok" and combat_cadence_sequence.get("accepted_attack_tick") == combat_cadence_sequence.get("impact_tick"):
+        combat_note = "accepted_attack_and_impact_same_tick"
+        attack_result.combat_result_status = "partial"
     player_combat = sim.state.entities.get(PLAYER_ID)
-    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__, "local_entity_probe": _build_local_entity_probe(sim, player_combat, selected_target_id=attack_result.target_id)}, cue_phase_override="impact")
+    cadence_probe_combat = combat_cadence_probe(sim)
+    combat_cadence_sequence["ready_again_tick"] = combat_cadence_sequence.get("recovery_until_tick")
+    combat_cadence_sequence["hostile_cadence_diagnostics"] = [row for row in cadence_probe_combat.get("rows", []) if str(row.get("source_path")) in {"hostile_ai", "scheduled_impact"} and row.get("actor_id") != PLAYER_ID][-8:]
+    capture("combat_result", attack_result.combat_result_status, combat_note, None, extra={"combat_probe": attack_result.__dict__, "combat_cadence_probe": cadence_probe_combat, "combat_cadence_sequence": dict(combat_cadence_sequence), "local_entity_probe": _build_local_entity_probe(sim, player_combat, selected_target_id=attack_result.target_id)}, cue_phase_override="impact")
 
     # return only valid after local entry and only when admissible at extraction exit
     return_ok=False
