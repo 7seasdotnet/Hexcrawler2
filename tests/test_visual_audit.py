@@ -276,3 +276,9 @@ def test_at_return_exit_uses_cell_semantics_not_visual_distance() -> None:
     player = sim.state.entities["scout"]
     assert _player_local_coord(sim, player) == {"x": 2, "y": 3}
     assert _at_return_exit(sim, player, {"x": 2, "y": 3}) is True
+
+def test_melee_readability_script_uses_dedicated_default_artifact_path() -> None:
+    import hexcrawler.cli.visual_audit as mod
+
+    assert str(mod.MELEE_READABILITY_OUT) == "docs/ai_playtest/melee_readability/latest"
+    assert mod.MELEE_READABILITY_SCRIPT == "melee_readability_proving_ground"

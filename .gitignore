@@ -7,3 +7,6 @@ viewer_err.txt
 /python
 docs/ai_playtest/perf/latest/*
 !docs/ai_playtest/perf/latest/.gitkeep
+# Volatile visual-audit runtime outputs; commit only intentional frozen evidence outside latest/.
+docs/ai_playtest/melee_readability/latest/*
+!docs/ai_playtest/melee_readability/latest/.gitkeep
