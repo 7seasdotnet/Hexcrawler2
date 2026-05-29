@@ -1,4 +1,52 @@
 ## Current Verification Commands (automated tests passed in this container)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel or melee_readability"`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_melee_readability.py`
+- `python play.py --visual-audit --script melee_readability_proving_ground` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); no melee readability contact sheet/report was generated here.
+- `python play.py --visual-audit` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); the existing core-playable eight-beat audit remains intact but was not regenerated here.
+- `python play.py` and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` require pygame/manual runtime verification outside this container.
+
+## Branch/base and artifact hygiene amendment
+- **Base commit:** `025bea32bb927230044fda3306f4624c75bb254e` (`Merge pull request #269 from 7seasdotnet/codex/update-combat-visuals-for-melee-attack`), identified as this PR branch's parent commit in the local repository.
+- **Target branch:** intended target is `main`, but this container has no `origin` remote and no local `main` ref available, so the branch could not be verified/rebased against true current `main` here. If remote/main becomes available before merge, rebase/recreate this branch against the intended target.
+- **Stacked status:** not intentionally stacked on an unmerged branch; it is based on the local checked-out baseline at `025bea3`. That baseline already includes `aa1f2bc` (`Merge pull request #268 ... Combat Cadence Gate 2`), so Combat Cadence Gate 2 is assumed merged in the local base.
+- **Runtime artifact hygiene:** volatile melee readability outputs under `docs/ai_playtest/melee_readability/latest/` are ignored by `.gitignore` except for `.gitkeep`; generated `MELEE_READABILITY_CONTACT_SHEET.png`, `MELEE_READABILITY_REPORT.md`, and `melee_readability_timeline.json` should not be committed unless intentionally frozen outside `latest/` or explicitly accepted as stable evidence.
+- **Runtime acceptance wording:** pygame was unavailable in Codex's environment, no melee readability contact sheet was regenerated here, commercial-grade acceptance is not claimed, and manual pygame review remains required before merge acceptance with `python play.py --visual-audit --script melee_readability_proving_ground`, `python play.py --visual-audit`, and `python play.py`.
+- **Amendment scope:** no melee rendering/combat code changed in this hygiene amendment.
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **This PR purpose:** Follow-up melee readability proving ground for `local`-role default melee slash presentation only; this is not a Combat Cadence Gate 2 amendment and does not change authoritative hit/miss/wound math.
+- **Next action:** Run `python play.py --visual-audit --script melee_readability_proving_ground` on a pygame-capable workstation and inspect `docs/ai_playtest/melee_readability/latest/MELEE_READABILITY_CONTACT_SHEET.png`, `MELEE_READABILITY_REPORT.md`, and `melee_readability_timeline.json`; then run normal `python play.py`, `python play.py --visual-audit`, and the perf sentinel/F10 path to manually confirm slash readability, Space non-attack, LMB cadence, hostile bounded cadence, camera/zoom/pan/recenter, F1, and F10 remain intact.
+
+## Melee readability proving ground (follow-up PR)
+- Adds the `melee_readability_proving_ground` visual-audit script for a deterministic local-only scene: one player, one hostile dummy, fixed square-grid local space, fixed positions, fixed seed, and direct `default_melee` LMB-equivalent slash evidence without campaign travel.
+- `default_melee` slash presentation is viewer-local procedural grammar: committed-facing windup, sampled crescent arc with fading tail/leading edge, target-edge contact tick, separate authoritative result badge, recovery, and READY return. Arc origin/contact/sample diagnostics stay outside save/hash/input-log/RNG/replay.
+- Presentation target semantics now prefer `target_id`, then `target_point`, then `target_cell`, then committed-aim reach fallback; targeted hostile slashes place contact at the target marker edge and report `presentation_target_source`, `arc_origin_local`, `arc_contact_local`, `arc_committed_facing`, `arc_sample_count`, marker visibility, and `large_impact_blob_detected`.
+
+## What exists (folders/entry points)
+- Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
+- Viewer-local melee motion grammar and facing/readiness presentation live in `src/hexcrawler/cli/pygame_viewer.py`; the new proving-ground audit path lives in `src/hexcrawler/cli/visual_audit.py` and is launched with `python play.py --visual-audit --script melee_readability_proving_ground`.
+- Headless regression coverage for slash geometry, target-edge contact, viewer-local hash neutrality, cadence regressions, and visual-audit script plumbing lives in `tests/test_melee_readability.py`, `tests/test_pygame_viewer_cli.py`, `tests/test_combat_execution_module.py`, and `tests/test_visual_audit.py`.
+- Runtime melee readability artifacts, when generated on a pygame-capable machine, are written under `docs/ai_playtest/melee_readability/latest/`; no updated runtime artifacts were generated in this container, so any existing files there are stale/non-acceptance evidence.
+
+## What changed in this commit
+- Added a local-only melee readability proving-ground script and report/contact-sheet/timeline output path without replacing the normal `core_playable` visual audit.
+- Reworked default slash presentation into local-space sampled arc anchors: attacker-adjacent origin, target-edge contact endpoint, committed local aim/facing, leading-edge emphasis, compact contact tick, and diagnostics proving marker visibility/no dominant click blob.
+- Added targeted tests for the procedural slash grammar, presentation-only determinism boundaries, cadence regressions, and audit diagnostics while preserving LMB attack, Space non-attack, camera/zoom/F1/F10 code paths, and bounded hostile cadence.
+
+## Remaining melee-readability issue
+- Commercial-grade acceptance is **not** claimed because pygame is unavailable in this container; the ugliest remaining risk is whether the procedural crescent has enough weight/contrast in real runtime motion after the contact sheet is regenerated and manually judged.
+
+Lock-out constraints reviewed: OK
+
+---
+
+## Current Verification Commands (automated tests passed in this container)
 - `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py src/hexcrawler/sim/combat.py src/hexcrawler/sim/local_hostiles.py src/hexcrawler/sim/encounters.py`
 - `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
 - `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel"`

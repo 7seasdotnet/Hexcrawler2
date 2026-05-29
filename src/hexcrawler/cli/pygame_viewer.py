@@ -676,6 +676,11 @@ class CombatPresentationCue:
     evidence_source: str = "event_trace"
     evidence_reason: str = "resolved"
     evidence_applied: bool = False
+    presentation_target_source: str = "aim_reach_fallback"
+    arc_origin_local: tuple[float, float] | None = None
+    arc_contact_local: tuple[float, float] | None = None
+    arc_sample_count: int = 0
+    arc_reaches_target_marker_edge: bool = False
 
 
 COMBAT_CUE_MAX = 18
@@ -3827,7 +3832,31 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         else:
             vector = (1.0, 0.0)
         profile = _weapon_motion_profile_for_weapon_ref(payload.get("weapon_ref"), profile_id=payload.get("weapon_profile_id"), profile_payload=payload.get("weapon_profile"))
-        target_position = (float(target.position_x), float(target.position_y)) if target is not None else (float(attacker.position_x) + vector[0] * profile.reach, float(attacker.position_y) + vector[1] * profile.reach)
+        presentation_target_source = "aim_reach_fallback"
+        if target is not None:
+            target_position = (float(target.position_x), float(target.position_y))
+            presentation_target_source = "target_id"
+        elif isinstance(payload.get("target_point"), dict):
+            target_point_payload = payload.get("target_point")
+            target_position = (float(target_point_payload.get("x", float(attacker.position_x) + vector[0] * profile.reach)), float(target_point_payload.get("y", float(attacker.position_y) + vector[1] * profile.reach)))
+            presentation_target_source = "target_point"
+        elif isinstance(payload.get("target_cell"), dict):
+            target_cell_payload = payload.get("target_cell")
+            coord = target_cell_payload.get("coord") if isinstance(target_cell_payload, dict) else None
+            if isinstance(coord, dict) and "x" in coord and "y" in coord:
+                target_position = (float(coord["x"]) + 0.5, float(coord["y"]) + 0.5)
+            else:
+                target_position = (float(attacker.position_x) + vector[0] * profile.reach, float(attacker.position_y) + vector[1] * profile.reach)
+            presentation_target_source = "target_cell"
+        else:
+            target_position = (float(attacker.position_x) + vector[0] * profile.reach, float(attacker.position_y) + vector[1] * profile.reach)
+        arc_origin_local, arc_contact_local, arc_reaches_target_marker_edge = _melee_arc_anchor_points_local(
+            attacker_position=(float(attacker.position_x), float(attacker.position_y)),
+            target_position=target_position,
+            committed_facing=vector,
+            target_source=presentation_target_source,
+        )
+        arc_sample_count = len(_sample_melee_motion_points_local(arc_origin_local=arc_origin_local, arc_contact_local=arc_contact_local, committed_facing=vector, motion_family=profile.motion_family))
         if reason == "windup_started":
             start_tick = tick
             impact_tick = int(payload.get("impact_tick", tick + profile.impact_tick)) if isinstance(payload.get("impact_tick", tick + profile.impact_tick), int) else tick + profile.impact_tick
@@ -3850,6 +3879,11 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
                 evidence_source=source,
                 evidence_reason=reason,
                 evidence_applied=applied,
+                presentation_target_source=presentation_target_source,
+                arc_origin_local=arc_origin_local,
+                arc_contact_local=arc_contact_local,
+                arc_sample_count=arc_sample_count,
+                arc_reaches_target_marker_edge=arc_reaches_target_marker_edge,
             )
         )
         generated += 1
@@ -3876,42 +3910,123 @@ def _projection_vector_to_screen(local_vec: tuple[float, float], zoom_scale: flo
     return (float(local_vec[0]) * scale, float(local_vec[1]) * scale)
 
 
+def _normalized_local_vector(vector: tuple[float, float]) -> tuple[float, float]:
+    vx, vy = float(vector[0]), float(vector[1])
+    mag = math.hypot(vx, vy)
+    if mag <= 1e-6 or not math.isfinite(mag):
+        return (1.0, 0.0)
+    return (vx / mag, vy / mag)
+
+
+def _melee_arc_anchor_points_local(
+    *,
+    attacker_position: tuple[float, float],
+    target_position: tuple[float, float],
+    committed_facing: tuple[float, float],
+    target_source: str,
+) -> tuple[tuple[float, float], tuple[float, float], bool]:
+    """Viewer-local slash anchors in local/topology space, never screen space.
+
+    The origin stays attacker-adjacent.  Targeted attacks place the contact point
+    on the near edge of the target marker along the attacker->target vector;
+    fallback directional swings use committed aim and reach only for presentation.
+    """
+    ax, ay = float(attacker_position[0]), float(attacker_position[1])
+    tx, ty = float(target_position[0]), float(target_position[1])
+    fx, fy = _normalized_local_vector(committed_facing)
+    px, py = -fy, fx
+    origin = (ax + fx * 0.24 - px * 0.16, ay + fy * 0.24 - py * 0.16)
+    to_target_x = tx - ax
+    to_target_y = ty - ay
+    to_target_mag = math.hypot(to_target_x, to_target_y)
+    reaches_edge = False
+    if target_source == "target_id" and to_target_mag > 1e-6:
+        ux, uy = to_target_x / to_target_mag, to_target_y / to_target_mag
+        contact = (tx - ux * 0.22, ty - uy * 0.22)
+        reaches_edge = True
+    else:
+        reach = max(0.72, min(1.18, math.hypot(tx - ax, ty - ay) or 1.0))
+        contact = (ax + fx * reach + px * 0.08, ay + fy * reach + py * 0.08)
+    return origin, contact, reaches_edge
+
+
+def _sample_melee_motion_points_local(
+    *,
+    arc_origin_local: tuple[float, float],
+    arc_contact_local: tuple[float, float],
+    committed_facing: tuple[float, float],
+    motion_family: str,
+) -> list[tuple[float, float]]:
+    fx, fy = _normalized_local_vector(committed_facing)
+    px, py = -fy, fx
+    ox, oy = float(arc_origin_local[0]), float(arc_origin_local[1])
+    cx, cy = float(arc_contact_local[0]), float(arc_contact_local[1])
+    if motion_family in {"thrust", "stab"}:
+        return [(ox, oy), (cx, cy)]
+    if motion_family == "bash":
+        mid = ((ox + cx) * 0.5 + fx * 0.06, (oy + cy) * 0.5 + fy * 0.06)
+        return [(ox, oy), mid, (cx, cy)]
+    sample_count = 9 if motion_family == "slash" else 7
+    dx, dy = cx - ox, cy - oy
+    distance = max(0.01, math.hypot(dx, dy))
+    bulge = min(0.42, max(0.22, distance * 0.38)) * (1.0 if motion_family == "slash" else 0.62)
+    control = (ox + dx * 0.56 + px * bulge + fx * 0.04, oy + dy * 0.56 + py * bulge + fy * 0.04)
+    points: list[tuple[float, float]] = []
+    for index in range(sample_count):
+        t = index / float(sample_count - 1)
+        inv = 1.0 - t
+        x = inv * inv * ox + 2.0 * inv * t * control[0] + t * t * cx
+        y = inv * inv * oy + 2.0 * inv * t * control[1] + t * t * cy
+        points.append((x, y))
+    return points
+
+
+def _phase_visible_motion_points(points: list[tuple[float, float]], phase: str) -> list[tuple[float, float]]:
+    if phase == "windup":
+        return points[: max(2, min(3, len(points)))]
+    if phase in {"arc", "swing_mid_arc"}:
+        return points[: max(4, int(math.ceil(len(points) * 0.68)))]
+    return points
+
+
 def _combat_motion_points(cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> list[tuple[int, int]]:
+    origin_local = cue.arc_origin_local
+    contact_local = cue.arc_contact_local
+    if origin_local is None or contact_local is None:
+        origin_local, contact_local, _ = _melee_arc_anchor_points_local(
+            attacker_position=cue.attacker_position,
+            target_position=cue.target_position,
+            committed_facing=cue.attack_vector_local,
+            target_source=cue.presentation_target_source,
+        )
+    local_points = _sample_melee_motion_points_local(
+        arc_origin_local=origin_local,
+        arc_contact_local=contact_local,
+        committed_facing=cue.attack_vector_local,
+        motion_family=profile.motion_family,
+    )
+    local_points = _phase_visible_motion_points(local_points, cue.phase)
     ax, ay = float(attacker_px[0]), float(attacker_px[1])
     tx, ty = float(target_px[0]), float(target_px[1])
     vx, vy = float(cue.attack_vector_local[0]), float(cue.attack_vector_local[1])
     mag = math.hypot(vx, vy) or 1.0
     vx, vy = vx / mag, vy / mag
-    target_distance_px = math.hypot(tx - ax, ty - ay)
-    reach_px = min(HEX_SIZE * 1.35, max(HEX_SIZE * 0.62, target_distance_px * 0.94))
-    start_radius = 13.0
-    end_radius = max(start_radius + 8.0, min(reach_px, target_distance_px - 10.0 if target_distance_px > 24.0 else reach_px))
-    start_x, start_y = ax + vx * start_radius, ay + vy * start_radius
-    end_x, end_y = ax + vx * end_radius, ay + vy * end_radius
-    if profile.motion_family in {"thrust", "stab"}:
-        length = end_radius if profile.motion_family == "thrust" else max(18.0, end_radius * 0.72)
-        return [(int(start_x), int(start_y)), (int(ax + vx * length), int(ay + vy * length))]
-    if profile.motion_family == "bash":
-        return [(int(start_x), int(start_y)), (int(ax + vx * min(end_radius, 30.0)), int(ay + vy * min(end_radius, 30.0)))]
-
-    # Slash/chop are rendered as a sampled, topology-derived committed-facing arc.
-    # The first point is attacker-adjacent and the final point is target-adjacent;
-    # no cursor/camera/projection state participates in choosing the direction.
-    px, py = -vy, vx
-    side = 1.0 if profile.motion_family == "slash" else 0.55
-    arc_bulge = min(18.0, max(10.0, end_radius * 0.36)) * side
-    points: list[tuple[int, int]] = []
-    sample_count = 7 if profile.motion_family == "slash" else 5
-    for index in range(sample_count):
-        t = index / float(sample_count - 1)
-        radial = start_radius + (end_radius - start_radius) * t
-        # Leading half of the weapon takes a crescent path rather than a straight line.
-        offset = math.sin((t - 0.08) * math.pi) * arc_bulge
-        x = ax + vx * radial + px * offset
-        y = ay + vy * radial + py * offset
-        points.append((int(x), int(y)))
-    return points
-
+    if profile.motion_family in {"thrust", "stab", "bash"} and (cue.arc_origin_local is None or cue.arc_contact_local is None):
+        start_x, start_y = ax + vx * 13.0, ay + vy * 13.0
+        end_x, end_y = tx - vx * 10.0, ty - vy * 10.0
+        return [(int(start_x), int(start_y)), (int(end_x), int(end_y))]
+    # Convert local-space samples to pixels by preserving their local offset from
+    # the attacker over the already-projected attacker pixel.  The projection is
+    # render-only and cannot feed back into simulation/canonical evidence.
+    local_dx = float(cue.target_position[0]) - float(cue.attacker_position[0])
+    local_dy = float(cue.target_position[1]) - float(cue.attacker_position[1])
+    local_distance = math.hypot(local_dx, local_dy)
+    screen_distance = math.hypot(tx - ax, ty - ay)
+    scale = (screen_distance / local_distance) if local_distance > 1e-6 else HEX_SIZE
+    return [
+        (int(ax + (float(x) - float(cue.attacker_position[0])) * scale), int(ay + (float(y) - float(cue.attacker_position[1])) * scale))
+        for x, y in local_points
+    ]
 
 def _motion_bbox(points: list[tuple[int, int]], *, width: int) -> dict[str, int]:
     xs = [p[0] for p in points]
@@ -3968,7 +4083,7 @@ def _draw_combat_presentation_cues(
     rendered_rows: list[dict[str, Any]] = []
     phase_override = runtime_state.audit_cue_phase_override
     ordered_cues = list(runtime_state.combat_presentation_cues)
-    if phase_override in {"impact", "arc", "recovery"}:
+    if phase_override in {"impact", "arc", "swing_mid_arc", "recovery"}:
         ordered_cues.sort(key=lambda cue: (cue.evidence_reason == "windup_started", cue.attacker_id != PLAYER_ID, cue.impact_tick))
     elif phase_override == "windup":
         ordered_cues.sort(key=lambda cue: (cue.attacker_id != PLAYER_ID, cue.evidence_reason != "windup_started", cue.impact_tick))
@@ -3978,7 +4093,7 @@ def _draw_combat_presentation_cues(
         total_age = now_tick - cue.start_tick
         if total_age > 14:
             continue
-        if phase_override in {"windup", "impact", "arc", "recovery"}:
+        if phase_override in {"windup", "impact", "arc", "swing_mid_arc", "recovery"}:
             phase = phase_override
         elif now_tick < cue.impact_tick:
             phase = "windup"
@@ -4003,19 +4118,27 @@ def _draw_combat_presentation_cues(
             evidence_source=cue.evidence_source,
             evidence_reason=cue.evidence_reason,
             evidence_applied=cue.evidence_applied,
+            presentation_target_source=cue.presentation_target_source,
+            arc_origin_local=cue.arc_origin_local,
+            arc_contact_local=cue.arc_contact_local,
+            arc_sample_count=cue.arc_sample_count,
+            arc_reaches_target_marker_edge=cue.arc_reaches_target_marker_edge,
         )
         survivors.append(cue)
         ax, ay = _projection_local_to_screen(cue.attacker_position, world_center, zoom_scale)
         tx, ty = _projection_local_to_screen(cue.target_position, world_center, zoom_scale)
+        contact_local = cue.arc_contact_local or cue.target_position
+        cx, cy = _projection_local_to_screen(contact_local, world_center, zoom_scale)
         motion_profile = WEAPON_MOTION_PROFILE_BY_FAMILY.get(cue.motion_family, DEFAULT_WEAPON_MOTION_PROFILE)
         motion_diag = _render_weapon_motion(screen, cue, motion_profile, attacker_px=(ax, ay), target_px=(tx, ty))
-        impact_radius = max(2, int(HEX_SIZE * zoom_scale * 0.10))
-        if cue.phase in {"impact", "arc", "recovery"}:
-            # Compact contact accent only; the weapon trail is the primary motion cue.
-            pygame.draw.circle(screen, (228, 226, 202), (int(tx), int(ty)), impact_radius, 1)
-            pygame.draw.line(screen, (218, 216, 196), (int(tx - impact_radius), int(ty)), (int(tx + impact_radius), int(ty)), 1)
+        impact_radius = max(2, min(5, int(HEX_SIZE * zoom_scale * 0.045)))
+        badge_rect = pygame.Rect(int(tx), int(ty - 26), 0, 0)
+        if cue.phase in {"impact", "arc", "swing_mid_arc", "recovery"}:
+            # Compact contact tick only; no slash/default_melee click explosion.
+            pygame.draw.circle(screen, (228, 226, 202), (int(cx), int(cy)), impact_radius, 1)
+            pygame.draw.line(screen, (218, 216, 196), (int(cx - impact_radius), int(cy)), (int(cx + impact_radius), int(cy)), 1)
             badge = marker_font.render(cue.outcome_label.upper(), True, (255, 248, 232))
-            badge_rect = badge.get_rect(center=(int(tx), int(ty - impact_radius - 28)))
+            badge_rect = badge.get_rect(center=(int(tx), int(ty - max(24, impact_radius + 24))))
             bg_rect = badge_rect.inflate(18, 12)
             pygame.draw.rect(screen, (54, 24, 24), bg_rect, border_radius=5)
             pygame.draw.rect(screen, (210, 172, 126), bg_rect, 2, border_radius=5)
@@ -4035,25 +4158,34 @@ def _draw_combat_presentation_cues(
                 "motion_family": cue.motion_family,
                 "attacker_screen_pos": {"x": int(ax), "y": int(ay)},
                 "target_screen_pos": {"x": int(tx), "y": int(ty)},
+                "contact_screen_pos": {"x": int(cx), "y": int(cy)},
                 "rendered": True,
                 "cue_rendered": True,
                 "arc_bbox": motion_diag["bbox"],
-                "impact_bbox": _compact_impact_accent_bbox((tx, ty), radius=impact_radius),
+                "impact_bbox": _compact_impact_accent_bbox((cx, cy), radius=impact_radius),
                 "motion_primitive": motion_diag["primitive"],
                 "weapon_motion_primitive": motion_diag["primitive"],
                 "motion_points": motion_diag["points"],
                 "motion_stroke_width": motion_diag.get("stroke_width"),
                 "arc_origin_actor_id": cue.attacker_id,
                 "arc_target_id": cue.target_id if not cue.target_id.startswith("cell:") else None,
+                "presentation_target_source": cue.presentation_target_source,
+                "arc_origin_local": {"x": round(float((cue.arc_origin_local or cue.attacker_position)[0]), 6), "y": round(float((cue.arc_origin_local or cue.attacker_position)[1]), 6)},
+                "arc_contact_local": {"x": round(float((cue.arc_contact_local or cue.target_position)[0]), 6), "y": round(float((cue.arc_contact_local or cue.target_position)[1]), 6)},
                 "arc_target_point": {"x": round(float(cue.target_position[0]), 6), "y": round(float(cue.target_position[1]), 6)},
                 "arc_committed_facing": {"x": round(float(cue.attack_vector_local[0]), 6), "y": round(float(cue.attack_vector_local[1]), 6)},
+                "arc_sample_count": int(cue.arc_sample_count or len(motion_diag["points"])),
+                "arc_reaches_target_marker_edge": bool(cue.arc_reaches_target_marker_edge),
                 "actor_marker_layer_above_weapon_cue": True,
                 "target_marker_remains_visible": True,
                 "actor_marker_visible": True,
                 "target_marker_visible": True,
                 "large_impact_blob_detected": False,
                 "badge_text": cue.outcome_label.upper(),
-                "badge_screen_pos": {"x": int(tx), "y": int(ty - impact_radius - 28)},
+                "badge_screen_pos": {"x": int(badge_rect.centerx), "y": int(badge_rect.centery)},
+                "contact_accent_radius_px": int(impact_radius),
+                "contact_accent_bounded": True,
+                "result_badge_separate_from_trail": True,
                 "render_layer_used": "combat_cues_under_actor_markers",
             }
         )

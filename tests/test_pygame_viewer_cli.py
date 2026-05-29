@@ -2587,12 +2587,63 @@ def test_default_melee_slash_motion_samples_committed_arc_from_attacker_to_targe
         target_px=(128.0, 100.0),
     )
 
-    assert len(points) == 7
-    assert points[0][0] == pytest.approx(113, abs=2)
-    assert points[-1][0] == pytest.approx(118, abs=12)
+    assert len(points) >= 7
+    assert points[0][0] == pytest.approx(106, abs=3)
+    assert points[-1][0] == pytest.approx(122, abs=8)
     assert points[-1][0] > points[0][0]
     assert max(y for _x, y in points) - min(y for _x, y in points) >= 8
 
+
+
+def test_default_melee_readability_diagnostics_target_edge_and_contact_accent() -> None:
+    pytest.importorskip("pygame")
+    viewer_module._ensure_pygame_imported()
+    viewer_module.pygame.font.init()
+    sim = _build_viewer_simulation("content/examples/basic_map.json", with_encounters=False)
+    player = sim.state.entities[PLAYER_ID]
+    local_space_id = "local:melee_readability"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type=SQUARE_GRID_TOPOLOGY,
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 4, "height": 3, "origin": {"x": 0, "y": 0}},
+    )
+    player.space_id = local_space_id
+    player.position_x = 1.0
+    player.position_y = 1.0
+    target = EntityState(entity_id="hostile:readability", position_x=2.0, position_y=1.0, space_id=local_space_id, template_id=HOSTILE_TEMPLATE_ID)
+    sim.add_entity(target)
+    state = viewer_module.ViewerRuntimeState(sim=sim, map_path="m", with_encounters=False, current_save_path="s")
+    sim.state.combat_log.append({
+        "tick": sim.state.tick,
+        "intent": "attack_intent",
+        "attacker_id": PLAYER_ID,
+        "target_id": target.entity_id,
+        "mode": "melee",
+        "weapon_profile_id": "default_melee",
+        "weapon_profile": {"profile_id": "default_melee", "motion_family": "slash", "windup_ticks": 2, "impact_tick": 2, "recovery_ticks": 5},
+        "committed_aim": {"space_id": local_space_id, "x": 1.0, "y": 0.0, "facing": 0},
+        "applied": True,
+        "reason": "resolved",
+        "strike_phase": "active",
+        "wound_deltas": [],
+        "roll_trace": [],
+        "tags": [],
+    })
+    screen = viewer_module.pygame.Surface((1024, 768))
+    meta = render_viewer_frame_to_surface(screen=screen, sim=sim, runtime_state=state, status_message="audit", player_view=True, combat_cue_phase_override="impact")
+    row = meta["combat_cue_diagnostics"]["rendered_cues"][0]
+
+    assert row["motion_primitive"] == "arc"
+    assert row["arc_sample_count"] >= 7
+    assert row["presentation_target_source"] == "target_id"
+    assert row["arc_origin_local"]["x"] == pytest.approx(1.24, abs=0.02)
+    assert row["arc_contact_local"]["x"] == pytest.approx(1.78, abs=0.03)
+    assert row["arc_reaches_target_marker_edge"] is True
+    assert row["contact_accent_radius_px"] <= 5
+    assert row["large_impact_blob_detected"] is False
+    assert row["target_marker_visible"] is True
+    assert row["result_badge_separate_from_trail"] is True
 
 def test_combat_arc_does_not_retarget_after_committed_attack_if_cursor_moves() -> None:
     cue = viewer_module.CombatPresentationCue(

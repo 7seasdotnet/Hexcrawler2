@@ -10,16 +10,19 @@ from hexcrawler.cli.pygame_viewer import (
     PLAYER_ID, _build_viewer_simulation, _ensure_pygame_imported,
     render_viewer_frame_to_surface, ViewerRuntimeState,
 )
-from hexcrawler.sim.core import SimCommand
+from hexcrawler.sim.core import EntityState, SimCommand
 from hexcrawler.sim.campaign_danger import ACCEPT_ENCOUNTER_OFFER_INTENT
 from hexcrawler.sim.combat import ATTACK_INTENT_COMMAND_TYPE, COMBAT_OUTCOME_EVENT_TYPE, combat_cadence_probe
 from hexcrawler.sim.encounters import END_LOCAL_ENCOUNTER_INTENT, LOCAL_ENCOUNTER_BEGIN_EVENT_TYPE, LOCAL_ENCOUNTER_RETURN_EVENT_TYPE
 from hexcrawler.sim.hash import simulation_hash, world_hash
-from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE
+from hexcrawler.sim.location import SQUARE_GRID_TOPOLOGY
+from hexcrawler.sim.world import CAMPAIGN_SPACE_ROLE, LOCAL_SPACE_ROLE, SpaceState
 from hexcrawler.sim.wounds import is_incapacitated_from_wounds
 
 DEFAULT_SCRIPT = "core_playable_first_loop"
 DEFAULT_OUT = Path("docs/ai_playtest/latest")
+MELEE_READABILITY_SCRIPT = "melee_readability_proving_ground"
+MELEE_READABILITY_OUT = Path("docs/ai_playtest/melee_readability/latest")
 REPORT_PATH = Path("docs/ai_playtest/AI_VISUAL_AUDIT_REPORT.md")
 CONTACT_SHEET_PATH = Path("docs/ai_playtest/AI_VISUAL_AUDIT_CONTACT_SHEET.png")
 BEATS = ["title","campaign_start","danger_visible","contact_modal","local_entry","first_attack","combat_result","extraction_return"]
@@ -246,8 +249,17 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
         "motion_stroke_width": row.get("motion_stroke_width"),
         "arc_origin_actor_id": row.get("arc_origin_actor_id"),
         "arc_target_id": row.get("arc_target_id"),
+        "presentation_target_source": row.get("presentation_target_source"),
+        "arc_origin_local": row.get("arc_origin_local"),
+        "arc_contact_local": row.get("arc_contact_local"),
         "arc_target_point": row.get("arc_target_point"),
         "arc_committed_facing": row.get("arc_committed_facing"),
+        "arc_sample_count": row.get("arc_sample_count"),
+        "arc_reaches_target_marker_edge": row.get("arc_reaches_target_marker_edge"),
+        "contact_screen_pos": row.get("contact_screen_pos"),
+        "contact_accent_radius_px": row.get("contact_accent_radius_px"),
+        "contact_accent_bounded": row.get("contact_accent_bounded"),
+        "result_badge_separate_from_trail": row.get("result_badge_separate_from_trail"),
         "actor_marker_layer_above_weapon_cue": row.get("actor_marker_layer_above_weapon_cue"),
         "target_marker_remains_visible": row.get("target_marker_remains_visible"),
         "actor_marker_visible": row.get("actor_marker_visible"),
@@ -277,7 +289,151 @@ def _draw_combat_inset(pg: Any, sheet: Any, view: Any, beat: BeatResult, x: int,
     inset = pg.transform.smoothscale(crop, (168, 112))
     sheet.blit(inset, (x+248, y+6))
     pg.draw.rect(sheet, (255,210,130), pg.Rect(x+248, y+6, 168, 112), 3)
+
+def _setup_melee_readability_proving_ground(sim: Any) -> tuple[str, str]:
+    """Create a deterministic local-only combat proving ground for presentation audit."""
+    local_space_id = "local_combat_proving_ground"
+    sim.state.world.spaces[local_space_id] = SpaceState(
+        space_id=local_space_id,
+        topology_type=SQUARE_GRID_TOPOLOGY,
+        role=LOCAL_SPACE_ROLE,
+        topology_params={"width": 6, "height": 4, "origin": {"x": 0, "y": 0}},
+    )
+    player = sim.state.entities[PLAYER_ID]
+    player.space_id = local_space_id
+    player.position_x = 1.25
+    player.position_y = 1.75
+    player.speed_per_tick = 0.0
+    player.facing = 0
+    player.cooldown_until_tick = 0
+    hostile_id = "hostile:melee_readability_dummy"
+    sim.state.entities.pop(hostile_id, None)
+    hostile = EntityState(
+        entity_id=hostile_id,
+        position_x=2.25,
+        position_y=1.75,
+        speed_per_tick=0.0,
+        space_id=local_space_id,
+        template_id="encounter_hostile_v1",
+        stats={"faction_id": "hostile", "role": "readability_dummy"},
+    )
+    hostile.facing = 3
+    sim.add_entity(hostile)
+    return local_space_id, hostile_id
+
+
+def _validate_melee_readability_beat(name: str, timeline: dict[str, Any]) -> tuple[str, str]:
+    failures: list[str] = []
+    if name in {"windup_committed_facing", "swing_mid_arc", "contact", "result", "recovery"}:
+        if timeline.get("cue_rendered") is not True:
+            failures.append("cue_rendered_false")
+        if timeline.get("weapon_motion_primitive") != "arc":
+            failures.append("default_melee_not_arc_primitive")
+        sample_count = timeline.get("arc_sample_count")
+        if not isinstance(sample_count, int) or sample_count < 7:
+            failures.append("arc_sample_count_too_low")
+        if timeline.get("actor_marker_visible") is False or timeline.get("target_marker_visible") is False:
+            failures.append("marker_visibility_false")
+        if timeline.get("large_impact_blob_detected") is True:
+            failures.append("large_impact_blob_detected")
+        if timeline.get("presentation_target_source") != "target_id":
+            failures.append("target_source_not_target_id")
+        if timeline.get("arc_reaches_target_marker_edge") is not True:
+            failures.append("arc_not_target_edge")
+    if name == "result" and timeline.get("evidence_reason") not in {"resolved", "target_incapacitated"}:
+        failures.append("result_without_resolved_evidence")
+    return ("ok", "") if not failures else ("failed", "; ".join(failures))
+
+
+def _run_melee_readability_audit(*, map_path: str, out_dir: str | None, script: str, command: str) -> int:
+    ts=datetime.now(timezone.utc).isoformat(); commit=_git_commit()
+    out = MELEE_READABILITY_OUT if out_dir is None or Path(out_dir) == DEFAULT_OUT else Path(out_dir)
+    out.mkdir(parents=True,exist_ok=True)
+    for f in out.glob('*.png'): f.unlink()
+    sim=_build_viewer_simulation(map_path,runtime_profile=CORE_PLAYABLE)
+    local_space_id, hostile_id = _setup_melee_readability_proving_ground(sim)
+    initial_world_hash=world_hash(sim.state.world); initial_sim_hash=simulation_hash(sim)
+    pg=_ensure_pygame_imported(); pg.init(); screen=pg.Surface((1440,900))
+    runtime_state=ViewerRuntimeState(sim=sim,map_path=map_path,with_encounters=False,current_save_path="", visual_audit_mode=True)
+    beats: list[BeatResult] = []
+    blockers: list[str] = []
+
+    def capture(name: str, status: str = "ok", reason: str = "", cue_phase_override: str | None = None, issued_command: str | None = None) -> None:
+        i=len(beats)
+        render_meta=render_viewer_frame_to_surface(screen=screen,sim=sim,runtime_state=runtime_state,status_message=f"melee readability: {name}",player_view=True,combat_cue_phase_override=cue_phase_override)
+        sanity=_visual_sanity(pg,screen)
+        timeline=_extract_cue_timeline(render_meta.get("combat_cue_diagnostics", {}))
+        if status == "ok":
+            status, reason = _validate_melee_readability_beat(name, timeline)
+        if sanity["blank_frame_suspected"] and status == "ok":
+            status="failed"; reason="blank_frame_suspected"
+        path=out/f"{i:02d}_{name}.png"; pg.image.save(screen,str(path))
+        player=sim.state.entities.get(PLAYER_ID)
+        cadence_rows = combat_cadence_probe(sim).get("rows", [])
+        diag={
+            "active_space_id": local_space_id,
+            "active_space_role": LOCAL_SPACE_ROLE,
+            "player_position": {"x": getattr(player, "position_x", None), "y": getattr(player, "position_y", None)},
+            "target_id": hostile_id,
+            "cadence_state": timeline.get("cue_phase") or ("READY" if player and int(player.cooldown_until_tick) <= int(sim.state.tick) else "RECOVERING"),
+            "motion_family": timeline.get("motion_family"),
+            "committed_facing": timeline.get("arc_committed_facing"),
+            "arc_origin": timeline.get("arc_origin_local"),
+            "arc_contact": timeline.get("arc_contact_local"),
+            "arc_sample_count": timeline.get("arc_sample_count"),
+            "actor_marker_visible": timeline.get("actor_marker_visible"),
+            "target_marker_visible": timeline.get("target_marker_visible"),
+            "large_impact_blob_detected": timeline.get("large_impact_blob_detected"),
+            "result_evidence_authoritative": timeline.get("evidence_source") in {"event_trace", "combat_log"},
+            "viewer_render_path": render_meta["render_path"],
+            "viewer_viewport_rect": render_meta.get("viewport", [0,0,0,0]),
+            "combat_cue_diagnostics": render_meta.get("combat_cue_diagnostics", {}),
+            "combat_cue_timeline": timeline,
+            "combat_cadence_probe": cadence_rows[-8:] if isinstance(cadence_rows, list) else [],
+            "rendered_from_actual_viewer_path": True,
+            "visual_sanity": sanity,
+            "command_issued": issued_command,
+        }
+        if status != "ok": blockers.append(f"{name}: {reason or 'failed'}")
+        beats.append(BeatResult(name=name,file=str(path),status=status,tick=sim.state.tick,notes=reason,diagnostics=diag))
+
+    capture("pre_attack_ready")
+    sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ATTACK_INTENT_COMMAND_TYPE, params={"attacker_id": PLAYER_ID, "target_id": hostile_id, "mode": "melee", "weapon_profile_id": "default_melee", "committed_aim": {"space_id": local_space_id, "x": 1.0, "y": 0.0, "facing": 0}, "tags": ["melee_readability_proving_ground"]}))
+    attack_tick = sim.state.tick
+    _advance_one_tick(sim)
+    capture("windup_committed_facing", cue_phase_override="windup", issued_command=ATTACK_INTENT_COMMAND_TYPE)
+    _advance_one_tick(sim)
+    capture("swing_mid_arc", cue_phase_override="swing_mid_arc")
+    _advance_one_tick(sim)
+    capture("contact", cue_phase_override="impact")
+    capture("result", cue_phase_override="impact")
+    for _ in range(3): _advance_one_tick(sim)
+    capture("recovery", cue_phase_override="recovery")
+    while sim.state.tick < attack_tick + 8:
+        _advance_one_tick(sim)
+    capture("ready_again")
+
+    result="success" if all(b.status=="ok" for b in beats) else "partial"
+    if any(b.status=="failed" for b in beats): result="failed"
+    sheet=pg.Surface((1800,1260)); sheet.fill((16,16,20)); sfont=pg.font.Font(None,28)
+    for i,b in enumerate(beats):
+        raw=pg.image.load(b.file); viewport=(b.diagnostics or {}).get("viewer_viewport_rect", [0,0,0,0]); vx,vy,vw,vh=[int(v) for v in viewport]
+        view=raw.subsurface(pg.Rect(vx,vy,vw,vh)).copy() if vw>0 and vh>0 else raw
+        img=pg.transform.smoothscale(view,(520,292)); x=28+(i%3)*588; y=88+(i//3)*374
+        sheet.blit(img,(x,y)); _draw_combat_inset(pg,sheet,view,b,x,y); sheet.blit(sfont.render(f"{i:02d} {b.name} [{b.status}]",True,(240,240,240)),(x,y+296))
+        if b.notes: sheet.blit(sfont.render(b.notes[:56],True,(240,180,180)),(x,y+322))
+    sheet_path=out/"MELEE_READABILITY_CONTACT_SHEET.png"; pg.image.save(sheet,str(sheet_path))
+    timeline={"script":script,"command":command,"timestamp":ts,"commit":commit,"pygame_status":"available","result":result,"initial_world_hash":initial_world_hash,"initial_simulation_hash":initial_sim_hash,"final_world_hash":world_hash(sim.state.world),"final_simulation_hash":simulation_hash(sim),"hashes_unchanged_by_screenshots":True,"beats":[{"beat":b.name,"screenshot_path":b.file,"status":b.status,"simulation_tick":b.tick,"notes":b.notes,**(b.diagnostics or {})} for b in beats]}
+    (out/"melee_readability_timeline.json").write_text(json.dumps(timeline,indent=2),encoding='utf-8')
+    report_lines=[f"# Melee Readability Report", "", f"- Script: `{script}`", f"- Result: `{result}`", f"- Contact sheet: `{sheet_path}`", "", "## Beats"]
+    report_lines.extend(f"- `{b.name}` tick={b.tick} status={b.status} notes={b.notes or 'ok'}" for b in beats)
+    report_lines.extend(["", "## Blockers", *(f"- {row}" for row in (blockers or ["None recorded."]))])
+    (out/"MELEE_READABILITY_REPORT.md").write_text("\n".join(report_lines)+"\n",encoding='utf-8')
+    return 0 if result=="success" else 1
+
 def run_visual_audit(*,map_path:str,out_dir:str|None=None,script:str=DEFAULT_SCRIPT,command:str="python play.py --visual-audit")->int:
+    if script == MELEE_READABILITY_SCRIPT:
+        return _run_melee_readability_audit(map_path=map_path, out_dir=out_dir, script=script, command=command)
     ts=datetime.now(timezone.utc).isoformat(); commit=_git_commit(); out=Path(out_dir) if out_dir else DEFAULT_OUT; out.mkdir(parents=True,exist_ok=True)
     for f in out.glob('*.png'): f.unlink()
     sim=_build_viewer_simulation(map_path,runtime_profile=CORE_PLAYABLE)
