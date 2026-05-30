@@ -6,6 +6,57 @@
 - `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py`
 - `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_encounter_return.py`
 - `PYTHONPATH=src pytest -q tests/test_melee_readability.py`
+- `python play.py --visual-audit --script melee_readability_proving_ground` was attempted here and is blocked by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); it remains the exact proving-ground launch command for a pygame-capable workstation.
+
+## Phase
+- **Current phase:** **Playable Core Loop Slice — Campaign Travel → Contact → Local Encounter → Combat → Extraction/Return**.
+- **This PR purpose:** Melee Motion Language Gate 1 for `local`-role `default_melee/slash`: reusable viewer-local motion grammar, diagnostic threat envelope, target-edge contact semantics, outcome-driven target reactions, and topology-derived facing readability without changing combat truth.
+- **Next action:** Run `python play.py --visual-audit --script melee_readability_proving_ground` on a pygame-capable workstation and manually inspect `docs/ai_playtest/melee_readability/latest/MELEE_READABILITY_CONTACT_SHEET.png`, `MELEE_READABILITY_REPORT.md`, and `melee_readability_timeline.json`; then verify `python play.py`, `python play.py --visual-audit`, and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` for LMB cadence, hostile bounded cadence, Space non-attack, F1/F10, zoom, pan, and recenter.
+
+## Melee Motion Language Gate 1 substrate
+- Exact changed substrate: `src/hexcrawler/cli/pygame_viewer.py` now defines `MeleeMotionGrammar`, `MeleeMotionTrace`, `MeleeThreatEnvelope`, `MeleeContactPresentation`, `TargetReactionPresentation`, and `ATTACK_MOTION_PHASES`; these are viewer-local/pure local-space helpers and are not serialized or hash-covered simulation truth.
+- `default_melee/slash` phases are `anticipation`, `active`, `contact`, `follow_through`, and `recovery`; active rendering reveals only the current partial trace, emphasizes the leading segment, and leaves prior segments as a fading tail.
+- Threat envelope diagnostics compute local/topology-only front-sector/crescent slash metadata plus distinct thrust/stab/chop/bash envelope metadata for future presentation/diagnostics; this PR does **not** add front/flank/rear combat outcome math.
+- Contact semantics prefer `target_id`, compute target-edge contact along attacker→target, attach the compact contact tick to the arc, distinguish blocked deflection/miss-air presentation, and keep result badges separate from weapon motion.
+- Target reaction presentation is viewer-local and derives from authoritative combat evidence only (`wound_pulse`/`hit_recoil`, `block_deflect`, `miss_air`, `incapacitated_drop`), remains bounded, and does not mutate simulation state.
+
+## What exists (folders/entry points)
+- Viewer/runtime entry points: `play.py`, `src/hexcrawler/cli/play.py`, `src/hexcrawler/cli/pygame_viewer.py`, and `src/hexcrawler/cli/visual_audit.py`.
+- Visual audit/proving-ground path: `python play.py --visual-audit --script melee_readability_proving_ground` writes volatile runtime artifacts under `docs/ai_playtest/melee_readability/latest/`.
+- Headless regression coverage for motion grammar, reveal progression, threat envelopes, contact semantics, target reactions, viewer-local hash neutrality, cadence regressions, and visual-audit plumbing lives in `tests/test_melee_readability.py`, `tests/test_pygame_viewer_cli.py`, `tests/test_combat_execution_module.py`, and `tests/test_visual_audit.py`.
+
+## What changed in this commit
+- Added viewer-local melee motion grammar/trace/envelope/contact/reaction models and local-space diagnostics for default slash without changing authoritative combat hit/miss/wound math.
+- Changed slash presentation from a full static crescent into a phase/reveal-driven travel trace with leading-edge emphasis, fading tail, target-edge contact, and bounded outcome reaction accents.
+- Extended melee readability audit beats/diagnostics toward the eight-beat motion grammar (`pre_attack_ready`, `anticipation_committed_facing`, `active_swing_start`, `active_swing_mid`, `contact`, `result_reaction`, `follow_through_or_recovery`, `ready_again`) and added tests for the new substrate.
+- Added the narrow verification amendment for target-reaction de-duplication, repeated-refresh safety, rejected duplicate input, reaction cap/lifetime pruning, and branch/runtime acceptance notes.
+
+
+## Verification amendment: reaction de-duplication and branch notes
+- Target reaction de-duplication now keys viewer-local reactions by stable authoritative evidence (`tick:source:evidence_index:attacker:target:reason:applied:neutralized`), stores seen reaction keys in `ViewerRuntimeState`, prunes active reaction instances by lifetime, and caps active/seen reaction containers; this remains viewer-local and non-serialized.
+- Base commit for this amendment branch: `98d4520f8165cadfa28b90c66c0f7244458904f5` (`Merge pull request #270 from 7seasdotnet/codex/add-melee-readability-proving-ground`), the parent of the Melee Motion Language Gate 1 commit in this local checkout.
+- Intended target branch: `main`; this container has only the local `work` branch and no configured `origin` remote, so current-main rebasing could not be verified here. The PR should be treated as cleanly based on the local checked-out main-equivalent baseline, not intentionally stacked on another feature branch.
+- Manual pygame review remains required before merge acceptance with `python play.py --visual-audit --script melee_readability_proving_ground`, `python play.py --visual-audit`, `python play.py`, and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50`.
+
+## Contact sheet / artifact status
+- Pygame contact sheet was **not regenerated in this container**; commercial-grade acceptance is **not** claimed here.
+- Artifact path when generated: `docs/ai_playtest/melee_readability/latest/MELEE_READABILITY_CONTACT_SHEET.png`, `docs/ai_playtest/melee_readability/latest/MELEE_READABILITY_REPORT.md`, and `docs/ai_playtest/melee_readability/latest/melee_readability_timeline.json`.
+- Volatile latest artifacts remain ignored by `.gitignore` except `.gitkeep`; do not commit generated `latest/` evidence unless intentionally frozen and documented.
+- Manual acceptance status: pending pygame/manual review.
+- Remaining ugliest melee-language problem: real-time contrast/timing of the active edge versus the fading tail still needs human review on a pygame-generated contact sheet and live play session.
+
+Lock-out constraints reviewed: OK
+
+---
+
+## Current Verification Commands (automated tests passed in this container)
+- `python -m py_compile src/hexcrawler/cli/pygame_viewer.py src/hexcrawler/cli/play.py src/hexcrawler/cli/visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_visual_audit.py`
+- `PYTHONPATH=src pytest -q tests/test_pygame_viewer_cli.py -k "combat_presentation or attack or input or player_view or camera or zoom or perf or sentinel or melee_readability"`
+- `PYTHONPATH=src pytest -q tests/test_combat_execution_module.py`
+- `PYTHONPATH=src pytest -q tests/test_local_hostile_behavior_slice.py`
+- `PYTHONPATH=src pytest -q tests/test_campaign_danger_contact_slice.py tests/test_local_encounter_return.py`
+- `PYTHONPATH=src pytest -q tests/test_melee_readability.py`
 - `python play.py --visual-audit --script melee_readability_proving_ground` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); no melee readability contact sheet/report was generated here.
 - `python play.py --visual-audit` is blocked in this container by missing pygame (`ModuleNotFoundError: No module named 'pygame'`); the existing core-playable eight-beat audit remains intact but was not regenerated here.
 - `python play.py` and `python play.py --perf-sentinel --profile-on-lag --lag-frame-ms 50` require pygame/manual runtime verification outside this container.
