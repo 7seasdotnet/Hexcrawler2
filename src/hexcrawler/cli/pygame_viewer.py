@@ -651,6 +651,8 @@ class ViewerRuntimeState:
     presentation_effects: PresentationEffects = field(default_factory=PresentationEffects)
     show_debug_overlay: bool = False
     combat_presentation_cues: list["CombatPresentationCue"] = field(default_factory=list)
+    target_reactions: list["TargetReactionPresentation"] = field(default_factory=list)
+    seen_target_reaction_keys: list[str] = field(default_factory=list)
     seen_combat_cue_keys: list[tuple[int, str, str, str]] = field(default_factory=list)
     audit_cue_phase_override: str | None = None
     last_combat_cue_render_diagnostics: dict[str, Any] = field(default_factory=dict)
@@ -681,9 +683,71 @@ class CombatPresentationCue:
     arc_contact_local: tuple[float, float] | None = None
     arc_sample_count: int = 0
     arc_reaches_target_marker_edge: bool = False
+    contact_normal_local: tuple[float, float] | None = None
+    cadence_tick_window: tuple[int, int] = (0, 0)
+
+
+@dataclass(frozen=True)
+class MeleeThreatEnvelope:
+    motion_family: str
+    origin_local: tuple[float, float]
+    committed_facing_local: tuple[float, float]
+    reach: float
+    arc_degrees: float
+    sample_count: int
+    samples_local: tuple[tuple[float, float], ...]
+    envelope_kind: str
+
+
+@dataclass(frozen=True)
+class MeleeContactPresentation:
+    contact_source: str
+    contact_local: tuple[float, float] | None
+    contact_normal_local: tuple[float, float] | None
+    contact_attached_to_arc: bool
+    contact_dominates_cue: bool
+    result_badge_separate: bool
+
+
+@dataclass(frozen=True)
+class MeleeMotionTrace:
+    motion_family: str
+    phase: str
+    attacker_id: str
+    target_id: str | None
+    committed_facing_local: tuple[float, float]
+    origin_local: tuple[float, float]
+    contact_local: tuple[float, float] | None
+    threat_samples_local: tuple[tuple[float, float], ...]
+    active_edge_samples_local: tuple[tuple[float, float], ...]
+    contact_normal_local: tuple[float, float] | None
+    sample_count: int
+    profile_id: str
+    cadence_tick_window: tuple[int, int]
+    presentation_target_source: str
+
+
+@dataclass(frozen=True)
+class MeleeMotionGrammar:
+    profile_id: str
+    motion_family: str
+    phases: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TargetReactionPresentation:
+    reaction_type: str
+    reaction_anchor_local: tuple[float, float]
+    reaction_age: int
+    reaction_lifetime: int
+    reaction_source_outcome_id: str
+    target_id: str
 
 
 COMBAT_CUE_MAX = 18
+TARGET_REACTION_MAX = 18
+ATTACK_MOTION_PHASES: tuple[str, ...] = ("anticipation", "active", "contact", "follow_through", "recovery")
+DEFAULT_MELEE_SLASH_GRAMMAR = MeleeMotionGrammar(profile_id="default_melee", motion_family="slash", phases=ATTACK_MOTION_PHASES)
 
 
 @dataclass(frozen=True)
@@ -3777,13 +3841,54 @@ def _combat_cue_evidence_from_combat_log(sim: Simulation, runtime_state: ViewerR
     return rows
 
 
+
+
+def _target_reaction_evidence_key(
+    *,
+    source: str,
+    evidence_index: object,
+    tick: int,
+    attacker_id: str,
+    target_id: str,
+    reason: str,
+    applied: bool,
+    neutralized: bool,
+) -> str:
+    index = evidence_index if isinstance(evidence_index, int) else "none"
+    return f"{int(tick)}:{source}:{index}:{attacker_id}:{target_id}:{reason}:{int(applied)}:{int(neutralized)}"
+
+
+def _reaction_start_tick(reaction: TargetReactionPresentation) -> int:
+    parts = str(reaction.reaction_source_outcome_id).split(":")
+    for part in parts:
+        try:
+            return int(part)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _prune_target_reactions(runtime_state: ViewerRuntimeState, *, now_tick: int) -> None:
+    survivors = [
+        reaction
+        for reaction in runtime_state.target_reactions
+        if int(now_tick) - _reaction_start_tick(reaction) <= int(reaction.reaction_lifetime)
+    ]
+    runtime_state.target_reactions = survivors[-TARGET_REACTION_MAX:]
+    runtime_state.seen_target_reaction_keys = runtime_state.seen_target_reaction_keys[-TARGET_REACTION_MAX * 4:]
+
 def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRuntimeState) -> None:
+    _prune_target_reactions(runtime_state, now_tick=int(sim.state.tick))
     evidence_rows = _combat_cue_evidence_from_event_trace(sim, runtime_state)
     evidence_rows.extend(_combat_cue_evidence_from_combat_log(sim, runtime_state))
     generated = 0
     duplicate_suppressed = 0
     skipped_missing_actor = 0
     skipped_invalid = 0
+    duplicate_reactions_suppressed = 0
+    reactions_generated = 0
+    reactions_pruned_by_cap_or_lifetime = 0
+    reaction_count_after_prune = len(runtime_state.target_reactions)
     for payload in evidence_rows:
         try:
             tick = int(payload.get("tick", -1))
@@ -3863,29 +3968,62 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         else:
             impact_tick = tick
             start_tick = max(0, tick - int(profile.impact_tick))
-        runtime_state.combat_presentation_cues.append(
-            CombatPresentationCue(
+        fx, fy = _normalized_local_vector(vector)
+        cue = CombatPresentationCue(
+            attacker_id=attacker_id,
+            target_id=target_id,
+            start_tick=start_tick,
+            impact_tick=impact_tick,
+            outcome_label=outcome_label,
+            attacker_position=(float(attacker.position_x), float(attacker.position_y)),
+            target_position=target_position,
+            attack_vector_local=vector,
+            motion_family=profile.motion_family,
+            weapon_profile_id=profile.profile_id,
+            phase="windup",
+            evidence_source=source,
+            evidence_reason=reason,
+            evidence_applied=applied,
+            presentation_target_source=presentation_target_source,
+            arc_origin_local=arc_origin_local,
+            arc_contact_local=arc_contact_local,
+            arc_sample_count=arc_sample_count,
+            arc_reaches_target_marker_edge=arc_reaches_target_marker_edge,
+            contact_normal_local=(-fx, -fy),
+            cadence_tick_window=(start_tick, start_tick + int(profile.windup_ticks) + int(profile.recovery_ticks)),
+        )
+        runtime_state.combat_presentation_cues.append(cue)
+        reaction_type = _target_reaction_type_for_outcome(reason=reason, applied=applied, neutralized=neutralized)
+        if reaction_type != "none" and reason != "windup_started":
+            reaction_key = _target_reaction_evidence_key(
+                source=source,
+                evidence_index=payload.get("evidence_index"),
+                tick=tick,
                 attacker_id=attacker_id,
                 target_id=target_id,
-                start_tick=start_tick,
-                impact_tick=impact_tick,
-                outcome_label=outcome_label,
-                attacker_position=(float(attacker.position_x), float(attacker.position_y)),
-                target_position=target_position,
-                attack_vector_local=vector,
-                motion_family=profile.motion_family,
-                weapon_profile_id=profile.profile_id,
-                phase="windup",
-                evidence_source=source,
-                evidence_reason=reason,
-                evidence_applied=applied,
-                presentation_target_source=presentation_target_source,
-                arc_origin_local=arc_origin_local,
-                arc_contact_local=arc_contact_local,
-                arc_sample_count=arc_sample_count,
-                arc_reaches_target_marker_edge=arc_reaches_target_marker_edge,
+                reason=reason,
+                applied=applied,
+                neutralized=neutralized,
             )
-        )
+            if reaction_key in runtime_state.seen_target_reaction_keys:
+                duplicate_reactions_suppressed += 1
+            else:
+                runtime_state.seen_target_reaction_keys.append(reaction_key)
+                runtime_state.target_reactions.append(
+                    TargetReactionPresentation(
+                        reaction_type=reaction_type,
+                        reaction_anchor_local=target_position if reaction_type != "miss_air" else arc_contact_local,
+                        reaction_age=0,
+                        reaction_lifetime=6 if reaction_type != "incapacitated_drop" else 10,
+                        reaction_source_outcome_id=reaction_key,
+                        target_id=target_id,
+                    )
+                )
+                reactions_generated += 1
+                before_cap = len(runtime_state.target_reactions)
+                runtime_state.target_reactions = runtime_state.target_reactions[-TARGET_REACTION_MAX:]
+                reactions_pruned_by_cap_or_lifetime += max(0, before_cap - len(runtime_state.target_reactions))
+                runtime_state.seen_target_reaction_keys = runtime_state.seen_target_reaction_keys[-TARGET_REACTION_MAX * 4:]
         generated += 1
     if len(runtime_state.combat_presentation_cues) > COMBAT_CUE_MAX:
         runtime_state.combat_presentation_cues = runtime_state.combat_presentation_cues[-COMBAT_CUE_MAX:]
@@ -3899,6 +4037,10 @@ def _refresh_combat_presentation_cues(sim: Simulation, runtime_state: ViewerRunt
         "duplicate_suppressed_count": duplicate_suppressed,
         "skipped_missing_actor_count": skipped_missing_actor,
         "skipped_invalid_count": skipped_invalid,
+        "reaction_count_after_prune": reaction_count_after_prune,
+        "reactions_generated_count": reactions_generated,
+        "duplicate_reactions_suppressed_count": duplicate_reactions_suppressed,
+        "reactions_pruned_by_cap_or_lifetime_count": reactions_pruned_by_cap_or_lifetime,
     }
 
 def _projection_local_to_screen(local_xy: tuple[float, float], world_center: tuple[float, float], zoom_scale: float) -> tuple[float, float]:
@@ -3917,6 +4059,163 @@ def _normalized_local_vector(vector: tuple[float, float]) -> tuple[float, float]
         return (1.0, 0.0)
     return (vx / mag, vy / mag)
 
+
+
+
+def _canonical_attack_motion_phase(phase: str) -> str:
+    if phase in {"windup", "anticipation_committed_facing"}:
+        return "anticipation"
+    if phase in {"arc", "swing_mid_arc", "active", "active_swing_start", "active_swing_mid"}:
+        return "active"
+    if phase in {"impact", "result", "contact"}:
+        return "contact"
+    if phase in {"follow_through", "follow_through_or_recovery"}:
+        return "follow_through"
+    if phase in {"recovery", "ready_again"}:
+        return "recovery"
+    return phase
+
+
+def _attack_motion_reveal_fraction(phase: str, *, age_ticks: int = 0, start_tick: int = 0, impact_tick: int = 0) -> float:
+    phase = _canonical_attack_motion_phase(phase)
+    if phase == "anticipation":
+        return 0.18
+    if phase == "active":
+        active_span = max(1, int(impact_tick) - int(start_tick))
+        active_age = max(0, min(active_span, int(age_ticks)))
+        return max(0.32, min(0.82, 0.32 + 0.50 * (active_age / float(active_span))))
+    if phase == "contact":
+        return 1.0
+    if phase == "follow_through":
+        return 1.0
+    if phase == "recovery":
+        return 1.0
+    return 1.0
+
+
+def compute_melee_threat_envelope(
+    origin_local: tuple[float, float],
+    committed_facing_local: tuple[float, float],
+    motion_family: str,
+    reach: float,
+    arc_degrees: float,
+    sample_count: int,
+) -> MeleeThreatEnvelope:
+    ox, oy = float(origin_local[0]), float(origin_local[1])
+    fx, fy = _normalized_local_vector(committed_facing_local)
+    base_angle = math.atan2(fy, fx)
+    family = str(motion_family)
+    count = max(2, int(sample_count))
+    if family in {"thrust", "stab"}:
+        degree = 10.0 if family == "stab" else 14.0
+        samples = tuple((ox + fx * float(reach) * (i / float(count - 1)), oy + fy * float(reach) * (i / float(count - 1))) for i in range(count))
+        kind = "narrow_capsule"
+    else:
+        if family == "chop":
+            degree = min(float(arc_degrees), 42.0)
+            kind = "heavy_front_arc"
+        elif family == "bash":
+            degree = min(float(arc_degrees), 34.0)
+            kind = "compact_front_pulse"
+        else:
+            degree = float(arc_degrees)
+            kind = "front_sector_crescent"
+        start = base_angle - math.radians(degree) / 2.0
+        step = math.radians(degree) / float(count - 1)
+        samples = tuple((ox + math.cos(start + step * i) * float(reach), oy + math.sin(start + step * i) * float(reach)) for i in range(count))
+    return MeleeThreatEnvelope(
+        motion_family=family,
+        origin_local=(ox, oy),
+        committed_facing_local=(fx, fy),
+        reach=float(reach),
+        arc_degrees=degree,
+        sample_count=count,
+        samples_local=samples,
+        envelope_kind=kind,
+    )
+
+
+def _point_inside_presentation_envelope(point: tuple[float, float], envelope: MeleeThreatEnvelope) -> bool:
+    px, py = float(point[0]), float(point[1])
+    ox, oy = envelope.origin_local
+    dx, dy = px - ox, py - oy
+    distance = math.hypot(dx, dy)
+    if distance > envelope.reach + 0.32:
+        return False
+    if distance <= 1e-6:
+        return True
+    fx, fy = envelope.committed_facing_local
+    dot = max(-1.0, min(1.0, (dx / distance) * fx + (dy / distance) * fy))
+    return math.degrees(math.acos(dot)) <= (float(envelope.arc_degrees) / 2.0 + 16.0)
+
+
+def _contact_presentation_for_cue(cue: CombatPresentationCue, points_local: list[tuple[float, float]]) -> MeleeContactPresentation:
+    reason = str(cue.evidence_reason)
+    if cue.presentation_target_source == "target_id" and cue.arc_contact_local is not None and reason not in {"target_moved", "out_of_range"}:
+        source = "blocked_deflection" if reason in {"invalid_arc", "cooldown_blocked"} else "target_edge"
+        contact = cue.arc_contact_local
+    elif reason in {"target_moved", "out_of_range"} or cue.presentation_target_source != "target_id":
+        source = "swing_end"
+        contact = points_local[-1] if points_local else cue.arc_contact_local
+    else:
+        source = "none"
+        contact = None
+    if contact is None or not points_local:
+        attached = False
+    else:
+        attached = min(math.hypot(float(contact[0]) - x, float(contact[1]) - y) for x, y in points_local) <= 0.12
+    normal = None
+    if contact is not None:
+        fx, fy = _normalized_local_vector(cue.attack_vector_local)
+        normal = (-fx, -fy)
+    return MeleeContactPresentation(
+        contact_source=source,
+        contact_local=contact,
+        contact_normal_local=normal,
+        contact_attached_to_arc=attached,
+        contact_dominates_cue=False,
+        result_badge_separate=True,
+    )
+
+
+def _target_reaction_type_for_outcome(*, reason: str, applied: bool, neutralized: bool) -> str:
+    if reason in {"windup_started", "cooldown_blocked", "ineligible"}:
+        return "none"
+    if reason == "invalid_arc":
+        return "block_deflect"
+    if reason in {"target_moved", "out_of_range"}:
+        return "miss_air"
+    if neutralized:
+        return "incapacitated_drop"
+    if applied:
+        return "wound_pulse"
+    if reason == "resolved":
+        return "hit_recoil"
+    return "none"
+
+
+def _build_melee_motion_trace(cue: CombatPresentationCue, profile: WeaponMotionProfile) -> MeleeMotionTrace:
+    origin = cue.arc_origin_local or cue.attacker_position
+    contact = cue.arc_contact_local
+    all_points = _sample_melee_motion_points_local(arc_origin_local=origin, arc_contact_local=contact or cue.target_position, committed_facing=cue.attack_vector_local, motion_family=profile.motion_family)
+    visible = _phase_visible_motion_points(all_points, cue.phase, start_tick=cue.start_tick, impact_tick=cue.impact_tick, age_ticks=max(0, cue.impact_tick - cue.start_tick))
+    envelope = compute_melee_threat_envelope(origin, cue.attack_vector_local, profile.motion_family, profile.reach, profile.arc_degrees, max(9, len(all_points)))
+    return MeleeMotionTrace(
+        motion_family=profile.motion_family,
+        phase=_canonical_attack_motion_phase(cue.phase),
+        attacker_id=cue.attacker_id,
+        target_id=cue.target_id if cue.presentation_target_source == "target_id" else None,
+        committed_facing_local=_normalized_local_vector(cue.attack_vector_local),
+        origin_local=origin,
+        contact_local=contact,
+        threat_samples_local=envelope.samples_local,
+        active_edge_samples_local=tuple(visible[-2:]) if len(visible) >= 2 else tuple(visible),
+        contact_normal_local=cue.contact_normal_local,
+        sample_count=len(all_points),
+        profile_id=profile.profile_id,
+        cadence_tick_window=cue.cadence_tick_window,
+        presentation_target_source=cue.presentation_target_source,
+    )
 
 def _melee_arc_anchor_points_local(
     *,
@@ -3981,12 +4280,19 @@ def _sample_melee_motion_points_local(
     return points
 
 
-def _phase_visible_motion_points(points: list[tuple[float, float]], phase: str) -> list[tuple[float, float]]:
-    if phase == "windup":
-        return points[: max(2, min(3, len(points)))]
-    if phase in {"arc", "swing_mid_arc"}:
-        return points[: max(4, int(math.ceil(len(points) * 0.68)))]
-    return points
+def _phase_visible_motion_points(
+    points: list[tuple[float, float]],
+    phase: str,
+    *,
+    start_tick: int = 0,
+    impact_tick: int = 0,
+    age_ticks: int = 0,
+) -> list[tuple[float, float]]:
+    if not points:
+        return []
+    reveal = _attack_motion_reveal_fraction(phase, age_ticks=age_ticks, start_tick=start_tick, impact_tick=impact_tick)
+    visible_count = max(2, min(len(points), int(math.ceil(len(points) * reveal))))
+    return points[:visible_count]
 
 
 def _combat_motion_points(cue: CombatPresentationCue, profile: WeaponMotionProfile, *, attacker_px: tuple[float, float], target_px: tuple[float, float]) -> list[tuple[int, int]]:
@@ -4005,7 +4311,21 @@ def _combat_motion_points(cue: CombatPresentationCue, profile: WeaponMotionProfi
         committed_facing=cue.attack_vector_local,
         motion_family=profile.motion_family,
     )
-    local_points = _phase_visible_motion_points(local_points, cue.phase)
+    if cue.phase in {"windup", "anticipation"}:
+        reveal_age = 0
+    elif cue.phase in {"arc", "active_swing_start"}:
+        reveal_age = 0
+    elif cue.phase in {"swing_mid_arc", "active_swing_mid"}:
+        reveal_age = max(1, (int(cue.impact_tick) - int(cue.start_tick)) // 2)
+    else:
+        reveal_age = max(0, int(cue.impact_tick) - int(cue.start_tick))
+    local_points = _phase_visible_motion_points(
+        local_points,
+        cue.phase,
+        start_tick=cue.start_tick,
+        impact_tick=cue.impact_tick,
+        age_ticks=reveal_age,
+    )
     ax, ay = float(attacker_px[0]), float(attacker_px[1])
     tx, ty = float(target_px[0]), float(target_px[1])
     vx, vy = float(cue.attack_vector_local[0]), float(cue.attack_vector_local[1])
@@ -4043,27 +4363,37 @@ def _render_weapon_motion(screen: pygame.Surface, cue: CombatPresentationCue, pr
     points = _combat_motion_points(cue, profile, attacker_px=attacker_px, target_px=target_px)
     width = max(2, min(5, int(3 * profile.visual_weight)))
     primitive = "line"
+    leading_edge_identifiable = len(points) >= 2
     if profile.motion_family in {"slash", "chop"}:
         primitive = "arc" if profile.motion_family == "slash" else "chop_arc"
         segment_count = max(1, len(points) - 1)
         for index in range(segment_count):
             tail = index / float(segment_count)
-            color = (
-                int(132 + 90 * tail),
-                int(172 + 54 * tail),
-                int(196 + 34 * tail),
+            alpha_color = (
+                int(92 + 116 * tail),
+                int(126 + 82 * tail),
+                int(154 + 54 * tail),
             )
-            pygame.draw.line(screen, color, points[index], points[index + 1], width)
-        # Directional leading edge: compact and separate from the target marker.
-        if len(points) >= 2:
-            pygame.draw.line(screen, (236, 244, 232), points[-2], points[-1], max(2, width + 1))
+            pygame.draw.line(screen, alpha_color, points[index], points[index + 1], max(1, width - (1 if index < segment_count - 2 else 0)))
+        if leading_edge_identifiable:
+            pygame.draw.line(screen, (242, 248, 230), points[-2], points[-1], max(2, width + 2))
+            pygame.draw.circle(screen, (246, 244, 218), points[-1], max(2, width), 1)
     elif profile.motion_family == "bash":
         primitive = "bash_shove"
         pygame.draw.line(screen, (214, 174, 126), points[0], points[-1], width + 1)
     else:
         primitive = "thrust" if profile.motion_family == "thrust" else "stab"
         pygame.draw.line(screen, (228, 230, 214), points[0], points[-1], width)
-    return {"primitive": primitive, "points": [{"x": int(x), "y": int(y)} for x, y in points], "bbox": _motion_bbox(points, width=width), "stroke_width": width}
+    return {
+        "primitive": primitive,
+        "points": [{"x": int(x), "y": int(y)} for x, y in points],
+        "bbox": _motion_bbox(points, width=width),
+        "stroke_width": width,
+        "visible_sample_count": len(points),
+        "active_reveal_fraction": round(len(points) / float(max(1, cue.arc_sample_count or len(points))), 6),
+        "leading_edge_identifiable": leading_edge_identifiable,
+        "leading_edge_points": [{"x": int(x), "y": int(y)} for x, y in (points[-2:] if len(points) >= 2 else points)],
+    }
 
 
 def _draw_combat_presentation_cues(
@@ -4123,6 +4453,8 @@ def _draw_combat_presentation_cues(
             arc_contact_local=cue.arc_contact_local,
             arc_sample_count=cue.arc_sample_count,
             arc_reaches_target_marker_edge=cue.arc_reaches_target_marker_edge,
+            contact_normal_local=cue.contact_normal_local,
+            cadence_tick_window=cue.cadence_tick_window,
         )
         survivors.append(cue)
         ax, ay = _projection_local_to_screen(cue.attacker_position, world_center, zoom_scale)
@@ -4131,18 +4463,53 @@ def _draw_combat_presentation_cues(
         cx, cy = _projection_local_to_screen(contact_local, world_center, zoom_scale)
         motion_profile = WEAPON_MOTION_PROFILE_BY_FAMILY.get(cue.motion_family, DEFAULT_WEAPON_MOTION_PROFILE)
         motion_diag = _render_weapon_motion(screen, cue, motion_profile, attacker_px=(ax, ay), target_px=(tx, ty))
+        all_local_points = _sample_melee_motion_points_local(
+            arc_origin_local=cue.arc_origin_local or cue.attacker_position,
+            arc_contact_local=cue.arc_contact_local or cue.target_position,
+            committed_facing=cue.attack_vector_local,
+            motion_family=motion_profile.motion_family,
+        )
+        visible_local_points = _phase_visible_motion_points(
+            all_local_points,
+            cue.phase,
+            start_tick=cue.start_tick,
+            impact_tick=cue.impact_tick,
+            age_ticks=max(0, now_tick - cue.start_tick),
+        )
+        contact_presentation = _contact_presentation_for_cue(cue, visible_local_points)
+        threat_envelope = compute_melee_threat_envelope(
+            cue.arc_origin_local or cue.attacker_position,
+            cue.attack_vector_local,
+            motion_profile.motion_family,
+            motion_profile.reach,
+            motion_profile.arc_degrees,
+            max(9, cue.arc_sample_count or len(all_local_points)),
+        )
+        target_inside_envelope = _point_inside_presentation_envelope(cue.target_position, threat_envelope)
         impact_radius = max(2, min(5, int(HEX_SIZE * zoom_scale * 0.045)))
         badge_rect = pygame.Rect(int(tx), int(ty - 26), 0, 0)
-        if cue.phase in {"impact", "arc", "swing_mid_arc", "recovery"}:
+        if cue.phase in {"impact", "arc", "swing_mid_arc", "recovery", "contact", "follow_through"}:
             # Compact contact tick only; no slash/default_melee click explosion.
-            pygame.draw.circle(screen, (228, 226, 202), (int(cx), int(cy)), impact_radius, 1)
-            pygame.draw.line(screen, (218, 216, 196), (int(cx - impact_radius), int(cy)), (int(cx + impact_radius), int(cy)), 1)
+            if contact_presentation.contact_source == "blocked_deflection":
+                pygame.draw.line(screen, (178, 210, 240), (int(cx - impact_radius), int(cy - impact_radius)), (int(cx + impact_radius), int(cy + impact_radius)), 2)
+                pygame.draw.line(screen, (178, 210, 240), (int(cx - impact_radius), int(cy + impact_radius)), (int(cx + impact_radius), int(cy - impact_radius)), 2)
+            elif contact_presentation.contact_source != "none":
+                pygame.draw.circle(screen, (228, 226, 202), (int(cx), int(cy)), impact_radius, 1)
+                pygame.draw.line(screen, (218, 216, 196), (int(cx - impact_radius), int(cy)), (int(cx + impact_radius), int(cy)), 1)
             badge = marker_font.render(cue.outcome_label.upper(), True, (255, 248, 232))
             badge_rect = badge.get_rect(center=(int(tx), int(ty - max(24, impact_radius + 24))))
             bg_rect = badge_rect.inflate(18, 12)
             pygame.draw.rect(screen, (54, 24, 24), bg_rect, border_radius=5)
             pygame.draw.rect(screen, (210, 172, 126), bg_rect, 2, border_radius=5)
             screen.blit(badge, badge_rect)
+        reaction_type = _target_reaction_type_for_outcome(reason=cue.evidence_reason, applied=cue.evidence_applied, neutralized=cue.outcome_label.upper() == "DOWN")
+        if reaction_type in {"hit_recoil", "wound_pulse", "incapacitated_drop"}:
+            pulse_radius = impact_radius + (4 if reaction_type == "incapacitated_drop" else 2)
+            pygame.draw.circle(screen, (255, 188, 136), (int(tx), int(ty)), pulse_radius, 1)
+        elif reaction_type == "block_deflect":
+            pygame.draw.line(screen, (170, 210, 245), (int(tx - impact_radius), int(ty + impact_radius)), (int(tx + impact_radius), int(ty - impact_radius)), 2)
+        elif reaction_type == "miss_air":
+            pygame.draw.circle(screen, (176, 182, 190), (int(cx), int(cy)), max(1, impact_radius - 1), 1)
         rendered_rows.append(
             {
                 "cue_id": f"{cue.impact_tick}:{cue.attacker_id}:{cue.target_id}",
@@ -4167,6 +4534,12 @@ def _draw_combat_presentation_cues(
                 "weapon_motion_primitive": motion_diag["primitive"],
                 "motion_points": motion_diag["points"],
                 "motion_stroke_width": motion_diag.get("stroke_width"),
+                "visible_sample_count": motion_diag.get("visible_sample_count"),
+                "active_reveal_fraction": motion_diag.get("active_reveal_fraction"),
+                "leading_edge_identifiable": motion_diag.get("leading_edge_identifiable"),
+                "leading_edge_points": motion_diag.get("leading_edge_points"),
+                "motion_phase": _canonical_attack_motion_phase(cue.phase),
+                "attack_motion_phases": list(ATTACK_MOTION_PHASES),
                 "arc_origin_actor_id": cue.attacker_id,
                 "arc_target_id": cue.target_id if not cue.target_id.startswith("cell:") else None,
                 "presentation_target_source": cue.presentation_target_source,
@@ -4176,6 +4549,21 @@ def _draw_combat_presentation_cues(
                 "arc_committed_facing": {"x": round(float(cue.attack_vector_local[0]), 6), "y": round(float(cue.attack_vector_local[1]), 6)},
                 "arc_sample_count": int(cue.arc_sample_count or len(motion_diag["points"])),
                 "arc_reaches_target_marker_edge": bool(cue.arc_reaches_target_marker_edge),
+                "threat_origin_local": {"x": round(threat_envelope.origin_local[0], 6), "y": round(threat_envelope.origin_local[1], 6)},
+                "threat_facing_local": {"x": round(threat_envelope.committed_facing_local[0], 6), "y": round(threat_envelope.committed_facing_local[1], 6)},
+                "threat_reach": round(threat_envelope.reach, 6),
+                "threat_arc_degrees": round(threat_envelope.arc_degrees, 6),
+                "threat_sample_count": int(threat_envelope.sample_count),
+                "threat_envelope_kind": threat_envelope.envelope_kind,
+                "target_inside_presentation_envelope": bool(target_inside_envelope),
+                "contact_on_target_edge": bool(cue.arc_reaches_target_marker_edge and contact_presentation.contact_source in {"target_edge", "blocked_deflection"}),
+                "contact_source": contact_presentation.contact_source,
+                "contact_attached_to_arc": bool(contact_presentation.contact_attached_to_arc),
+                "contact_dominates_cue": bool(contact_presentation.contact_dominates_cue),
+                "result_badge_separate": bool(contact_presentation.result_badge_separate),
+                "contact_normal_local": ({"x": round(contact_presentation.contact_normal_local[0], 6), "y": round(contact_presentation.contact_normal_local[1], 6)} if contact_presentation.contact_normal_local else None),
+                "facing_indicator_present": True,
+                "facing_indicator_source": "topology_local_committed_facing",
                 "actor_marker_layer_above_weapon_cue": True,
                 "target_marker_remains_visible": True,
                 "actor_marker_visible": True,
@@ -4187,6 +4575,10 @@ def _draw_combat_presentation_cues(
                 "contact_accent_bounded": True,
                 "result_badge_separate_from_trail": True,
                 "render_layer_used": "combat_cues_under_actor_markers",
+                "target_reaction_type": reaction_type,
+                "reaction_anchor_local": {"x": round(float(cue.target_position[0] if reaction_type != "miss_air" else (cue.arc_contact_local or cue.target_position)[0]), 6), "y": round(float(cue.target_position[1] if reaction_type != "miss_air" else (cue.arc_contact_local or cue.target_position)[1]), 6)},
+                "reaction_lifetime": 6 if reaction_type != "incapacitated_drop" else 10,
+                "reaction_state_viewer_local": True,
             }
         )
     runtime_state.combat_presentation_cues = survivors[-COMBAT_CUE_MAX:]

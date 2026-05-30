@@ -267,15 +267,35 @@ def _extract_cue_timeline(diag: dict[str, Any]) -> dict[str, Any]:
         "large_impact_blob_detected": row.get("large_impact_blob_detected"),
         "badge_text": row.get("badge_text"),
         "badge_screen_pos": row.get("badge_screen_pos"),
+        "visible_sample_count": row.get("visible_sample_count"),
+        "active_reveal_fraction": row.get("active_reveal_fraction"),
+        "leading_edge_identifiable": row.get("leading_edge_identifiable"),
+        "motion_phase": row.get("motion_phase"),
+        "attack_motion_phases": row.get("attack_motion_phases"),
+        "threat_origin_local": row.get("threat_origin_local"),
+        "threat_facing_local": row.get("threat_facing_local"),
+        "threat_reach": row.get("threat_reach"),
+        "threat_arc_degrees": row.get("threat_arc_degrees"),
+        "threat_sample_count": row.get("threat_sample_count"),
+        "target_inside_presentation_envelope": row.get("target_inside_presentation_envelope"),
+        "contact_on_target_edge": row.get("contact_on_target_edge"),
+        "contact_source": row.get("contact_source"),
+        "contact_attached_to_arc": row.get("contact_attached_to_arc"),
+        "contact_dominates_cue": row.get("contact_dominates_cue"),
+        "result_badge_separate": row.get("result_badge_separate"),
+        "target_reaction_type": row.get("target_reaction_type"),
+        "reaction_anchor_local": row.get("reaction_anchor_local"),
+        "facing_indicator_present": row.get("facing_indicator_present"),
+        "facing_indicator_source": row.get("facing_indicator_source"),
         "render_layer_used": row.get("render_layer_used"),
         "refresh_diagnostics": diag.get("refresh_diagnostics") if isinstance(diag, dict) else None,
     }
 
 def _draw_combat_inset(pg: Any, sheet: Any, view: Any, beat: BeatResult, x: int, y: int) -> None:
-    if beat.name not in {"first_attack", "combat_result"}:
+    if beat.name not in {"first_attack", "combat_result", "active_swing_mid", "contact", "result_reaction"}:
         return
     timeline = ((beat.diagnostics or {}).get("combat_cue_timeline") or {})
-    bbox = timeline.get("arc_bbox") if beat.name == "first_attack" else timeline.get("impact_bbox")
+    bbox = timeline.get("arc_bbox") if beat.name in {"first_attack", "active_swing_mid"} else timeline.get("impact_bbox")
     if not isinstance(bbox, dict):
         return
     bx, by, bw, bh = int(bbox.get("x", 0)), int(bbox.get("y", 0)), int(bbox.get("w", 0)), int(bbox.get("h", 0))
@@ -324,14 +344,18 @@ def _setup_melee_readability_proving_ground(sim: Any) -> tuple[str, str]:
 
 def _validate_melee_readability_beat(name: str, timeline: dict[str, Any]) -> tuple[str, str]:
     failures: list[str] = []
-    if name in {"windup_committed_facing", "swing_mid_arc", "contact", "result", "recovery"}:
+    if name in {"anticipation_committed_facing", "active_swing_start", "active_swing_mid", "contact", "result_reaction", "follow_through_or_recovery"}:
         if timeline.get("cue_rendered") is not True:
             failures.append("cue_rendered_false")
         if timeline.get("weapon_motion_primitive") != "arc":
             failures.append("default_melee_not_arc_primitive")
         sample_count = timeline.get("arc_sample_count")
-        if not isinstance(sample_count, int) or sample_count < 7:
+        if not isinstance(sample_count, int) or sample_count < 9:
             failures.append("arc_sample_count_too_low")
+        if timeline.get("leading_edge_identifiable") is not True:
+            failures.append("leading_edge_missing")
+        if name in {"active_swing_start", "active_swing_mid"} and float(timeline.get("active_reveal_fraction") or 1.0) >= 1.0:
+            failures.append("full_static_arc_too_early")
         if timeline.get("actor_marker_visible") is False or timeline.get("target_marker_visible") is False:
             failures.append("marker_visibility_false")
         if timeline.get("large_impact_blob_detected") is True:
@@ -340,8 +364,15 @@ def _validate_melee_readability_beat(name: str, timeline: dict[str, Any]) -> tup
             failures.append("target_source_not_target_id")
         if timeline.get("arc_reaches_target_marker_edge") is not True:
             failures.append("arc_not_target_edge")
-    if name == "result" and timeline.get("evidence_reason") not in {"resolved", "target_incapacitated"}:
-        failures.append("result_without_resolved_evidence")
+        if name in {"contact", "result_reaction"} and timeline.get("contact_attached_to_arc") is False:
+            failures.append("contact_detached_from_arc")
+        if timeline.get("facing_indicator_present") is not True:
+            failures.append("facing_indicator_absent")
+    if name == "result_reaction":
+        if timeline.get("evidence_reason") not in {"resolved", "target_incapacitated"}:
+            failures.append("result_without_resolved_evidence")
+        if timeline.get("target_reaction_type") in {None, "none", "miss_air"}:
+            failures.append("target_reaction_missing_for_authoritative_hit")
     return ("ok", "") if not failures else ("failed", "; ".join(failures))
 
 
@@ -381,6 +412,19 @@ def _run_melee_readability_audit(*, map_path: str, out_dir: str | None, script: 
             "arc_origin": timeline.get("arc_origin_local"),
             "arc_contact": timeline.get("arc_contact_local"),
             "arc_sample_count": timeline.get("arc_sample_count"),
+            "cue_phase": timeline.get("cue_phase"),
+            "motion_phase": timeline.get("motion_phase"),
+            "active_reveal_fraction": timeline.get("active_reveal_fraction"),
+            "threat_origin_local": timeline.get("threat_origin_local"),
+            "threat_facing_local": timeline.get("threat_facing_local"),
+            "threat_reach": timeline.get("threat_reach"),
+            "threat_arc_degrees": timeline.get("threat_arc_degrees"),
+            "threat_sample_count": timeline.get("threat_sample_count"),
+            "target_inside_presentation_envelope": timeline.get("target_inside_presentation_envelope"),
+            "contact_on_target_edge": timeline.get("contact_on_target_edge"),
+            "contact_attached_to_arc": timeline.get("contact_attached_to_arc"),
+            "target_reaction_type": timeline.get("target_reaction_type"),
+            "authoritative_outcome_summary": {"source": timeline.get("evidence_source"), "reason": timeline.get("evidence_reason"), "applied": timeline.get("evidence_applied")},
             "actor_marker_visible": timeline.get("actor_marker_visible"),
             "target_marker_visible": timeline.get("target_marker_visible"),
             "large_impact_blob_detected": timeline.get("large_impact_blob_detected"),
@@ -401,14 +445,15 @@ def _run_melee_readability_audit(*, map_path: str, out_dir: str | None, script: 
     sim.append_command(SimCommand(tick=sim.state.tick, entity_id=PLAYER_ID, command_type=ATTACK_INTENT_COMMAND_TYPE, params={"attacker_id": PLAYER_ID, "target_id": hostile_id, "mode": "melee", "weapon_profile_id": "default_melee", "committed_aim": {"space_id": local_space_id, "x": 1.0, "y": 0.0, "facing": 0}, "tags": ["melee_readability_proving_ground"]}))
     attack_tick = sim.state.tick
     _advance_one_tick(sim)
-    capture("windup_committed_facing", cue_phase_override="windup", issued_command=ATTACK_INTENT_COMMAND_TYPE)
+    capture("anticipation_committed_facing", cue_phase_override="windup", issued_command=ATTACK_INTENT_COMMAND_TYPE)
+    capture("active_swing_start", cue_phase_override="arc")
     _advance_one_tick(sim)
-    capture("swing_mid_arc", cue_phase_override="swing_mid_arc")
+    capture("active_swing_mid", cue_phase_override="swing_mid_arc")
     _advance_one_tick(sim)
     capture("contact", cue_phase_override="impact")
-    capture("result", cue_phase_override="impact")
+    capture("result_reaction", cue_phase_override="impact")
     for _ in range(3): _advance_one_tick(sim)
-    capture("recovery", cue_phase_override="recovery")
+    capture("follow_through_or_recovery", cue_phase_override="recovery")
     while sim.state.tick < attack_tick + 8:
         _advance_one_tick(sim)
     capture("ready_again")
